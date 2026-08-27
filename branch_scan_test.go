@@ -147,6 +147,29 @@ func TestRepoListingIgnoresARepoWithNoPushDate(t *testing.T) {
 	}
 }
 
+// A branch someone else deleted still looks live in the activity log, because
+// that log only reports the author's own actions: they pushed the branch, a
+// colleague merged the pull request and deleted it, and the deletion is filed
+// under the colleague. Listing the commits of a branch that is no longer there
+// answers 404, and a merged branch is not something to put an error on screen
+// about — the work reached the default branch, where the commit search has it.
+func TestAGoneBranchIsNotAnError(t *testing.T) {
+	gone := ghErr("gh: Not Found (HTTP 404)")
+	if !isNotFound(gone) {
+		t.Fatal("a 404 from gh should be recognised as one")
+	}
+	for _, other := range []error{
+		nil,
+		ghErr("gh: Bad credentials (HTTP 401)"),
+		ghErr("gh: API rate limit exceeded (HTTP 403)"),
+		ghErr("gh CLI not found — install it and run `gh auth login`."),
+	} {
+		if isNotFound(other) {
+			t.Fatalf("%v is not a missing branch and must still be reported", other)
+		}
+	}
+}
+
 // A repo carries years of dead branches. Only the ones the author moved in the
 // window can hold unlogged work, and scanning the rest is a round trip each.
 // The same branch is created and then pushed to, so it is named once.

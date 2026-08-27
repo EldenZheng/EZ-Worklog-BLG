@@ -50,6 +50,18 @@ func gh(args []string, extraHeaders ...string) (string, error) {
 	return out.String(), nil
 }
 
+// isNotFound reports whether a gh failure was GitHub answering 404.
+//
+// gh prints "gh: Not Found (HTTP 404)" and exits non-zero, so the status has to
+// be read back out of the message; there is no typed error to match on.
+func isNotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "HTTP 404") || strings.Contains(msg, "Not Found")
+}
+
 var (
 	refRe  = regexp.MustCompile(`(?i)refs?\s+([\w.-]+)/([\w.-]+)/issues/(\d+)`)
 	hashRe = regexp.MustCompile(`#(\d+)`)
@@ -138,6 +150,19 @@ func repoCommits(repo, ref, author, since, until string) ([]Commit, string) {
 	args = append(args, "--jq", commitJQ)
 	out, err := gh(args)
 	if err != nil {
+		// A branch that is gone is not a failure worth putting in front of
+		// anyone. repoBranchesSince names every branch the author pushed to,
+		// but that log is filtered to the author's own actions — when somebody
+		// else merges the pull request and deletes the branch, the deletion is
+		// recorded under their name and the branch still looks live here.
+		// Listing its commits then 404s. By that point the work is on the
+		// default branch, where the commit search has already found it.
+		//
+		// Only for a named branch: a 404 with no ref means the repository
+		// itself cannot be read, which is worth saying.
+		if ref != "" && isNotFound(err) {
+			return nil, ""
+		}
 		return nil, fmt.Sprintf("%s: %s", repo, err.Error())
 	}
 	type rawCommit struct {
