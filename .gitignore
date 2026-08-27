@@ -1,0 +1,13 @@
+# Built binaries and the backups taken before each swap.
+*.exe
+*.exe.*
+
+# Working copies kept beside a file while it was being changed.
+*.bak
+
+# Personal data and credentials. config.json holds the Anthropic API key once
+# one is set in Settings, worklog.csv is the logged work itself, and
+# ignored.json names the commits deliberately kept off the pending list.
+config.json
+worklog.csv
+ignored.json
