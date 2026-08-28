@@ -5,9 +5,18 @@
 # Working copies kept beside a file while it was being changed.
 *.bak
 
+# The cut-down gcc spec file used to link on a username with a space in it.
+specs.txt
+
 # Personal data and credentials. config.json holds the Anthropic API key once
 # one is set in Settings, worklog.csv is the logged work itself, and
 # ignored.json names the commits deliberately kept off the pending list.
+# profiles.json is the team list and salaries.
+#
+# These sit next to the executable, which is usually this directory — so they
+# are ignored here, or every Settings save would show up as a change to pull
+# upstream over.
 config.json
 worklog.csv
 ignored.json
+profiles.json
