@@ -347,4 +347,4 @@ func (ui *UI) openDayOnCalendar(date string) {
 
 // statusTabIndex is where the Status tab sits in the tab bar; the report links
 // into it by position, which is all AppTabs offers.
-const statusTabIndex = 0
+const statusTabIndex = 1
