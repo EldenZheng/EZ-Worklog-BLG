@@ -71,7 +71,6 @@ type UI struct {
 	daySwap    *fyne.Container // holds either the day's detail or the prompt
 	repBox     *fyne.Container
 	tabs       *container.AppTabs
-	prof       *profileMgr // who Status and Report are about — see profiles.go
 
 	// The column each tab's panels stand in. Held so a panel that changed height
 	// can have its column re-measure it — see relayout.
@@ -600,34 +599,32 @@ func main() {
 	ui.buildAllTabs()
 	ui.tabs.OnSelected = func(ti *container.TabItem) {
 		switch ti.Text {
+		case "Log work":
+			ui.loadPending(false)
 		case "Status":
 			ui.drawCalendar()
 			ui.loadStatus(false)
 		case "Report":
+			ui.refreshRate(false)
 			ui.drawReport()
 			ui.loadReport(false)
-		case "Settings":
-			ui.prof.loadMembers()
 		}
 	}
-	w.SetContent(ui.prof.wrap(ui.tabs))
+	w.SetContent(ui.tabs)
 
 	ui.drawRecent()
 	if !has {
-		ui.tabs.SelectIndex(settingsTabIndex) // Settings first run
+		ui.tabs.SelectIndex(3) // Settings first run
 	}
 	if os.Getenv("WORKLOG_AUTOFETCH") == "1" {
 		ui.cfg.Repos = []string{"bigledger"} // smoke-test override
 	}
-	// Status is the tab shown at startup, so OnSelected never fires for it.
+	// "Log work" is the tab shown at startup, so OnSelected never fires for it.
 	// Kick the first fetch off here, after a beat, so the window is up before
-	// the calendar starts changing under it.
+	// the list starts changing under it.
 	go func() {
 		time.Sleep(750 * time.Millisecond)
-		fyne.Do(func() {
-			ui.drawCalendar()
-			ui.loadStatus(false)
-		})
+		fyne.Do(func() { ui.loadPending(false) })
 	}()
 	w.ShowAndRun()
 }
@@ -675,17 +672,11 @@ func (ui *UI) refreshRate(force bool) {
 // between tabs — a bar on the report opening a day on the calendar — can be
 // exercised without a window manager.
 func (ui *UI) buildAllTabs() {
-	// Resolved before the tabs are built: they preload from ui.cfg, so the
-	// active profile's login and salary have to already be in it.
-	ui.prof = newProfileMgr(ui)
-	// "Log work" is built but not shown. This fork only reads the boards, and
-	// the rest of the app still draws into the tab's containers — the recent
-	// list, the day scoring — so building it keeps those non-nil.
-	ui.buildLogTab()
 	ui.tabs = container.NewAppTabs(
+		container.NewTabItem("Log work", ui.buildLogTab()),
 		container.NewTabItem("Status", ui.buildStatusTab()),
 		container.NewTabItem("Report", ui.buildReportTab()),
-		container.NewTabItem("Settings", ui.buildForkSettingsTab()),
+		container.NewTabItem("Settings", ui.buildSettingsTab()),
 	)
 }
 
@@ -2664,6 +2655,7 @@ func (ui *UI) buildReportTab() fyne.CanvasObject {
 	refresh := widget.NewButtonWithIcon("Refresh from GitHub", theme.ViewRefreshIcon(), func() {
 		ui.ensureProjectCache()
 		delete(ui.projLoaded, reportCacheKey(ui.repMonth))
+		ui.refreshRate(true) // an explicit refresh re-reads the rate too
 		ui.drawReport()
 		ui.loadReport(true)
 	})
@@ -2728,6 +2720,10 @@ func (ui *UI) drawReport() {
 	totalReceivable := rep.Receivable + supportBonus
 
 	money := func(v float64) string { return rep.Currency + " " + commaAmount(v) }
+	conv := "Not configured"
+	if rep.FxRate != 0 && rep.DisplayCurrency != "" {
+		conv = rep.DisplayCurrency + " " + commaAmount(totalReceivable*rep.FxRate)
+	}
 
 	// Working days are read off the calendar, so the tile is right even for a
 	// period nobody has logged a minute into yet.
@@ -2751,6 +2747,7 @@ func (ui *UI) drawReport() {
 
 	stats := container.NewGridWithColumns(3,
 		statTile(money(totalReceivable), "Receivable including support"),
+		statTile(conv, "Converted receivable"),
 		statTile(money(supportBonus), supportNote),
 		statTile(fmt.Sprintf("%.2f", rep.PayableDays), "Payable days × "+money(rep.DailyRate)),
 		statTile(fmt.Sprintf("%d/%d", rep.DaysComplete, rep.DaysLogged), "Complete / logged"),
@@ -2857,6 +2854,10 @@ func (ui *UI) drawReport() {
 	if supportBonus > 0 {
 		summary += fmt.Sprintf(" Worklog receivable %s + weekend support %s = %s.",
 			money(rep.Receivable), money(supportBonus), money(totalReceivable))
+	}
+	if rep.FxRate != 0 {
+		summary += fmt.Sprintf(" Rate 1 %s = %s %s, updated %s.",
+			rep.Currency, commaAmount(rep.FxRate), rep.DisplayCurrency, rep.FxUpdated)
 	}
 	detail = append(detail, widget.NewLabel(summary))
 
