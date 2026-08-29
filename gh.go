@@ -63,7 +63,11 @@ func isNotFound(err error) bool {
 }
 
 var (
-	refRe  = regexp.MustCompile(`(?i)refs?\s+([\w.-]+)/([\w.-]+)/issues/(\d+)`)
+	// Both spellings of a cross-repo ref: the URL path form and the shorthand.
+	// Only the path form was matched before, so "Refs owner/repo#48" fell to the
+	// bare-number fallback below, which threw the owner/repo away and refiled the
+	// commit under whatever #48 happened to be in the scraped repo.
+	refRe  = regexp.MustCompile(`(?i)refs?\s+([\w.-]+)/([\w.-]+)(?:/issues/|#)(\d+)`)
 	hashRe = regexp.MustCompile(`#(\d+)`)
 	issRe  = regexp.MustCompile(`^([\w.-]+)/([\w.-]+)#(\d+)$`)
 )
