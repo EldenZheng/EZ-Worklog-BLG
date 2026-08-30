@@ -96,6 +96,82 @@ func TestCalendarShowsUnpushedWorkInYellow(t *testing.T) {
 	}
 }
 
+// A day that misses the target on the board but clears it once the drafts are
+// counted is not a short day: the hours were worked, only the push is left.
+// Yellow there would send you hunting for work already done, so it goes green —
+// the chart washes the column, the calendar colours the number.
+func TestADayTheDraftsCompleteReadsGreenNotShort(t *testing.T) {
+	ui := statusUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	key := statusCacheKey("2026-08")
+	ui.projItems[key] = []WorklogItem{
+		{Date: "2026-08-14", Minutes: 360, Title: "most of a day",
+			URL: "https://github.com/bigledger/blg-intranet/issues/9"},
+	}
+	if _, err := ui.store.AppendRows([]Row{
+		// 360 + 180 clears 480; on the board alone the day is short.
+		{"date": "2026-08-14", "minutes": "180", "issue": "bigledger/blg-intranet#9"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ui.drawCalendar()
+
+	var readout *canvas.Text
+	walk(ui.calBox, func(o fyne.CanvasObject) {
+		if txt, ok := o.(*canvas.Text); ok && txt.Text == "360m  75% +180m" {
+			readout = txt
+		}
+	})
+	if readout == nil {
+		t.Fatalf("the day should show what it holds and what is waiting: %v", labels(ui.calBox))
+	}
+	if !sameColor(readout.Color, theme.Color(theme.ColorNameSuccess)) {
+		t.Fatalf("a day the drafts complete should read green, got %v", readout.Color)
+	}
+
+	// The chart says the same thing behind the bar.
+	days := []chartDay{
+		{date: "2026-08-14", byOrg: map[string]int{"bigledger": 360}, total: 360, draft: 180},
+		{date: "2026-08-15", byOrg: map[string]int{"bigledger": 360}, total: 360, draft: 60},
+	}
+	c := newDayChart(Config{Repos: []string{"bigledger"}}, days, target)
+	r := c.CreateRenderer().(*dayChartRenderer)
+	c.Resize(fyne.NewSize(900, 300))
+	r.Layout(fyne.NewSize(900, 300))
+
+	if !sameColor(r.slots[0].highlight.FillColor, draftDoneFill()) {
+		t.Fatalf("a completed-by-draft column should be washed green, got %v",
+			r.slots[0].highlight.FillColor)
+	}
+	// Drafts that do not reach the target change nothing: still short, still
+	// yellow, because the day really is owed more time.
+	if !sameColor(r.slots[1].highlight.FillColor, shortFill()) {
+		t.Fatalf("drafts that fall short leave the day short, got %v",
+			r.slots[1].highlight.FillColor)
+	}
+}
+
+// isDraftComplete is the one rule both tabs ask, so it is worth pinning down.
+func TestOnlyADayCarriedOverTheLineIsDraftComplete(t *testing.T) {
+	for _, c := range []struct {
+		mins, draft int
+		want        bool
+	}{
+		{360, 180, true},  // short on the board, carried over by the drafts
+		{0, target, true}, // nothing pushed at all, but the day is done
+		{360, 60, false},  // still owed time even counting the drafts
+		{360, 0, false},   // plainly short: there is nothing waiting
+		{target, 60, false},
+		{target + 60, 60, false}, // already past the line without them
+		{0, 0, false},
+	} {
+		if got := isDraftComplete(c.mins, c.draft); got != c.want {
+			t.Fatalf("isDraftComplete(%d, %d) = %v, want %v", c.mins, c.draft, got, c.want)
+		}
+	}
+}
+
 // On a day that already has pushed work, the draft caps the bar rather than
 // replacing it — and the scale has to hold both or it would draw off the plot.
 func TestChartStacksDraftOnTopOfBankedWork(t *testing.T) {

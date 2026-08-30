@@ -2500,14 +2500,24 @@ func (ui *UI) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.
 	}
 	dayLbl := widget.NewLabelWithStyle(strconv.Itoa(day), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
 	var info fyne.CanvasObject = widget.NewLabel("")
+	// coloured is the readout drawn as its own text rather than as a label, for
+	// the two cases where the colour is carrying the meaning.
+	coloured := func(txt string, name fyne.ThemeColorName) *canvas.Text {
+		c := canvas.NewText(txt, theme.Color(name))
+		c.TextSize = theme.TextSize()
+		c.TextStyle = fyne.TextStyle{Monospace: true}
+		return c
+	}
 	switch {
 	case m == 0 && draft > 0:
-		// Nothing on the board, but the day was worked. In the draft's own
-		// colour, so the cell and its number say the same thing.
-		only := canvas.NewText(fmt.Sprintf("+%dm", draft), theme.Color(theme.ColorNameWarning))
-		only.TextSize = theme.TextSize()
-		only.TextStyle = fyne.TextStyle{Monospace: true}
-		info = only
+		// Nothing on the board, but the day was worked. Green once the drafts
+		// alone cover the target — the day is done, it just has not been sent.
+		txt := fmt.Sprintf("+%dm", draft)
+		if isDraftComplete(m, draft) {
+			info = coloured(txt, theme.ColorNameSuccess)
+		} else {
+			info = coloured(txt, theme.ColorNameWarning)
+		}
 	case m > 0:
 		txt := fmt.Sprintf("%dm  %d%%", m, pc)
 		if m > target {
@@ -2516,16 +2526,19 @@ func (ui *UI) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.
 		if draft > 0 {
 			txt += fmt.Sprintf(" +%dm", draft)
 		}
-		if isShortDay(m) {
+		switch {
+		case isDraftComplete(m, draft):
+			// Short on the board, but only because the rest is still sitting
+			// here. Checked before isShortDay, which is also true of this day:
+			// yellow would send you looking for hours you have already worked.
+			info = coloured(txt, theme.ColorNameSuccess)
+		case isShortDay(m):
 			// The same warning colour as the report's short-day rows and the
 			// chart's target line. A cell's fill already says how full the day
 			// is, but only against itself — the colour is what says the day is
 			// short without the percentage having to be read.
-			short := canvas.NewText(txt, theme.Color(theme.ColorNameWarning))
-			short.TextSize = theme.TextSize()
-			short.TextStyle = fyne.TextStyle{Monospace: true}
-			info = short
-		} else {
+			info = coloured(txt, theme.ColorNameWarning)
+		default:
 			info = widget.NewLabelWithStyle(txt, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
 		}
 	}

@@ -389,6 +389,27 @@ func shortFill() color.Color {
 // isShortDay reports whether a day was worked and left under the target.
 func isShortDay(mins int) bool { return mins > 0 && mins < target }
 
+// isDraftComplete reports whether a day misses the target on the board but makes
+// it once the entries saved on this machine are counted.
+//
+// This is not a short day, and colouring it like one is wrong about the work:
+// the hours were done, it is only the sending that is outstanding. Yellow says
+// "you owe this day more time", which would send you looking for work you have
+// already finished.
+func isDraftComplete(mins, draft int) bool {
+	return draft > 0 && mins < target && mins+draft >= target
+}
+
+// draftDoneFill is the wash behind a day that only reaches the target by
+// counting what is waiting to be pushed. Green, at the same weight as the
+// short-day yellow it replaces, and paler than the week strip's finished green
+// for the same reason that one is: a day finished on GitHub is stated, one
+// finished by counting drafts is a claim with a step left in it.
+func draftDoneFill() color.Color {
+	return blendColor(theme.Color(theme.ColorNameBackground),
+		theme.Color(theme.ColorNameSuccess), shortTint)
+}
+
 // splitCaption puts one caption at each end of the same line.
 //
 // Its own minimum is the wider of the two rather than their sum: a day column is

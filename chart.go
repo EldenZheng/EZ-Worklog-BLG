@@ -254,14 +254,23 @@ func (r *dayChartRenderer) Layout(size fyne.Size) {
 		//
 		// The hovered column lights up over whatever it was already showing, so
 		// a day with nothing logged still shows what the pointer is on.
+		// A day the drafts carry over the line is checked before a short one:
+		// both are true of it, and the green is the more useful of the two —
+		// nothing is owed on that day but a push.
 		short := isShortDay(day.total)
+		done := isDraftComplete(day.total, day.draft)
 		switch {
+		case i == c.hovered && done:
+			s.highlight.FillColor = blendColor(draftDoneFill(),
+				theme.Color(theme.ColorNameForeground), 0.10)
 		case i == c.hovered && short:
 			s.highlight.FillColor = blendColor(shortFill(),
 				theme.Color(theme.ColorNameForeground), 0.10)
 		case i == c.hovered:
 			s.highlight.FillColor = blendColor(theme.Color(theme.ColorNameInputBackground),
 				theme.Color(theme.ColorNameForeground), 0.10)
+		case done:
+			s.highlight.FillColor = draftDoneFill()
 		case short:
 			s.highlight.FillColor = shortFill()
 		default:
