@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1501,21 +1502,79 @@ type issueNode struct {
 // workflow, so "already pushed" and "closed" routinely mean the same thing —
 // skipping closed matches would make every re-push create a duplicate. An open
 // match still wins when both exist.
-func findSubIssue(node issueNode, title string) *subIssue {
-	var closed *subIssue
+// worklogTitle names the sub-issue for one entry. The first worklog of a day is
+// "Worklog: 2026-08-30"; a second entry against the same issue on the same day
+// is "Worklog: 2026-08-30 Part 2", then Part 3, and so on.
+//
+// Two sub-issues may share a title as far as GitHub is concerned, but not as far
+// as anyone reading the list is concerned: a day with three identical rows says
+// nothing about which is which, and the board shows the title beside the
+// minutes. The number is taken from the highest part already filed rather than
+// from a count, so a deleted Part 2 does not hand its name to the next entry.
+func worklogTitle(node issueNode, wdate string) string {
+	base := "Worklog: " + wdate
+	highest := 0
 	for i := range node.SubIssues.Nodes {
-		s := &node.SubIssues.Nodes[i]
-		if !strings.EqualFold(strings.TrimSpace(s.Title), title) {
-			continue
-		}
-		if !strings.EqualFold(s.State, "CLOSED") {
-			return s
-		}
-		if closed == nil {
-			closed = s
+		if n := worklogPartOf(node.SubIssues.Nodes[i].Title, base); n > highest {
+			highest = n
 		}
 	}
-	return closed
+	if highest == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s Part %d", base, highest+1)
+}
+
+// worklogPartOf reads which part of a day's worklog a title names: 1 for the
+// unnumbered first one, N for "… Part N", and 0 for a title that is not this
+// day's worklog at all.
+func worklogPartOf(title, base string) int {
+	title = strings.TrimSpace(title)
+	if strings.EqualFold(title, base) {
+		return 1
+	}
+	rest, ok := cutPrefixFold(title, base+" Part ")
+	if !ok {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(rest))
+	if err != nil || n < 1 {
+		return 0
+	}
+	return n
+}
+
+// cutPrefixFold is strings.CutPrefix ignoring case. Both sides are ASCII here,
+// so comparing byte-for-byte over the prefix length is safe.
+func cutPrefixFold(s, prefix string) (string, bool) {
+	if len(s) < len(prefix) || !strings.EqualFold(s[:len(prefix)], prefix) {
+		return "", false
+	}
+	return s[len(prefix):], true
+}
+
+// findSubIssueByURL picks out the sub-issue an earlier attempt on one entry
+// created, by the URL that attempt recorded on the row.
+//
+// The URL, not the title: every worklog for a given day is titled
+// "Worklog: <date>", so a title match cannot tell one entry's sub-issue from
+// another's, and picking the wrong one means writing this entry's minutes over
+// that one's. Only the row that created a sub-issue knows which is its own.
+//
+// State is not consulted. A worklog sub-issue is closed as soon as the board
+// moves it to Done, so by the time anything is retried the entry's own
+// sub-issue is usually closed — skipping closed ones would create a second.
+func findSubIssueByURL(node issueNode, url string) *subIssue {
+	url = strings.TrimSpace(url)
+	if url == "" {
+		return nil
+	}
+	for i := range node.SubIssues.Nodes {
+		if s := &node.SubIssues.Nodes[i]; strings.EqualFold(strings.TrimSpace(s.URL), url) {
+			return s
+		}
+	}
+	return nil
 }
 
 func getIssueContext(ref string) (owner, repo string, num int, node issueNode, err error) {
@@ -1803,7 +1862,12 @@ func lastLine(s string) string {
 }
 
 // PushEntry writes a worklog to GitHub (subissue or issue mode).
-func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode string) (PushResult, error) {
+//
+// resume is the sub-issue URL this same entry already created, taken off the
+// row's issue_url. Empty means there is nothing to pick back up and a new
+// sub-issue is created — including when another entry has already filed one
+// under the same title for the same day.
+func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, resume string) (PushResult, error) {
 	o, r, _, issue, err := getIssueContext(ref)
 	if err != nil {
 		return PushResult{}, err
@@ -1820,16 +1884,33 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode str
 	}
 
 	if mode == "subissue" {
-		title := "Worklog: " + wdate
 		var createdURL string
 
 		// Creating the sub-issue is the one step that cannot be undone, so a
-		// retry must never repeat it. If a previous attempt got this far and
-		// then failed, pick that sub-issue back up.
-		if existing := findSubIssue(issue, title); existing != nil {
+		// retry must never repeat it. If a previous attempt on *this entry* got
+		// that far, pick that sub-issue back up — resume is the URL the row
+		// recorded when it did.
+		//
+		// It used to be found by title instead, which cannot tell a retry from a
+		// second entry logged against the same issue on the same day: both want
+		// "Worklog: 2026-08-30". The second push landed on the first one's board
+		// item and overwrote its minutes and its remarks, so a 300 and a 240
+		// showed up as a 240 and the 300's remarks were gone. Two entries are
+		// two sub-issues now, and only the row that created one can claim it.
+		if existing := findSubIssueByURL(issue, resume); existing != nil {
 			notes = append(notes, fmt.Sprintf(
-				"Reused the existing sub-issue #%d from an earlier attempt.", existing.Number))
+				"Reused sub-issue #%d from an earlier attempt on this entry.", existing.Number))
 			return pushToProject(existing.URL, existing.ID, items, wdate, owner, mins, remarks, notes, problems)
+		}
+
+		// Numbered only if the day already has one on this issue, so a normal
+		// day's worklog keeps its plain title and a second entry is named for
+		// what it is rather than turning up as a twin of the first.
+		title := worklogTitle(issue, wdate)
+		if part := worklogPartOf(title, "Worklog: "+wdate); part > 1 {
+			notes = append(notes, fmt.Sprintf(
+				"This issue already had a worklog for %s, so this one was filed as part %d.",
+				wdate, part))
 		}
 
 		// The parent link and the issue type go through GraphQL rather than
@@ -1847,7 +1928,13 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode str
 
 		newID, e := viewID(createdURL)
 		if e != nil {
-			return PushResult{}, e
+			// The sub-issue exists whatever happened next, so its URL goes back
+			// with the failure rather than being dropped on the floor. That is
+			// what lets the retry above find it; returning a bare error here
+			// left the row with nothing to resume from and the next attempt
+			// created a second sub-issue for the same entry.
+			return PushResult{URL: createdURL, Notes: notes, Problems: append(problems,
+				"Created the sub-issue but could not read its id: "+e.Error())}, nil
 		}
 		if _, e := gh([]string{
 			"api", "graphql", "-f",

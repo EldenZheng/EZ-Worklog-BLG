@@ -1599,7 +1599,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 		var perr error
 		ui.async(func() error {
 			res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-				mins, body, orDefault(r["mode"], "issue"))
+				mins, body, orDefault(r["mode"], "issue"), r["issue_url"])
 			return nil // handle the push error inline so the edit is not lost
 		}, func() {
 			stop()
@@ -1795,7 +1795,8 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 		var res PushResult
 		var perr error
 		ui.async(func() error {
-			res, perr = PushEntry(ui.cfg, row["issue"], row["date"], row["owner"], mins, row["remarks"], row["mode"])
+			res, perr = PushEntry(ui.cfg, row["issue"], row["date"], row["owner"], mins,
+			row["remarks"], row["mode"], row["issue_url"])
 			return nil // handle push error inline so the saved row is not lost
 		}, func() {
 			stop()
@@ -2320,7 +2321,7 @@ func (ui *UI) pushRow(r Row, refresh func()) {
 	var perr error
 	ui.async(func() error {
 		res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-			r.Minutes(), remarks, orDefault(r["mode"], "issue"))
+			r.Minutes(), remarks, orDefault(r["mode"], "issue"), r["issue_url"])
 		// Reported here rather than handed to async: a failure has to take the
 		// spinner down with it, and async skips its done func on an error.
 		return nil
