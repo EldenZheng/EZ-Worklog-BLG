@@ -205,6 +205,36 @@ func (ui *UI) shownRows(rows []Row) []Row {
 	return out
 }
 
+// draftMinutesByDay totals what is saved on this machine and not yet pushed,
+// per day, across the dates from..to inclusive.
+//
+// Status and Report both read the GitHub project, so until an entry is pushed it
+// is worked time that shows up nowhere: the day reads empty on the calendar and
+// the bar is missing from the chart, which is indistinguishable from not having
+// done the work. This is what those two tabs paint yellow — shown, but never
+// counted into the banked figures, since nothing has been sent yet.
+//
+// Filtered by org like everything else on those tabs, so switching an employer
+// off takes its drafts with it.
+func (ui *UI) draftMinutesByDay(fromDate, toDate string) map[string]int {
+	out := map[string]int{}
+	rows, err := ui.store.ReadRows()
+	if err != nil {
+		return out
+	}
+	for _, r := range ui.shownRows(rows) {
+		if r["pushed_at"] != "" {
+			continue
+		}
+		d := r["date"]
+		if d < fromDate || d > toDate {
+			continue
+		}
+		out[d] += r.Minutes()
+	}
+	return out
+}
+
 // itemOrg is the organisation a worklog item belongs to: its own issue's owner,
 // or the parent issue's when the item is a sub-issue with no URL of its own.
 func itemOrg(it WorklogItem) string {
@@ -2418,6 +2448,15 @@ func (ui *UI) drawCalendar() {
 	// Monday-first offset
 	firstWd := (int(time.Date(year, time.Month(mon), 1, 0, 0, 0, 0, time.UTC).Weekday()) + 6) % 7
 
+	// What is saved here and not pushed yet. The board cannot know about it, so
+	// without this the month shows holes on days that were worked.
+	monthFrom, monthTo, _ := monthBounds(ui.calMonth)
+	draftByDay := ui.draftMinutesByDay(monthFrom, monthTo)
+	monthDraft := 0
+	for _, m := range draftByDay {
+		monthDraft += m
+	}
+
 	grid := container.NewGridWithColumns(7)
 	for _, d := range []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"} {
 		grid.Add(widget.NewLabelWithStyle(d, fyne.TextAlignCenter, fyne.TextStyle{Monospace: true}))
@@ -2427,7 +2466,7 @@ func (ui *UI) drawCalendar() {
 	}
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", ui.calMonth, pad2(day))
-		grid.Add(ui.dayCell(ds, day, byDayOrg[ds]))
+		grid.Add(ui.dayCell(ds, day, byDayOrg[ds], draftByDay[ds]))
 	}
 	ui.calBox.Objects = []fyne.CanvasObject{grid}
 	ui.calBox.Refresh()
@@ -2438,12 +2477,19 @@ func (ui *UI) drawCalendar() {
 	}
 	ui.calLegend.Refresh()
 	relayout(ui.calBody)
-	ui.calSummary.SetText(fmt.Sprintf("%d min logged this month", monthTotal))
+	summary := fmt.Sprintf("%d min logged this month", monthTotal)
+	if monthDraft > 0 {
+		// Kept out of the total on purpose: the number before the dot is what
+		// the board holds, and folding drafts into it would claim work that has
+		// not been sent.
+		summary += fmt.Sprintf(" · %d min saved here, waiting to push", monthDraft)
+	}
+	ui.calSummary.SetText(summary)
 	// Always redrawn: with no day picked it shows the prompt to pick one.
 	ui.drawDayPanel()
 }
 
-func (ui *UI) dayCell(ds string, day int, byOrg map[string]int) fyne.CanvasObject {
+func (ui *UI) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.CanvasObject {
 	m := 0
 	for _, v := range byOrg {
 		m += v
@@ -2454,10 +2500,21 @@ func (ui *UI) dayCell(ds string, day int, byOrg map[string]int) fyne.CanvasObjec
 	}
 	dayLbl := widget.NewLabelWithStyle(strconv.Itoa(day), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
 	var info fyne.CanvasObject = widget.NewLabel("")
-	if m > 0 {
+	switch {
+	case m == 0 && draft > 0:
+		// Nothing on the board, but the day was worked. In the draft's own
+		// colour, so the cell and its number say the same thing.
+		only := canvas.NewText(fmt.Sprintf("+%dm", draft), theme.Color(theme.ColorNameWarning))
+		only.TextSize = theme.TextSize()
+		only.TextStyle = fyne.TextStyle{Monospace: true}
+		info = only
+	case m > 0:
 		txt := fmt.Sprintf("%dm  %d%%", m, pc)
 		if m > target {
 			txt += " +"
+		}
+		if draft > 0 {
+			txt += fmt.Sprintf(" +%dm", draft)
 		}
 		if isShortDay(m) {
 			// The same warning colour as the report's short-day rows and the
@@ -2492,7 +2549,7 @@ func (ui *UI) dayCell(ds string, day int, byOrg map[string]int) fyne.CanvasObjec
 	// colour, so a glance down the month shows both how full a day was and who
 	// it was for.
 	stack := container.NewStack(floor,
-		vMeterFill(ui.cfg, byOrg, target, cellCornerRadius), border,
+		vMeterFill(ui.cfg, byOrg, draft, target, cellCornerRadius), border,
 		container.NewPadded(body))
 	return newTappable(stack, func() {
 		ui.selDay = ds
@@ -2712,6 +2769,15 @@ func (ui *UI) drawReport() {
 	}
 	totals := totalsFromItems(items, "")
 	rep := reportFromTotals(ui.cfg, totals)
+	// Drafts are shown, never counted. Every figure below this line — payable
+	// days, receivable, complete/logged — is what the board holds, because that
+	// is what will actually be paid; work still sitting on this machine has not
+	// been claimed yet and must not read as if it had.
+	draftByDay := ui.draftMinutesByDay(fromDate, toDate)
+	draftTotal := 0
+	for _, m := range draftByDay {
+		draftTotal += m
+	}
 	// What the run-up could not make a set out of comes forward. A remainder,
 	// so a period never gets paid for work an earlier report already paid for.
 	carried := weekendSupportIssues(ui.shownItems(runUp)) % supportSetSize
@@ -2754,6 +2820,7 @@ func (ui *UI) drawReport() {
 		statTile(fmt.Sprintf("%d/%d", wdGone, wdTotal), wdNote),
 		statTile(fmt.Sprintf("%.1fh", float64(rep.TotalMin)/60), "Time logged"),
 		statTile(strconv.Itoa(len(items)), "Worklog items ("+orDefault(ui.cfg.WorklogOwner, "all")+")"),
+		statTile(hoursMins(draftTotal), "Saved here, not pushed"),
 	)
 
 	// The chart is per day, so it needs the split per day — the period totals
@@ -2771,7 +2838,7 @@ func (ui *UI) drawReport() {
 		to, _ := time.Parse("2006-01-02", toDate)
 		for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 			ds := d.Format("2006-01-02")
-			day := chartDay{date: ds, byOrg: byDayOrg[ds]}
+			day := chartDay{date: ds, byOrg: byDayOrg[ds], draft: draftByDay[ds]}
 			for _, m := range day.byOrg {
 				day.total += m
 			}
@@ -2860,6 +2927,12 @@ func (ui *UI) drawReport() {
 			rep.Currency, commaAmount(rep.FxRate), rep.DisplayCurrency, rep.FxUpdated)
 	}
 	detail = append(detail, widget.NewLabel(summary))
+	if draftTotal > 0 {
+		detail = append(detail, colorLabel(fmt.Sprintf(
+			"%s in this period is saved on this machine and not pushed — drawn yellow on the "+
+				"chart and left out of every figure above. Push it from Log work to have it count.",
+			hoursMins(draftTotal)), theme.ColorNameWarning))
+	}
 
 	ui.repBox.Objects = []fyne.CanvasObject{
 		stats,
@@ -3076,6 +3149,7 @@ func colorLabel(s string, name fyne.ThemeColorName) fyne.CanvasObject {
 	l.TextSize = theme.TextSize()
 	return l
 }
+
 // wideSelect holds a dropdown open wide enough for its longest option.
 //
 // fyne sizes a Select from its *placeholder*, not from what it displays:
@@ -3103,6 +3177,7 @@ func statTile(value, label string) fyne.CanvasObject {
 		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{}),
 	))
 }
+
 // truncate elides to n characters. It counts runes, not bytes: cutting an issue
 // title mid-codepoint would render the tail as a replacement glyph.
 func truncate(s string, n int) string {

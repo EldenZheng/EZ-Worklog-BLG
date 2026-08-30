@@ -144,14 +144,48 @@ func meterBar(cfg Config, byOrg map[string]int, goal int, height float32) fyne.C
 	return meterBarWithDraft(cfg, byOrg, nil, goal, height)
 }
 
-// draftTint is how much of the org's colour a not-yet-pushed segment keeps. Pale
-// enough to read as "this is not banked", coloured enough to stay the same org.
-const draftTint = 0.45
+// draftAlpha is how much of the warning colour a not-yet-pushed segment keeps
+// on a bar it is laid over. draftSolidTint is the same colour where it has to be
+// opaque instead — see draftYellow.
+const (
+	draftAlpha     = 0.55
+	draftSolidTint = 0.8
+)
+
+// draftWash is the colour of work saved on this machine and not yet pushed,
+// drawn translucent so the meter's track still reads through it: a draft is not
+// a claim on the day, it is something laid over it. Yellow, the same warning hue
+// the target line and the short-day wash use — everywhere else in the app that
+// colour already means "not settled", which is exactly what a draft is.
+func draftWash() color.NRGBA {
+	return withAlpha(theme.Color(theme.ColorNameWarning), draftAlpha)
+}
+
+// draftYellow is the same reading where the segment cannot be translucent: the
+// chart's stacked bars and a calendar cell's fill deliberately reach up behind
+// one another so their rounded joins read solid, and a see-through segment would
+// show the one below through the overlap as a third colour. Mixed into the
+// background by f instead, so it lands at the same weight as whatever it sits
+// beside — the cell's washed org fills, or the chart's full-strength bars.
+func draftYellow(f float32) color.NRGBA {
+	return blendColor(theme.Color(theme.ColorNameBackground),
+		theme.Color(theme.ColorNameWarning), f)
+}
+
+// withAlpha re-issues a colour at a fraction of full opacity.
+func withAlpha(c color.Color, f float32) color.NRGBA {
+	r, g, b, _ := c.RGBA()
+	return color.NRGBA{R: uint8(r >> 8), G: uint8(g >> 8), B: uint8(b >> 8), A: uint8(f * 255)}
+}
 
 // meterBarWithDraft is meterBar plus the minutes that are only saved locally,
-// drawn after the banked ones in a washed-out shade of the same org colour. The
-// two are scaled together, so the bar shows what the day would come to if
-// everything waiting were pushed without ever claiming it already has been.
+// drawn after the banked ones as one translucent yellow block. The two are
+// scaled together, so the bar shows what the day would come to if everything
+// waiting were pushed without ever claiming it already has been.
+//
+// The draft is one block rather than a segment per org: the colour there says
+// "not pushed yet", and splitting it by employer would put two meanings on one
+// stretch of bar.
 func meterBarWithDraft(cfg Config, byOrg, draft map[string]int, goal int, height float32) fyne.CanvasObject {
 	track := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
 	track.CornerRadius = height / 2
@@ -161,14 +195,17 @@ func meterBarWithDraft(cfg Config, byOrg, draft map[string]int, goal int, height
 	}
 
 	banked := orgsByShare(cfg, byOrg)
-	pending := orgsByShare(cfg, draft)
 	total := 0
 	for _, o := range banked {
 		total += byOrg[o]
 	}
-	for _, o := range pending {
-		total += draft[o]
+	pending := 0
+	for _, m := range draft {
+		if m > 0 {
+			pending += m
+		}
 	}
+	total += pending
 	if total <= 0 {
 		return track
 	}
@@ -193,10 +230,7 @@ func meterBarWithDraft(cfg Config, byOrg, draft map[string]int, goal int, height
 	for _, o := range banked {
 		add(byOrg[o], orgColor(cfg, o))
 	}
-	for _, o := range pending {
-		add(draft[o], blendColor(
-			theme.Color(theme.ColorNameInputBackground), orgColor(cfg, o), draftTint))
-	}
+	add(pending, draftWash())
 	if rest := 1 - sumOf(weights); rest > 0.001 {
 		weights = append(weights, rest)
 		segs = append(segs, canvas.NewRectangle(color.Transparent))
@@ -217,7 +251,11 @@ const meterTint = 0.4
 // vMeterFill is the same reading as meterBar, drawn as the cell filling from
 // the bottom instead of as a bar along it. Colours are washed out towards the
 // background because the day's number sits on top and has to stay readable.
-func vMeterFill(cfg Config, byOrg map[string]int, goal int, radius float32) fyne.CanvasObject {
+//
+// draft is the minutes saved on this machine and not pushed. It rides on top of
+// the banked colours in yellow, so a day that only looks empty because nothing
+// has been sent yet stops looking empty.
+func vMeterFill(cfg Config, byOrg map[string]int, draft, goal int, radius float32) fyne.CanvasObject {
 	if goal <= 0 {
 		return canvas.NewRectangle(color.Transparent)
 	}
@@ -225,6 +263,9 @@ func vMeterFill(cfg Config, byOrg map[string]int, goal int, radius float32) fyne
 	total := 0
 	for _, o := range orgs {
 		total += byOrg[o]
+	}
+	if draft > 0 {
+		total += draft
 	}
 	if total <= 0 {
 		return canvas.NewRectangle(color.Transparent)
@@ -256,6 +297,14 @@ func vMeterFill(cfg Config, byOrg map[string]int, goal int, radius float32) fyne
 		// The fill lives inside a rounded cell, so it has to be rounded too —
 		// square corners poking out of the frame were the fill looking like a
 		// separate box laid over the day.
+		seg.CornerRadius = radius
+		weights = append(weights, w)
+		segs = append(segs, seg)
+	}
+	// Last, so it sits at the top of the fill: the banked work is the floor the
+	// draft is stacked on, not the other way round.
+	if w := float32(float64(draft) / float64(goal) * scale); draft > 0 && w > 0 {
+		seg := canvas.NewRectangle(draftYellow(meterTint))
 		seg.CornerRadius = radius
 		weights = append(weights, w)
 		segs = append(segs, seg)

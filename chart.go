@@ -32,10 +32,14 @@ type dayChart struct {
 }
 
 // chartDay is one slot on the axis: a date and how its minutes split by org.
+// draft is what is saved on this machine for that day and not yet pushed — it
+// is stacked on top of the org segments rather than counted into total, which
+// stays what GitHub actually holds.
 type chartDay struct {
 	date  string
 	byOrg map[string]int
 	total int
+	draft int
 }
 
 func newDayChart(cfg Config, days []chartDay, goal int) *dayChart {
@@ -63,8 +67,10 @@ func (c *dayChart) MinSize() fyne.Size { return fyne.NewSize(0, chartMinHeight) 
 func (c *dayChart) maxValue() int {
 	maxVal := c.goal
 	for _, d := range c.days {
-		if d.total > maxVal {
-			maxVal = d.total
+		// The draft rides on top of the bar, so the scale has to hold both or a
+		// day with work waiting would draw off the top of the plot.
+		if t := d.total + d.draft; t > maxVal {
+			maxVal = t
 		}
 	}
 	if maxVal <= 0 {
@@ -145,6 +151,7 @@ type chartSlot struct {
 	highlight *canvas.Rectangle
 	orgs      []string // the segments' orgs, bottom-up
 	segments  []*canvas.Rectangle
+	draft     *canvas.Rectangle // unpushed minutes, capping the stack; nil if none
 	label     *canvas.Text
 }
 
@@ -169,6 +176,14 @@ func (r *dayChartRenderer) build() {
 			seg.CornerRadius = chartBarRadius
 			s.segments = append(s.segments, seg)
 			r.objects = append(r.objects, seg)
+		}
+		// Built after the org segments so it paints over their overlap rather
+		// than under it, and only when there is something to draw: an empty
+		// rectangle per day is a scene object per day for nothing.
+		if day.draft > 0 {
+			s.draft = canvas.NewRectangle(draftYellow(draftSolidTint))
+			s.draft.CornerRadius = chartBarRadius
+			r.objects = append(r.objects, s.draft)
 		}
 		s.label = canvas.NewText(chartDayLabel(day.date), muted)
 		s.label.TextSize = theme.CaptionTextSize()
@@ -276,6 +291,23 @@ func (r *dayChartRenderer) Layout(size fyne.Size) {
 			y = top
 		}
 
+		// The draft caps the stack, reaching down behind whatever it landed on
+		// for the same reason the org segments do.
+		if s.draft != nil {
+			h := float32(day.draft) / maxVal * plotH
+			if h <= 0 {
+				s.draft.Resize(fyne.NewSize(0, 0))
+			} else {
+				top := y - h
+				grown := h
+				if len(s.segments) > 0 {
+					grown += chartBarRadius
+				}
+				s.draft.Move(fyne.NewPos(barX, top))
+				s.draft.Resize(fyne.NewSize(barW, grown))
+			}
+		}
+
 		lblSize := s.label.MinSize()
 		s.label.Move(fyne.NewPos(slotX+slotW/2-lblSize.Width/2, plotBottom+3))
 		s.label.Resize(lblSize)
@@ -304,6 +336,14 @@ func (ui *UI) chartWithReadout(days []chartDay, fromDate, toDate string) fyne.Ca
 	}
 	idle := fmt.Sprintf("Minutes per day, %s to %s — the line is the %s target. "+
 		"Hover a bar for the day, click to open it.", fromDate, toDate, hoursMins(target))
+	for _, d := range days {
+		// Only said when there is yellow on screen to explain. A permanent note
+		// about drafts on a chart with none is furniture.
+		if d.draft > 0 {
+			idle += " Yellow is saved here and not pushed yet."
+			break
+		}
+	}
 	readout := widget.NewLabelWithStyle(idle, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	chart.onHover = func(date string) {
 		if date == "" {
@@ -312,14 +352,22 @@ func (ui *UI) chartWithReadout(days []chartDay, fromDate, toDate string) fyne.Ca
 		}
 		d := byDate[date]
 		when, _ := time.Parse("2006-01-02", date)
-		if d.total == 0 {
+		if d.total == 0 && d.draft == 0 {
 			readout.SetText(when.Format("Mon 2 Jan") + " — nothing logged")
+			return
+		}
+		if d.total == 0 {
+			readout.SetText(fmt.Sprintf("%s — nothing pushed   ·   %s saved here, waiting",
+				when.Format("Mon 2 Jan"), hoursMins(d.draft)))
 			return
 		}
 		line := fmt.Sprintf("%s — %s of %s", when.Format("Mon 2 Jan"),
 			hoursMins(d.total), hoursMins(target))
 		for _, org := range orgsByShare(ui.cfg, d.byOrg) {
 			line += fmt.Sprintf("   ·   %s %s", org, hoursMins(d.byOrg[org]))
+		}
+		if d.draft > 0 {
+			line += fmt.Sprintf("   ·   +%s waiting", hoursMins(d.draft))
 		}
 		readout.SetText(line)
 	}

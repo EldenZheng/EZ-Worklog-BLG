@@ -135,7 +135,7 @@ func TestVMeterFillsFromTheBottom(t *testing.T) {
 	defer a.Quit()
 
 	cfg := Config{Repos: []string{"bigledger", "BigLedger-Support"}}
-	fill := vMeterFill(cfg, map[string]int{"bigledger": 240, "bigledger-support": 120}, target, cellCornerRadius)
+	fill := vMeterFill(cfg, map[string]int{"bigledger": 240, "bigledger-support": 120}, 0, target, cellCornerRadius)
 	fill.Resize(fyne.NewSize(80, 100)) // 100px tall cell, 480 target
 
 	segs := []*canvas.Rectangle{}
@@ -183,7 +183,7 @@ func TestVMeterFillsFromTheBottom(t *testing.T) {
 	}
 
 	// A day past target fills the cell and no further.
-	over := vMeterFill(cfg, map[string]int{"bigledger": 900}, target, cellCornerRadius)
+	over := vMeterFill(cfg, map[string]int{"bigledger": 900}, 0, target, cellCornerRadius)
 	over.Resize(fyne.NewSize(80, 100))
 	tall := float32(0)
 	walk(over, func(c fyne.CanvasObject) {
