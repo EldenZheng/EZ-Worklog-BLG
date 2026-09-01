@@ -117,6 +117,30 @@ type PendingResult struct {
 // rather than juggling delimiters.
 const commitJQ = `[.[] | {sha: .sha[0:7], date: .commit.author.date, message: .commit.message}]`
 
+// commitWorkDate is the working day a commit belongs to: its own timestamp in
+// the machine's zone, rolled over at workDayStart rather than at midnight.
+//
+// Midnight was the wrong line to draw. Work carried past it is still the
+// evening's work — the entry is logged against that day, and the worklog on the
+// board carries that date — but the commit's own timestamp had already turned
+// over, so a 1am commit was offered under tomorrow. On a Sunday night that is
+// not just the wrong day, it is the wrong week: the overtime leaked forward into
+// a week it was never part of, and the week being reported on came out short at
+// one end and long at the other.
+//
+// The same rollover the rest of the app uses, so the day a commit is offered
+// under is the day its worklog will be filed on.
+func commitWorkDate(ts string) string {
+	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
+		if t, err := time.Parse(layout, ts); err == nil {
+			return workDate(t.Local())
+		}
+	}
+	// Unparseable: fall back to whatever localDate can make of it rather than
+	// losing the commit out of every bucket.
+	return localDate(ts)
+}
+
 // localDate renders a GitHub timestamp as YYYY-MM-DD in the machine's own zone.
 // The two APIs disagree on format — search/commits returns an offset
 // ("2026-08-05T17:49:37.000+08:00") while repos/*/commits normalises to Z
@@ -194,7 +218,7 @@ func repoCommits(repo, ref, author, since, until string) ([]Commit, string) {
 			first = c.Message[:i]
 		}
 		got = append(got, Commit{
-			Sha: c.Sha, Repo: repo, Date: localDate(c.Date),
+			Sha: c.Sha, Repo: repo, Date: commitWorkDate(c.Date),
 			Message: first, Full: c.Message, Issue: parseIssue(c.Message, repo),
 		})
 	}
@@ -289,6 +313,9 @@ func FetchIssueInfos(refs []string) (map[string]IssueInfo, map[string]error) {
 // ---- reading worklogs back from a GitHub Project ----
 
 // WorklogItem is one row in the project, read from its Worklog fields.
+//
+// Status and Assignees are carried for the week export, which is meant to read
+// like the board's own TSV download; nothing else on the tabs uses them.
 type WorklogItem struct {
 	Date        string
 	Minutes     int
@@ -298,6 +325,26 @@ type WorklogItem struct {
 	URL         string
 	ParentTitle string
 	ParentURL   string
+	Status      string
+	Assignees   []string
+}
+
+// Repo is the owner/repo the worklog sits in, read off its own issue URL. The
+// board has it as a column of its own; here it is one less thing to fetch.
+func (it WorklogItem) Repo() string {
+	u := it.URL
+	if u == "" {
+		u = it.ParentURL
+	}
+	i := strings.Index(u, "github.com/")
+	if i < 0 {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(u[i+len("github.com/"):], "/"), "/")
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[0] + "/" + parts[1]
 }
 
 var projURLRe = regexp.MustCompile(`(?:github\.com/)?(orgs|users)/([\w.-]+)/projects/(\d+)`)
@@ -335,7 +382,11 @@ type pvFieldValue struct {
 	Text     string   `json:"text"`
 	Number   *float64 `json:"number"`
 	Date     string   `json:"date"`
-	Field    struct {
+	// Name is the chosen option of a single-select field, which is how Status
+	// arrives. Only single-select values carry one, so it is empty everywhere
+	// else and the Field.Name below is what says which field this is.
+	Name  string `json:"name"`
+	Field struct {
 		Name string `json:"name"`
 	} `json:"field"`
 }
@@ -360,15 +411,16 @@ query($login:String!,$number:Int!,$filter:String!,$after:String){
     nodes{
      content{
       __typename
-      ... on Issue { title url parent { title url } }
+      ... on Issue { title url parent { title url } assignees(first:10){ nodes{ login } } }
       ... on PullRequest { title url }
       ... on DraftIssue { title }
      }
      fieldValues(first:50){ nodes{
       __typename
-      ... on ProjectV2ItemFieldTextValue   { text   field{ ... on ProjectV2FieldCommon { name } } }
-      ... on ProjectV2ItemFieldNumberValue { number field{ ... on ProjectV2FieldCommon { name } } }
-      ... on ProjectV2ItemFieldDateValue   { date   field{ ... on ProjectV2FieldCommon { name } } }
+      ... on ProjectV2ItemFieldTextValue         { text   field{ ... on ProjectV2FieldCommon { name } } }
+      ... on ProjectV2ItemFieldNumberValue       { number field{ ... on ProjectV2FieldCommon { name } } }
+      ... on ProjectV2ItemFieldDateValue         { date   field{ ... on ProjectV2FieldCommon { name } } }
+      ... on ProjectV2ItemFieldSingleSelectValue { name   field{ ... on ProjectV2FieldCommon { name } } }
      } }
     }
     pageInfo{ hasNextPage endCursor }
@@ -384,6 +436,11 @@ type projectItemContent struct {
 		Title string `json:"title"`
 		URL   string `json:"url"`
 	} `json:"parent"`
+	Assignees struct {
+		Nodes []struct {
+			Login string `json:"login"`
+		} `json:"nodes"`
+	} `json:"assignees"`
 }
 
 type projectWorklogsResponse struct {
@@ -470,6 +527,9 @@ func worklogFromNode(content *projectItemContent, values []pvFieldValue) (Worklo
 		if content.Parent != nil {
 			it.ParentTitle, it.ParentURL = content.Parent.Title, content.Parent.URL
 		}
+		for _, a := range content.Assignees.Nodes {
+			it.Assignees = append(it.Assignees, a.Login)
+		}
 	}
 	for _, fv := range values {
 		switch {
@@ -483,6 +543,10 @@ func worklogFromNode(content *projectItemContent, values []pvFieldValue) (Worklo
 			}
 		case nameHas(fv.Field.Name, "worklog", "remark"):
 			it.Remarks = fv.Text
+		// Status is the board's own column, not a Worklog field, so it is
+		// matched on its own name rather than through the worklog prefix.
+		case nameHas(fv.Field.Name, "status"):
+			it.Status = fv.Name
 		}
 	}
 	return it, it.Date != ""
@@ -633,7 +697,7 @@ func searchCommits(org, author, sinceDate, untilDate string) ([]Commit, string) 
 			first = c.Message[:i]
 		}
 		got = append(got, Commit{
-			Sha: c.Sha, Repo: c.Repo, Date: localDate(c.Date),
+			Sha: c.Sha, Repo: c.Repo, Date: commitWorkDate(c.Date),
 			Message: first, Full: c.Message, Issue: parseIssue(c.Message, c.Repo),
 		})
 	}
@@ -908,18 +972,26 @@ func ghCurrentUser() (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
-// listOrgRepos returns every "owner/repo" in an organisation the user can see.
+// listOrgRepos returns every "owner/repo" in an organisation the user can see,
+// most recently pushed first.
+//
+// The order matters to the repo picker, which puts this list in a dropdown: the
+// repo you want is nearly always one you have touched lately, and it should not
+// be four hundred names down a list ordered by a letter. The scan that also
+// calls this does not care, so one order serves both.
 func listOrgRepos(org string) ([]string, error) {
 	out, err := gh([]string{
 		"api", "orgs/" + org + "/repos", "--paginate",
 		"-X", "GET", "-f", "per_page=100", "-f", "type=all",
+		"-f", "sort=pushed", "-f", "direction=desc",
 		"--jq", ".[].full_name",
 	})
 	if err != nil {
 		// Fall back to a user account if it isn't an org.
 		out2, err2 := gh([]string{
 			"api", "users/" + org + "/repos", "--paginate",
-			"-X", "GET", "-f", "per_page=100", "--jq", ".[].full_name",
+			"-X", "GET", "-f", "per_page=100",
+			"-f", "sort=pushed", "-f", "direction=desc", "--jq", ".[].full_name",
 		})
 		if err2 != nil {
 			return nil, ghErr("could not list repos for '%s': %s", org, err.Error())

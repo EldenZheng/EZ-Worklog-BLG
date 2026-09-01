@@ -21,9 +21,14 @@ const (
 )
 
 // fieldOrder is the exact CSV column order, matching the Python version.
+// parent_repo and parent_title are only filled for an "independent" entry: the
+// issue it belongs under does not exist yet, and is created on the first push
+// rather than when the entry is saved. Nothing reaches GitHub until you push,
+// which is the rest of the app's bargain too.
 var fieldOrder = []string{
 	"id", "date", "minutes", "type", "description", "refs", "issue",
 	"owner", "remarks", "mode", "issue_url", "item_id", "pushed_at", "logged_at",
+	"parent_repo", "parent_title",
 }
 
 // Config mirrors config.json so data carries over from the Python app.
@@ -42,6 +47,10 @@ type Config struct {
 	AnthropicModel    string   `json:"anthropic_model"`
 	ProjectURL        string   `json:"project_url"`
 	ExtraProjectURLs  []string `json:"extra_project_urls"`
+	// DisplayName is the name a meeting issue is titled with — "Elden" in
+	// "Elden Meeting & ad hocs: 2026-08-25". Blank means derive it from the
+	// worklog owner; see displayName.
+	DisplayName string `json:"display_name"`
 }
 
 func defaultConfig() Config {

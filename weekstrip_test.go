@@ -139,8 +139,16 @@ func TestWeekStripShowsWhatEachDayHolds(t *testing.T) {
 	}
 	// Work already on GitHub is counted, not listed: it is the bar and the score,
 	// and listing it again buried the one card there is anything left to do to.
-	if contains(got, "DOC ITEM") || contains(got, "Support rota") {
-		t.Fatalf("pushed worklogs should not be listed on the day: %v", got)
+	//
+	// Checked against the day columns alone. The by-issue panel below the strip
+	// does name that work, on purpose — it is the week's summary — so scanning
+	// the whole tab would now catch it there and say nothing about the columns.
+	var inColumns []string
+	for _, col := range ui.weekCols {
+		inColumns = append(inColumns, labels(col)...)
+	}
+	if contains(inColumns, "DOC ITEM") || contains(inColumns, "Support rota") {
+		t.Fatalf("pushed worklogs should not be listed on the day: %v", inColumns)
 	}
 	// The unpushed entry shows on its day too, counted apart from the banked
 	// minutes so the day's real total is never overstated, and totalled beside

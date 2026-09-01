@@ -56,6 +56,91 @@ func TestLogTabRefreshLooksLikeTheOthers(t *testing.T) {
 	}
 }
 
+// A week runs Monday to Sunday and the cache is a month at a time, so the week
+// of the 31st is served by two of them. Refreshing only today's month left the
+// other half of the strip showing whatever it had cached — work pushed onto the
+// 31st stayed invisible on the Log tab until Status was walked back a month and
+// refreshed by hand.
+func TestLogTabRefreshCoversEveryMonthTheWeekTouches(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("t")
+	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
+	ui.cfg = Config{ProjectURL: "https://github.com/orgs/bigledger/projects/9"}
+
+	// A week that straddles the turn of a month needs both of them.
+	ui.weekStart = "2026-08-31" // Monday; the week runs into September
+	months := ui.logTabMonths()
+	for _, want := range []string{"2026-08", "2026-09"} {
+		if !containsStr(months, want) {
+			t.Fatalf("a week across the turn needs %s: %v", want, months)
+		}
+	}
+	// Today's month is always in, since the score at the foot is scored against
+	// it whatever week the strip has been walked to.
+	if !containsStr(months, thisMonth()) {
+		t.Fatalf("today's month should always be refreshed: %v", months)
+	}
+
+	// A week sitting inside one month reaches no further than that month: a
+	// refresh should not cost a fetch it has no use for. Today's month is still
+	// there, so two is the most this can be.
+	ui.weekStart = "2026-08-10" // Monday, and the whole week is August
+	got := ui.logTabMonths()
+	if containsStr(got, "2026-07") {
+		t.Fatalf("a week inside August should not reach into July: %v", got)
+	}
+	if len(got) > 2 {
+		t.Fatalf("today's month plus one is all this week needs: %v", got)
+	}
+
+	// Named once, however many ways it is reached — a month refreshed twice is
+	// a wasted round trip to GitHub.
+	ui.weekStart = weekStartOf(today())
+	if names := ui.logTabMonths(); len(names) != len(uniqueStrs(names)) {
+		t.Fatalf("a month should be named once: %v", names)
+	}
+
+	// And the refresh really drops them, so the next read goes to GitHub.
+	ui.weekStart = "2026-08-31"
+	ui.ensureProjectCache()
+	for _, m := range []string{"2026-08", "2026-09"} {
+		key := statusCacheKey(m)
+		ui.projItems[key] = []WorklogItem{{Date: m + "-01", Minutes: 60}}
+		ui.projLoaded[key] = true
+		// Marked in flight so the refetch stops at loadProject's own guard: the
+		// point under test is the cache being dropped, not a call to GitHub.
+		ui.projLoading[key] = true
+	}
+	ui.refreshTodayScore()
+	for _, m := range []string{"2026-08", "2026-09"} {
+		if ui.projLoaded[statusCacheKey(m)] {
+			t.Fatalf("%s should have been dropped so the next read refetches it", m)
+		}
+	}
+}
+
+func containsStr(hay []string, needle string) bool {
+	for _, h := range hay {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrs(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 // Refreshing the commits also drops the month behind the line at the foot of
 // the tab: that score reads the Status cache, so refreshing one without the
 // other left today's minutes reading whatever they were an hour ago.

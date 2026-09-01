@@ -10,13 +10,16 @@ package main
 import (
 	"fmt"
 	"image/color"
+	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
@@ -37,6 +40,9 @@ const (
 	// one only finished by counting drafts is a paler claim, because it is one.
 	weekDoneTint  = 0.22
 	weekDraftTint = 0.10
+
+	// How long a Copy button says "Copied" before going back to its own label.
+	copiedFlash = 1500 * time.Millisecond
 )
 
 // workDate is the working day a moment belongs to. See workDayStart.
@@ -243,7 +249,13 @@ func (ui *UI) drawWeekStrip() {
 	case "error":
 		note = "could not read the GitHub project."
 	}
-	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(),
+	// The week that is on screen is the week that gets sent — no month picker,
+	// no date range to fill in twice.
+	mail := widget.NewButtonWithIcon("Export week for email", theme.MailComposeIcon(), func() {
+		ui.exportWeekForEmail(days, byDay, state)
+	})
+
+	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), mail,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
 
 	// Any column about to be thrown away stops breathing first: an animation left
@@ -265,8 +277,153 @@ func (ui *UI) drawWeekStrip() {
 			"Drag a card onto another day to move it — the date it is pushed with follows the drop.",
 			fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
 	}
+
+	// The boards and the week's issues stand on the tab in their own right. They
+	// used to appear only inside the export dialog, which meant the one view
+	// worth glancing at — what this week was actually spent on — could only be
+	// had by exporting something.
+	var weekItems []WorklogItem
+	for _, d := range days {
+		weekItems = append(weekItems, byDay[d]...)
+	}
+	objs = append(objs, widget.NewSeparator(),
+		ui.weekBoardsPanel(days[0], days[len(days)-1]),
+		ui.weekIssuesPanel(weekItems, state))
+
 	ui.weekBox.Objects = objs
 	ui.weekBox.Refresh()
+}
+
+// weekBoardsPanel is the two saved board views, filtered to the shown week.
+//
+// Each one is a link to click and a button to copy, because those are two
+// different jobs: opening it here to check the week, and pasting the URL into a
+// mail. A hyperlink alone can only do the first — the text it shows is a label,
+// not the address, so there is nothing to select.
+func (ui *UI) weekBoardsPanel(from, to string) fyne.CanvasObject {
+	rows := []fyne.CanvasObject{bold("Boards for this week")}
+	for _, raw := range weekBoardLinks(ui.cfg.WorklogOwner, from, to) {
+		raw := raw
+		var open fyne.CanvasObject = widget.NewLabel(raw)
+		if u, err := url.Parse(raw); err == nil {
+			link := widget.NewHyperlink(boardLinkLabel(raw), u)
+			link.Truncation = fyne.TextTruncateEllipsis
+			open = link
+		}
+		var copyBtn *widget.Button
+		copyBtn = widget.NewButtonWithIcon("Copy link", theme.ContentCopyIcon(), func() {
+			fyne.CurrentApp().Clipboard().SetContent(raw)
+			// The clipboard gives no sign it took anything, so the button says
+			// so itself and puts its own label back.
+			copyBtn.SetText("Copied")
+			time.AfterFunc(copiedFlash, func() {
+				fyne.Do(func() { copyBtn.SetText("Copy link") })
+			})
+		})
+		copyBtn.Importance = widget.LowImportance
+		rows = append(rows, container.NewBorder(nil, nil, nil, copyBtn, open))
+	}
+	return container.NewVBox(rows...)
+}
+
+// weekIssuesPanel is what the week was spent on: one line per issue, its
+// minutes, and a link to it. This is the list the weekly mail is written from,
+// so it is worth being able to read it without exporting anything.
+func (ui *UI) weekIssuesPanel(items []WorklogItem, state string) fyne.CanvasObject {
+	head := bold("By issue")
+	switch state {
+	case "loading":
+		return container.NewVBox(head, widget.NewLabel("Reading the week from GitHub…"))
+	case "off":
+		return container.NewVBox(head,
+			widget.NewLabel("Set a project URL in Settings to see the week by issue."))
+	case "error":
+		return container.NewVBox(head,
+			colorLabel("Could not read the GitHub project.", theme.ColorNameError))
+	}
+
+	totals := weekByIssue(items)
+	total := weekTotalMinutes(totals)
+	rows := []fyne.CanvasObject{
+		container.NewHBox(head, widget.NewLabelWithStyle(
+			fmt.Sprintf("%d min · %s across %d issues", total, hoursMins(total), len(totals)),
+			fyne.TextAlignLeading, fyne.TextStyle{Italic: true})),
+	}
+	if len(totals) == 0 {
+		rows = append(rows, widget.NewLabel("Nothing on the board for this week."))
+	}
+	for _, t := range totals {
+		// The minutes are read down a column, so they get their own cell in a
+		// fixed-width font rather than being run into the title.
+		mins := widget.NewLabelWithStyle(strconv.Itoa(t.Minutes)+"m",
+			fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})
+		var name fyne.CanvasObject = widget.NewLabel(t.Title)
+		if t.URL != "" {
+			if u, err := url.Parse(t.URL); err == nil {
+				link := widget.NewHyperlink(t.Title, u)
+				link.Truncation = fyne.TextTruncateEllipsis
+				name = link
+			}
+		}
+		rows = append(rows, container.New(newRatioRow(0.10, 0.90), mins, name))
+	}
+	return container.NewVBox(rows...)
+}
+
+// exportWeekForEmail writes the shown week's TSV and puts the mail text on the
+// clipboard, then says what it did.
+//
+// Board items only, deliberately: the mail carries links to those boards, and a
+// figure in the file that the CEO cannot find on the board it links to is worse
+// than one that is missing. Anything still saved here is named as outstanding
+// instead, so a short week is explained rather than quietly padded.
+func (ui *UI) exportWeekForEmail(days []string, byDay map[string][]WorklogItem, state string) {
+	if len(days) == 0 {
+		return
+	}
+	from, to := days[0], days[len(days)-1]
+
+	switch state {
+	case "loading":
+		ui.errf(ghErr("Still reading the week from GitHub — try again in a moment."))
+		return
+	case "off":
+		ui.errf(ghErr("Set a project URL in Settings before exporting a week."))
+		return
+	case "error":
+		ui.errf(ghErr("Could not read the GitHub project, so the week would be exported short."))
+		return
+	}
+
+	var items []WorklogItem
+	for _, d := range days {
+		items = append(items, byDay[d]...)
+	}
+	path, n, mailText, err := exportWeek(
+		downloadsDir(dataDir()), ui.cfg.WorklogOwner, from, to, items)
+	if err != nil {
+		ui.errf(err)
+		return
+	}
+	fyne.CurrentApp().Clipboard().SetContent(mailText)
+
+	// Short, because the week itself is already on the tab behind this. All the
+	// dialog has to say is where the file went and what was left out of it.
+	msg := fmt.Sprintf(
+		"Boards and the summary are on the clipboard — paste them into the mail.\n\n"+
+			"%d entries saved to:\n%s", n, path)
+	if waiting := ui.draftMinutesByDay(from, to); len(waiting) > 0 {
+		mins := 0
+		for _, m := range waiting {
+			mins += m
+		}
+		// Said rather than folded in: the mail links to the boards, and a figure
+		// the reader cannot find on the board it links to is worse than one that
+		// is missing.
+		msg += fmt.Sprintf("\n\nNot included: %s saved here and not pushed. "+
+			"Push it and export again to count it.", hoursMins(mins))
+	}
+	dialog.ShowInformation(fmt.Sprintf("Week of %s to %s", from, to), msg, ui.win)
 }
 
 // weekColumn is one day: how full it is, who the minutes were for, and what is

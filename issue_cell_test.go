@@ -60,10 +60,35 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 
 	// Nothing to push to: the button is there but dead, and the editor is where
 	// an issue ref gets added.
-	bare := ui.rowTile(Row{"id": "4", "date": "2026-08-09", "type": "meeting"}, func() {})
+	bare := ui.rowTile(Row{"id": "4", "date": "2026-08-09", "type": "other"}, func() {})
 	b := buttonNamed(bare, "Push")
 	if b == nil || !b.Disabled() {
 		t.Fatal("a row with no issue ref must not offer a live push")
+	}
+
+	// Two kinds have no ref on disk and are pushable anyway, because theirs is
+	// decided when they are pushed: a meeting goes to the day's own issue, and
+	// an independent entry creates the parent it names. Greying those out would
+	// disable the button on the kinds built to work that way.
+	for _, c := range []struct {
+		name string
+		row  Row
+	}{
+		{"meeting", Row{"id": "5", "date": "2026-08-09", "type": kindMeeting}},
+		{"independent", Row{"id": "6", "date": "2026-08-09", "type": kindIndependent,
+			"parent_repo": "bigledger/blg-intranet", "parent_title": "Tidy the docs"}},
+	} {
+		b := buttonNamed(ui.rowTile(c.row, func() {}), "Push")
+		if b == nil || b.Disabled() {
+			t.Fatalf("%s: its issue is made at push time, so push must be live", c.name)
+		}
+	}
+
+	// An independent entry that never got a repo and a title has nothing to
+	// create, so it is back to being unpushable.
+	half := Row{"id": "7", "date": "2026-08-09", "type": kindIndependent}
+	if b := buttonNamed(ui.rowTile(half, func() {}), "Push"); b == nil || !b.Disabled() {
+		t.Fatal("an independent entry with no parent named cannot be pushed")
 	}
 }
 

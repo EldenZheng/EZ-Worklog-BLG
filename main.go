@@ -455,25 +455,47 @@ func (ui *UI) loadReport(force bool) {
 	ui.loadProject(reportCacheKey(ui.repMonth), from, to, force)
 }
 
-// refreshTodayScore refetches the month the foot of the Log tab is scored
-// against, and with it the Status calendar whenever that is showing the same
-// month — one cache, one fetch, both up to date.
+// refreshTodayScore refetches every month the Log tab is showing GitHub data
+// for, and with it the Status calendar wherever the two share a month — one
+// cache, one fetch, both up to date.
 //
-// The month is named here rather than going through loadStatus, which keys off
-// whatever month the calendar happens to be left on. Today is always this one.
+// That is today's month *and* whatever months the week strip is standing on,
+// which is not the same thing. A week runs Monday to Sunday and the cache is a
+// month at a time, so the week of the 31st is served by two of them. Refreshing
+// only today's month left the other half of that strip showing whatever it had
+// cached: work pushed onto the 31st stayed invisible on the Log tab, and the
+// only way to see it was to open Status, walk back a month and refresh there.
+//
+// The months are named here rather than going through loadStatus, which keys off
+// whatever month the calendar happens to be left on.
 func (ui *UI) refreshTodayScore() {
 	if len(projectURLs(ui.cfg)) == 0 {
 		return // nothing to score against
 	}
-	month := thisMonth()
-	from, to, err := monthBounds(month)
-	if err != nil {
-		return
-	}
 	ui.ensureProjectCache()
-	key := statusCacheKey(month)
-	delete(ui.projLoaded, key)
-	ui.loadProject(key, from, to, true)
+	for _, month := range ui.logTabMonths() {
+		from, to, err := monthBounds(month)
+		if err != nil {
+			continue
+		}
+		key := statusCacheKey(month)
+		delete(ui.projLoaded, key)
+		ui.loadProject(key, from, to, true)
+	}
+}
+
+// logTabMonths is every month the Log tab reads board data for: today's, for the
+// score at its foot, and the one or two the shown week falls across.
+func (ui *UI) logTabMonths() []string {
+	months := []string{thisMonth()}
+	seen := map[string]bool{thisMonth(): true}
+	for _, m := range weekMonths(ui.weekStart) {
+		if !seen[m] {
+			seen[m] = true
+			months = append(months, m)
+		}
+	}
+	return months
 }
 
 // refreshAfterPush refetches the GitHub data a push has just made wrong.
@@ -798,13 +820,41 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		ui.refreshTodayScore()
 	}
 
-	// -- manual pane (meeting / other) --
+	// -- manual panes --
+	// The three hand-logged kinds differ only in where the work gets filed, so
+	// they share one form and add the one field each of them needs: nothing for
+	// a meeting, an issue link for "other", a repo and a title for one that has
+	// no issue yet.
 	mDate := newDateEntryISO(today())
 	mDesc := widget.NewEntry()
 	mDesc.SetPlaceHolder("What was it?")
 	mMin := widget.NewEntry()
 	mMin.SetPlaceHolder("minutes")
+	mRemarks := widget.NewMultiLineEntry()
+	mRemarks.SetMinRowsVisible(4)
+	mRemarks.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
 	mMsg := widget.NewLabel("")
+
+	// "Other": an issue that already exists.
+	mIssue := widget.NewEntry()
+	mIssue.SetPlaceHolder("https://github.com/bigledger/repo/issues/123  or  bigledger/repo#123")
+	otherRow := labeled("Issue link", mIssue)
+	otherRow.Hide()
+
+	// "Independent": an issue that does not exist yet.
+	repoPick := ui.newRepoPicker()
+	mTitle := widget.NewEntry()
+	mTitle.SetPlaceHolder("Title for the new issue")
+	indepRow := container.NewVBox(
+		container.New(newRatioRow(0.5, 0.5),
+			labeled("Parent repo", repoPick.widget()),
+			labeled("New issue title", mTitle)),
+		widget.NewLabelWithStyle(
+			"The issue is created on the first push, not now — nothing reaches GitHub until you push.",
+			fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
+	)
+	indepRow.Hide()
+
 	mBtn := widget.NewButton("Log it", func() {
 		mins, _ := strconv.Atoi(strings.TrimSpace(mMin.Text))
 		if mins <= 0 {
@@ -816,46 +866,85 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			mMsg.SetText("Pick a date.")
 			return
 		}
-		_, err := ui.store.AppendRows([]Row{{
+		row := Row{
 			"date": date, "minutes": strconv.Itoa(mins),
 			"type": kind, "description": mDesc.Text,
-		}})
-		if err != nil {
+			"remarks": strings.TrimSpace(mRemarks.Text),
+		}
+		switch kind {
+		case kindMeeting:
+			// No issue yet on purpose: the day's meeting issue is found or
+			// created at push time, so logging two meetings on one day lands
+			// both on the same issue instead of opening a second.
+			row["mode"] = "issue"
+		case kindOther:
+			ref, err := issueRefFromAny(mIssue.Text)
+			if err != nil {
+				mMsg.SetText(err.Error())
+				return
+			}
+			row["issue"] = ref
+			row["mode"] = orDefault(ui.cfg.DefaultMode, "subissue")
+		case kindIndependent:
+			repo := repoPick.value()
+			title := strings.TrimSpace(mTitle.Text)
+			if repo == "" || title == "" {
+				mMsg.SetText("Pick a repo and give the new issue a title.")
+				return
+			}
+			row["parent_repo"], row["parent_title"] = repo, title
+			row["mode"] = "subissue"
+		}
+		if _, err := ui.store.AppendRows([]Row{row}); err != nil {
 			ui.errf(err)
 			return
 		}
-		mMsg.SetText("Logged.")
+		mMsg.SetText("Saved — push it from the entry below when you are ready.")
 		mDesc.SetText("")
 		mMin.SetText("")
+		mRemarks.SetText("")
+		mTitle.SetText("")
 		ui.drawRecent()
+		ui.drawWeekStrip()
 	})
+
 	manualPane := container.NewVBox(
 		container.New(newRatioRow(0.22, 0.56, 0.22),
 			labeled("Date", mDate),
 			labeled("Description", mDesc),
 			labeled("Minutes", mMin),
 		),
+		otherRow, indepRow,
+		labeled("Remarks", mRemarks),
 		mBtn, mMsg,
 	)
 	manualPane.Hide()
 
 	// -- kind selector --
-	seg := widget.NewRadioGroup([]string{"Commits", "Meeting", "Other"}, func(s string) {
-		switch s {
-		case "Commits":
-			kind = "commit"
-			commitPane.Show()
-			manualPane.Hide()
-		case "Meeting":
-			kind = "meeting"
-			commitPane.Hide()
-			manualPane.Show()
-		case "Other":
-			kind = "other"
-			commitPane.Hide()
-			manualPane.Show()
-		}
-	})
+	seg := widget.NewRadioGroup(
+		[]string{"Commits", "Meeting", "Other", "Independent"}, func(s string) {
+			kind = map[string]string{
+				"Commits": kindCommit, "Meeting": kindMeeting,
+				"Other": kindOther, "Independent": kindIndependent,
+			}[s]
+			if kind == kindCommit {
+				commitPane.Show()
+				manualPane.Hide()
+			} else {
+				commitPane.Hide()
+				manualPane.Show()
+			}
+			// Only the field that kind needs, so the form never asks for an
+			// issue link and a new issue's title at the same time.
+			showIf(otherRow, kind == kindOther)
+			showIf(indepRow, kind == kindIndependent)
+			switch kind {
+			case kindMeeting:
+				mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(isoDate(mDate), today())) + ".")
+			default:
+				mMsg.SetText("")
+			}
+		})
 	seg.Horizontal = true
 	seg.SetSelected("Commits")
 
@@ -1456,6 +1545,36 @@ func (ui *UI) remarksEditor(text string, msg *widget.Label) (*widget.Entry, fyne
 	return remE, pane, aiBtn
 }
 
+// resolveForPush fills in the issue a row goes to, for the kinds whose issue is
+// only decided when it is pushed: a meeting's day issue, and the parent an
+// independent entry needs created.
+//
+// The row is patched on disk before the push runs, so a push that then fails
+// does not create the same issue twice on the retry — the second attempt sees
+// the ref already there and goes straight to filing against it.
+//
+// Runs off the UI thread, so it must not touch widgets.
+func (ui *UI) resolveForPush(r Row) (Row, error) {
+	patch, err := ensureIssueRef(ui.cfg, r)
+	if err != nil {
+		return r, err
+	}
+	if len(patch) == 0 {
+		return r, nil
+	}
+	if err := ui.store.UpdateRow(r["id"], patch); err != nil {
+		return r, err
+	}
+	out := Row{}
+	for k, v := range r {
+		out[k] = v
+	}
+	for k, v := range patch {
+		out[k] = v
+	}
+	return out, nil
+}
+
 // applyPushResult records what a push achieved on the row and returns a summary
 // worth showing. Only a push with nothing outstanding sets pushed_at — a
 // partial one has to stay retryable — so the caller is told which it was.
@@ -1598,6 +1717,12 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 		var res PushResult
 		var perr error
 		ui.async(func() error {
+			resolved, err := ui.resolveForPush(r)
+			if err != nil {
+				perr = err
+				return nil
+			}
+			r = resolved
 			res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
 				mins, body, orDefault(r["mode"], "issue"), r["issue_url"])
 			return nil // handle the push error inline so the edit is not lost
@@ -1796,7 +1921,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 		var perr error
 		ui.async(func() error {
 			res, perr = PushEntry(ui.cfg, row["issue"], row["date"], row["owner"], mins,
-			row["remarks"], row["mode"], row["issue_url"])
+				row["remarks"], row["mode"], row["issue_url"])
 			return nil // handle push error inline so the saved row is not lost
 		}, func() {
 			stop()
@@ -2240,10 +2365,17 @@ func (ui *UI) rowTile(r Row, refresh func()) fyne.CanvasObject {
 	title.Wrapping = fyne.TextWrapWord
 
 	issue := r["issue"]
-	if issue == "" {
-		issue = orDash(r["type"]) + " — no issue ref"
-	} else {
+	switch {
+	case issue != "":
 		issue = shortIssueLabel(ui.issueInfo[r["issue"]], r["issue"])
+	case r["type"] == kindMeeting:
+		// Ref-less on disk but not unfiled: it goes to the day's meeting issue,
+		// which is found or created when it is pushed.
+		issue = "meeting — " + meetingTitle(ui.cfg, r["date"])
+	case r["type"] == kindIndependent && r["parent_repo"] != "":
+		issue = "new issue in " + r["parent_repo"]
+	default:
+		issue = orDash(r["type"]) + " — no issue ref"
 	}
 	state := "waiting to push"
 	if r["pushed_at"] != "" {
@@ -2285,7 +2417,7 @@ func (ui *UI) rowActions(r Row, refresh func()) (push, edit, del *widget.Button)
 	}
 	push = widget.NewButton(label, func() { ui.pushRow(r, refresh) })
 	push.Importance = widget.HighImportance
-	if r["issue"] == "" {
+	if r["issue"] == "" && !pushableWithoutIssue(r) {
 		push.Disable() // nothing to push to; the editor is where a ref is added
 	}
 	edit = widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() {
@@ -2320,6 +2452,12 @@ func (ui *UI) pushRow(r Row, refresh func()) {
 	var res PushResult
 	var perr error
 	ui.async(func() error {
+		resolved, err := ui.resolveForPush(r)
+		if err != nil {
+			perr = err
+			return nil
+		}
+		r = resolved
 		res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
 			r.Minutes(), remarks, orDefault(r["mode"], "issue"), r["issue_url"])
 		// Reported here rather than handed to async: a failure has to take the
@@ -2999,6 +3137,9 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	user.SetPlaceHolder("auto-detected from gh — leave blank")
 	owner := widget.NewEntry()
 	owner.SetPlaceHolder("blg-elden")
+	// The name a meeting issue is titled with. Left blank it comes off the
+	// worklog owner, which is right for a handle that is a name.
+	dispName := widget.NewEntry()
 	repos := widget.NewEntry()
 	repos.SetPlaceHolder("bigledger  (whole org)  or  bigledger/blg-intranet")
 	sal := widget.NewEntry()
@@ -3032,6 +3173,8 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		}()
 	}
 	owner.SetText(c.WorklogOwner)
+	dispName.SetText(c.DisplayName)
+	dispName.SetPlaceHolder(orDefault(displayName(c), "Elden") + "  — from your worklog owner")
 	repos.SetText(strings.Join(c.Repos, ", "))
 	// Left blank when unset rather than pre-filled with a number: a figure
 	// already in the box is a figure that gets saved without being read, and
@@ -3076,6 +3219,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		newCfg := ui.cfg
 		newCfg.GithubAuthor = strings.TrimSpace(user.Text)
 		newCfg.WorklogOwner = strings.TrimSpace(owner.Text)
+		newCfg.DisplayName = strings.TrimSpace(dispName.Text)
 		newCfg.Repos = repoList
 		newCfg.BaseSalary = salF
 		newCfg.Currency = orDefault(strings.TrimSpace(cur.Text), "RM")
@@ -3138,7 +3282,10 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 
 	form := container.NewVBox(
 		widget.NewLabelWithStyle("Settings", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		container.NewGridWithColumns(2, labeled("GitHub username (optional — auto from gh)", user), labeled("Worklog owner", owner)),
+		container.NewGridWithColumns(3,
+			labeled("GitHub username (optional — auto from gh)", user),
+			labeled("Worklog owner", owner),
+			labeled("Name on meeting issues (optional)", dispName)),
 		labeled("Repos or orgs to scan (comma-separated; a bare org name scans all its repos)", repos),
 		labeled("Worklog project URLs — one per line (Status + Report read all of them, filtered to the owner above)", projURL),
 		container.NewGridWithColumns(4,
