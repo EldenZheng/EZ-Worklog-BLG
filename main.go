@@ -70,13 +70,15 @@ type UI struct {
 	daySide    *fyne.Container // the panel's shell: fixed width
 	daySwap    *fyne.Container // holds either the day's detail or the prompt
 	repBox     *fyne.Container
+	listBox    *fyne.Container // the Log List tab: boards, the week by issue, what is pending
 	tabs       *container.AppTabs
 
 	// The column each tab's panels stand in. Held so a panel that changed height
 	// can have its column re-measure it — see relayout.
-	logBody *fyne.Container
-	calBody *fyne.Container
-	repBody *fyne.Container
+	logBody  *fyne.Container
+	calBody  *fyne.Container
+	repBody  *fyne.Container
+	listBody *fyne.Container
 
 	// The bottom list is a to-do, not a history: it shows what is still waiting
 	// to reach GitHub. This ticks over to the full month when the pushed ones
@@ -86,6 +88,8 @@ type UI struct {
 	calTitle   *widget.Label
 	calSummary *widget.Label
 	repTitle   *widget.Label
+	listTitle  *widget.Label
+	listHere   *widget.Button // "This week" on Log List, greyed when already there
 
 	// One rate fetch in flight at a time: opening the Report tab twice in a row
 	// should not queue two.
@@ -117,6 +121,11 @@ type UI struct {
 	pendingAt      time.Time // when the list last landed, for staleness
 	issueInfo      map[string]IssueInfo
 	showIgnored    bool
+
+	// supportPlaceholder pencils an unlogged weekday support shift onto the week
+	// strip. Held in memory only and cleared whenever the week changes — it is a
+	// sketch, not an entry, and nothing is written for it.
+	supportPlaceholder bool
 
 	// Organisations tapped out of the colour key, lowercased. One filter for the
 	// whole app rather than one per tab: hiding an employer is a decision about
@@ -725,7 +734,8 @@ func (ui *UI) refreshRate(force bool) {
 // exercised without a window manager.
 func (ui *UI) buildAllTabs() {
 	ui.tabs = container.NewAppTabs(
-		container.NewTabItem("Log work", ui.buildLogTab()),
+		container.NewTabItem("Log Work", ui.buildLogTab()),
+		container.NewTabItem("Log List", ui.buildLogListTab()),
 		container.NewTabItem("Status", ui.buildStatusTab()),
 		container.NewTabItem("Report", ui.buildReportTab()),
 		container.NewTabItem("Settings", ui.buildSettingsTab()),
@@ -1006,6 +1016,11 @@ func labeled(label string, obj fyne.CanvasObject) fyne.CanvasObject {
 }
 
 func (ui *UI) renderPending() {
+	// Log List counts these commits in its pending column, so it is redrawn
+	// whenever the list behind it changes — otherwise that column keeps saying
+	// "reading your commits" after they have arrived.
+	defer ui.drawLogList()
+
 	res := ui.pending
 	var objs []fyne.CanvasObject
 	for _, e := range res.Errors {
@@ -1534,7 +1549,7 @@ func (ui *UI) remarksEditor(text string, msg *widget.Label) (*widget.Entry, fyne
 			return err
 		}, func() {
 			remE.SetText(out)
-			msg.SetText(fmt.Sprintf("Compacted %d → %d chars. Check before pushing.", before, len(out)))
+			msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", before, len(out)))
 		})
 	})
 	// Border, not VBox: the caption keeps its own line and the box takes every
@@ -1586,7 +1601,7 @@ func (ui *UI) applyPushResult(id string, res PushResult) (string, bool) {
 	if err := ui.store.UpdateRow(id, patch); err != nil {
 		ui.errf(err)
 	}
-	summary := "Pushed → " + res.URL
+	summary := "Pushed: " + res.URL
 	if len(res.FieldsSet) > 0 {
 		summary += "\n\nSet: " + strings.Join(res.FieldsSet, ", ")
 	}
@@ -1630,7 +1645,7 @@ func (ui *UI) openRowEditor(r Row, refresh func()) {
 // worklog itself. Saving rewrites the row in place — no second entry is made,
 // and the commits stay accounted for.
 func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
-	dateE := newDateEntryISO(r["date"])
+	dateE := newWorklogDatePicker(ui, r["date"])
 	ownE := widget.NewEntry()
 	ownE.SetText(orDefault(r["owner"], ui.cfg.WorklogOwner))
 	minE := widget.NewEntry()
@@ -1661,7 +1676,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	}
 
 	save := func(push bool) {
-		date := isoDate(dateE)
+		date := dateE.ISO()
 		if date == "" {
 			msg.SetText("Pick a worklog date.")
 			return
@@ -1751,16 +1766,17 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 		widget.NewLabelWithStyle(r["date"], fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		issueHyperlink(r["issue"]),
 	)
-	// The shas are stored bare, so the repo has to come off the issue ref for
-	// them to link anywhere. Without a parseable ref they stay plain text.
-	repo := ""
+	// Each sha carries the repo it is in, so it links to the commit itself. Rows
+	// written before that was stored have the sha alone; for those the issue's
+	// repo is the only guess available, which is what the link used to be built
+	// from for every row — and why it so often 404'd. Without either, plain text.
+	fallback := ""
 	if owner, name, _, err := splitIssue(r["issue"]); err == nil {
-		repo = owner + "/" + name
+		fallback = owner + "/" + name
 	}
-	for _, sha := range strings.Split(r["refs"], ",") {
-		if sha = strings.TrimSpace(sha); sha != "" {
-			header.Add(commitHyperlink(Commit{Repo: repo, Sha: sha}))
-		}
+	for _, ref := range parseCommitRefs(r["refs"]) {
+		header.Add(commitHyperlink(Commit{
+			Repo: orDefault(ref.Repo, fallback), Sha: ref.Sha}))
 	}
 
 	var notes []fyne.CanvasObject
@@ -1775,12 +1791,12 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	// box does not, and the split holds as the popup follows the window.
 	fields := container.NewVBox(
 		container.New(newRatioRow(0.22, 0.22, 0.14, 0.42),
-			labeled("Worklog date", dateE),
+			labelledPicker("Worklog date", dateE),
 			labeled("Worklog owner", ownE),
 			labeled("Worklog mins", minE),
 			labeled("Issue", issE),
 		),
-		ui.dayFillLabel(dateE),
+		ui.dayFillReadout(dateE),
 	)
 	// Caption beside the dropdown rather than stacked over it: the bar shares a
 	// line with Back, and a two-row label would drag that whole line taller.
@@ -1816,7 +1832,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 		commitRows = append(commitRows, row)
 	}
 
-	dateE := newDateEntryISO(g.Date)
+	dateE := newWorklogDatePicker(ui, g.Date)
 	ownE := widget.NewEntry()
 	ownE.SetText(ui.cfg.WorklogOwner)
 	minE := widget.NewEntry()
@@ -1870,15 +1886,18 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 			msg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarks), remarkCap))
 			return
 		}
-		date := isoDate(dateE)
+		date := dateE.ISO()
 		if date == "" {
 			msg.SetText("Pick a worklog date.")
 			return
 		}
+		// Each sha is written with the repo it came from. The issue's repo is not
+		// that repo — the issue is in a tracker, the commit is in the applet that
+		// changed — so a sha stored bare could only ever be linked by guessing.
 		shas := make([]string, 0, len(picked))
 		mins, _ := strconv.Atoi(strings.TrimSpace(minE.Text))
 		for _, c := range picked {
-			shas = append(shas, c.Sha)
+			shas = append(shas, formatCommitRef(c.Repo, c.Sha))
 		}
 		// The row's label is the issue it belongs to. It used to be every picked
 		// commit's subject joined with semicolons, which read as noise in the
@@ -1938,7 +1957,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 			}
 			_ = ui.store.UpdateRow(row["id"], patch)
 			ui.refreshAfterPush(row["date"])
-			note := "Pushed → " + res.URL
+			note := "Pushed: " + res.URL
 			if len(res.FieldsSet) > 0 {
 				note += "  |  Set: " + strings.Join(res.FieldsSet, ", ")
 			}
@@ -1973,12 +1992,12 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 	// box does not, and the split holds as the popup follows the window.
 	fields := container.NewVBox(
 		container.New(newRatioRow(0.22, 0.22, 0.14, 0.42),
-			labeled("Worklog date", dateE),
+			labelledPicker("Worklog date", dateE),
 			labeled("Worklog owner", ownE),
 			labeled("Worklog mins", minE),
 			labeled("Issue", issE),
 		),
-		ui.dayFillLabel(dateE),
+		ui.dayFillReadout(dateE),
 	)
 	actions := container.NewHBox(
 		widget.NewLabel("Push as"), wideSelect(modeSel), aiBtn, saveBtn, pushBtn,
@@ -2254,44 +2273,8 @@ func (ui *UI) githubMinutesOn(date string) (int, string) {
 	return total, "ok"
 }
 
-// dayFillLabel is the readout beside a worklog date: how much of that day is
-// already on GitHub. Logging is done a date at a time, often days late, so the
-// question the form has to answer is "how much does this day still owe" — not
-// answering it meant opening the Status tab to find out.
-func (ui *UI) dayFillLabel(dateE *widget.DateEntry) fyne.CanvasObject {
-	lbl := widget.NewLabel("")
-	update := func() {
-		date := isoDate(dateE)
-		if date == "" {
-			lbl.SetText("Pick a date to see how full it is.")
-			return
-		}
-		mins, state := ui.githubMinutesOn(date)
-		switch state {
-		case "ok":
-			pct := int(float64(mins) / float64(target) * 100)
-			txt := fmt.Sprintf("%s already on GitHub: %s of %s (%d%%)",
-				date, hoursMins(mins), hoursMins(target), pct)
-			switch {
-			case mins >= target:
-				txt += " — full"
-			default:
-				txt += fmt.Sprintf(", %s left", hoursMins(target-mins))
-			}
-			lbl.SetText(txt)
-		case "loading":
-			lbl.SetText(date + ": checking GitHub…")
-		case "off":
-			lbl.SetText("Set a project URL in Settings to see how full a day is.")
-		default:
-			lbl.SetText(date + ": could not read the GitHub project.")
-		}
-	}
-	update()
-	// The date can be typed or picked off the calendar; OnChanged covers both.
-	dateE.OnChanged = func(*time.Time) { update() }
-	return lbl
-}
+// The readout that used to live here is now dayFillReadout, beside the picker
+// it reports on — see datepicker.go.
 
 // entryTable lays the saved rows out as tiles, the same shape the pending
 // commits use above them. A row is a thing you act on — push it, fix it, drop
@@ -2638,51 +2621,32 @@ func (ui *UI) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.
 		pc = int(float64(m) / float64(target) * 100)
 	}
 	dayLbl := widget.NewLabelWithStyle(strconv.Itoa(day), fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
-	var info fyne.CanvasObject = widget.NewLabel("")
-	// coloured is the readout drawn as its own text rather than as a label, for
-	// the two cases where the colour is carrying the meaning.
+	// coloured is the readout drawn as its own text rather than as a label, so
+	// the colour can carry the state along with the words.
 	coloured := func(txt string, name fyne.ThemeColorName) *canvas.Text {
 		c := canvas.NewText(txt, theme.Color(name))
-		c.TextSize = theme.TextSize()
+		c.TextSize = theme.CaptionTextSize()
 		c.TextStyle = fyne.TextStyle{Monospace: true}
 		return c
 	}
-	switch {
-	case m == 0 && draft > 0:
-		// Nothing on the board, but the day was worked. Green once the drafts
-		// alone cover the target — the day is done, it just has not been sent.
-		txt := fmt.Sprintf("+%dm", draft)
-		if isDraftComplete(m, draft) {
-			info = coloured(txt, theme.ColorNameSuccess)
-		} else {
-			info = coloured(txt, theme.ColorNameWarning)
-		}
-	case m > 0:
-		txt := fmt.Sprintf("%dm  %d%%", m, pc)
-		if m > target {
-			txt += " +"
-		}
-		if draft > 0 {
-			txt += fmt.Sprintf(" +%dm", draft)
-		}
+
+	state := dayState(m, draft)
+	// The score under the number, the way the report reads it: what the day has
+	// against what it owes, so a glance down the month compares like with like
+	// instead of asking which percentage belonged to which target.
+	var lines []fyne.CanvasObject
+	if m > 0 || draft > 0 {
+		lines = append(lines, coloured(fmt.Sprintf("%d/%d", m, target), state.textColor))
 		switch {
-		case isDraftComplete(m, draft):
-			// Short on the board, but only because the rest is still sitting
-			// here. Checked before isShortDay, which is also true of this day:
-			// yellow would send you looking for hours you have already worked.
-			info = coloured(txt, theme.ColorNameSuccess)
-		case isShortDay(m):
-			// The same warning colour as the report's short-day rows and the
-			// chart's target line. A cell's fill already says how full the day
-			// is, but only against itself — the colour is what says the day is
-			// short without the percentage having to be read.
-			info = coloured(txt, theme.ColorNameWarning)
+		case draft > 0:
+			lines = append(lines, coloured(fmt.Sprintf("+%dm · %d%%",
+				draft, percentOf(m+draft)), state.textColor))
 		default:
-			info = widget.NewLabelWithStyle(txt, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+			lines = append(lines, coloured(fmt.Sprintf("%d%%", pc), state.textColor))
 		}
 	}
 
-	body := container.NewVBox(dayLbl, layout.NewSpacer(), info)
+	body := container.NewVBox(append([]fyne.CanvasObject{dayLbl, layout.NewSpacer()}, lines...)...)
 	border := canvas.NewRectangle(color.Transparent)
 	border.StrokeColor = theme.Color(theme.ColorNameInputBorder)
 	border.StrokeWidth = 1
@@ -2697,10 +2661,15 @@ func (ui *UI) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.SetMinSize(fyne.NewSize(0, dayCellMinHeight))
 
-	// The fill is the day itself — the cell fills from the bottom in each org's
-	// colour, so a glance down the month shows both how full a day was and who
-	// it was for.
-	stack := container.NewStack(floor,
+	// Three layers, outermost first: the day's state as a flat wash, the org
+	// split filling from the bottom over it, then the frame and the numbers.
+	//
+	// The wash is what makes the month readable at arm's length — a done day is
+	// green, a short one yellow, an untouched one the background — while the
+	// meter over it still says how full the day was and who it was for.
+	wash := canvas.NewRectangle(dayState(m, draft).fill)
+	wash.CornerRadius = cellCornerRadius
+	stack := container.NewStack(floor, wash,
 		vMeterFill(ui.cfg, byOrg, draft, target, cellCornerRadius), border,
 		container.NewPadded(body))
 	return newTappable(stack, func() {
@@ -2711,13 +2680,51 @@ func (ui *UI) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.
 }
 
 // dayCellMinHeight keeps a cell legible when the window is too short for the
-// calendar to take its full height. cellCornerRadius is shared by the cell's
-// frame and the fill inside it — two different radii would leave the fill
-// showing at the corners of the frame it is meant to sit in.
+// calendar to take its full height. It carries three lines now — the date, the
+// day's score against the target, and its share of it — so the floor is the
+// height those need rather than the two lines it used to hold.
+//
+// cellCornerRadius is shared by the cell's frame and the fill inside it — two
+// different radii would leave the fill showing at the corners of the frame it is
+// meant to sit in.
 const (
-	dayCellMinHeight = 58
+	dayCellMinHeight = 96
 	cellCornerRadius = 8
 )
+
+// dayStateStyle is how one day is painted: the wash behind it and the colour its
+// score is written in.
+type dayStateStyle struct {
+	fill      color.Color
+	textColor fyne.ThemeColorName
+}
+
+// dayState sorts a day into one of four, which is what the month is read by.
+//
+// Done on the board is stated in full-strength green. Done only once the drafts
+// are counted is the same green at the draft weight — the work is finished, the
+// sending is not, and those are different claims. Worked and still short is the
+// warning colour, the same one the chart's target line and the report's
+// short-day rows use. A day with nothing on it is not short, it is untouched,
+// and is left unpainted so a month not yet worked does not read as a failed one.
+//
+// Draft-complete is tested before short because both are true of such a day, and
+// yellow there would send you looking for hours already worked.
+func dayState(mins, draft int) dayStateStyle {
+	switch {
+	case mins >= target:
+		return dayStateStyle{
+			fill:      blendColor(theme.Color(theme.ColorNameBackground), theme.Color(theme.ColorNameSuccess), weekDoneTint),
+			textColor: theme.ColorNameSuccess,
+		}
+	case isDraftComplete(mins, draft):
+		return dayStateStyle{fill: draftDoneFill(), textColor: theme.ColorNameSuccess}
+	case mins > 0 || draft > 0:
+		return dayStateStyle{fill: shortFill(), textColor: theme.ColorNameWarning}
+	default:
+		return dayStateStyle{fill: color.Transparent, textColor: theme.ColorNameForeground}
+	}
+}
 
 func (ui *UI) drawDayPanel() {
 	// The panel keeps its place whether or not a day is picked: hiding it made
@@ -2954,7 +2961,7 @@ func (ui *UI) drawReport() {
 		wdNote += fmt.Sprintf(" (pay divides by %d)", divisor)
 	}
 
-	supportNote := fmt.Sprintf("%d issues → %d set(s)", supportIssues, supportSets)
+	supportNote := fmt.Sprintf("%d issues, %d set(s)", supportIssues, supportSets)
 	if carried > 0 {
 		supportNote = fmt.Sprintf("%d carried in + %s", carried, supportNote)
 	}
@@ -3067,7 +3074,7 @@ func (ui *UI) drawReport() {
 	// a month that earned nothing rather than as a setting nobody has filled in.
 	summary := "Set your base salary in Settings to see what this period is worth."
 	if rep.BaseSalary != 0 {
-		summary = fmt.Sprintf("%s over 21 working days → %s per full day.",
+		summary = fmt.Sprintf("%s over 21 working days, %s per full day.",
 			money(rep.BaseSalary), money(rep.DailyRate))
 	}
 	if supportBonus > 0 {
@@ -3162,8 +3169,14 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	c := ui.cfg
 	user.SetText(c.GithubAuthor)
 	if strings.TrimSpace(c.GithubAuthor) == "" {
-		// show who gh is logged in as, so the field can stay blank
+		// Show who gh is logged in as, so the field can stay blank.
+		//
+		// A placeholder is not worth a crash: gh takes a moment, and if the app
+		// is closed inside that moment the answer comes back to a window that is
+		// gone. fyne.Do panics there rather than no-opping, so this catches it
+		// and drops the hint — which is all that is lost.
 		go func() {
+			defer func() { _ = recover() }()
 			if u, err := ghCurrentUser(); err == nil {
 				fyne.Do(func() {
 					user.SetPlaceHolder("gh user: " + u + " — leave blank to use it")

@@ -10,6 +10,14 @@ import (
 	"fyne.io/fyne/v2/theme"
 )
 
+// A day cell holds three lines now, so the floor has to leave room for them.
+func TestDayCellIsTallEnoughForItsScore(t *testing.T) {
+	if dayCellMinHeight < 90 {
+		t.Fatalf("a cell carrying a date and two score lines needs the height, got %d",
+			dayCellMinHeight)
+	}
+}
+
 // sameColor compares two colours by value. The report is full of coloured
 // rectangles — an org's bar is as far from the background as the short-day wash
 // is — so "looks warm" cannot tell them apart. Only the exact wash counts.
@@ -79,8 +87,9 @@ func TestTheCalendarColoursAShortDaysReadout(t *testing.T) {
 	}
 	ui.drawCalendar()
 
-	// "240m  50%" is warned about; "480m  100%" is not, and neither is a day
-	// with nothing on it, which has no readout at all.
+	// Every worked day scores itself against the target now; the colour is what
+	// says which kind of day it was. A day with nothing on it has no readout at
+	// all — untouched is not the same as short.
 	var shortText, fullText *canvas.Text
 	walk(ui.calBox, func(o fyne.CanvasObject) {
 		txt, ok := o.(*canvas.Text)
@@ -88,9 +97,9 @@ func TestTheCalendarColoursAShortDaysReadout(t *testing.T) {
 			return
 		}
 		switch txt.Text {
-		case "240m  50%":
+		case "240/480":
 			shortText = txt
-		case "480m  100%":
+		case "480/480":
 			fullText = txt
 		}
 	})
@@ -100,8 +109,56 @@ func TestTheCalendarColoursAShortDaysReadout(t *testing.T) {
 	if !sameColor(shortText.Color, theme.Color(theme.ColorNameWarning)) {
 		t.Fatalf("a short day's readout should carry the warning colour, got %v", shortText.Color)
 	}
-	if fullText != nil {
-		t.Fatal("a finished day needs no warning, so it is not drawn as coloured text")
+	if fullText == nil {
+		t.Fatalf("a finished day scores itself too: %v", labels(ui.calBox))
+	}
+	if !sameColor(fullText.Color, theme.Color(theme.ColorNameSuccess)) {
+		t.Fatalf("a finished day should read green, not warning: %v", fullText.Color)
+	}
+	// An untouched day is left unwritten, so a month not yet worked does not
+	// read as a failed one. Matched exactly: "0/480" is a substring of the
+	// "240/480" two cells along.
+	walk(ui.calBox, func(o fyne.CanvasObject) {
+		if txt, ok := o.(*canvas.Text); ok && txt.Text == "0/480" {
+			t.Fatalf("a day with nothing on it should carry no score: %v", labels(ui.calBox))
+		}
+	})
+}
+
+// The four states the month is read by, and the one rule that sorts them.
+func TestDayStateSortsTheFourKindsOfDay(t *testing.T) {
+	test.NewApp()
+	defer fyne.CurrentApp().Quit()
+	test.ApplyTheme(t, theme.DefaultTheme())
+
+	for _, c := range []struct {
+		name        string
+		mins, draft int
+		wantFill    color.Color
+		wantText    fyne.ThemeColorName
+	}{
+		{"done on the board", 480, 0,
+			blendColor(theme.Color(theme.ColorNameBackground),
+				theme.Color(theme.ColorNameSuccess), weekDoneTint), theme.ColorNameSuccess},
+		{"over the target", 600, 0,
+			blendColor(theme.Color(theme.ColorNameBackground),
+				theme.Color(theme.ColorNameSuccess), weekDoneTint), theme.ColorNameSuccess},
+		// Finished, but only once the drafts count: the same green, lighter,
+		// because the sending is still outstanding.
+		{"done by drafts", 360, 180, draftDoneFill(), theme.ColorNameSuccess},
+		{"short even with drafts", 360, 60, shortFill(), theme.ColorNameWarning},
+		{"worked and short", 240, 0, shortFill(), theme.ColorNameWarning},
+		{"drafts only, still short", 0, 60, shortFill(), theme.ColorNameWarning},
+		// Untouched is not short.
+		{"nothing at all", 0, 0, color.Transparent, theme.ColorNameForeground},
+	} {
+		got := dayState(c.mins, c.draft)
+		if !sameColor(got.fill, c.wantFill) {
+			t.Fatalf("%s: fill = %v, want %v", c.name, got.fill, c.wantFill)
+		}
+		if got.textColor != c.wantText {
+			t.Fatalf("%s: text = %v, want %v", c.name, got.textColor, c.wantText)
+		}
 	}
 }
 

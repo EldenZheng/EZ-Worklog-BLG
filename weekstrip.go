@@ -43,7 +43,58 @@ const (
 
 	// How long a Copy button says "Copied" before going back to its own label.
 	copiedFlash = 1500 * time.Millisecond
+
+	// supportPlaceholderMins is the weekday support shift the placeholder pencils
+	// in — three hours, the length of a rota slot.
+	supportPlaceholderMins = 180
 )
+
+// supportTitlePrefix is how a weekly support issue is named: "<Name>: Weekly
+// Support (28th August, 12PM - 3PM)". A day already carrying one has its real
+// shift on the board and must not have a second pencilled in on top.
+func supportTitlePrefix(cfg Config) string {
+	return displayName(cfg) + ": Weekly Support"
+}
+
+// hasWeeklySupport reports whether a day's board items already include the
+// weekly support shift. Matched on the parent issue as well as the item's own
+// title, because the worklog under it is called "Worklog: <date>" like any
+// other and says nothing about what it was for.
+func hasWeeklySupport(cfg Config, items []WorklogItem) bool {
+	prefix := strings.ToLower(strings.TrimSpace(supportTitlePrefix(cfg)))
+	if prefix == ":: weekly support" || strings.HasPrefix(prefix, ": ") {
+		return false // no display name configured; nothing to match on
+	}
+	for _, it := range items {
+		for _, title := range []string{it.ParentTitle, it.Title} {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// supportPlaceholderFor is the minutes to pencil onto one day: a weekday shift
+// where the placeholder is switched on and the board does not already hold one.
+//
+// Nothing is written anywhere. It is a sketch of a rota that has been worked but
+// not yet logged, so the week can be read as it will stand rather than as it
+// stands before a known piece of work goes on — and switching it off, or walking
+// to another week, takes it straight back off again.
+func supportPlaceholderFor(cfg Config, on bool, ds string, items []WorklogItem) int {
+	if !on {
+		return 0
+	}
+	t, err := time.Parse("2006-01-02", ds)
+	if err != nil || t.Weekday() == time.Saturday || t.Weekday() == time.Sunday {
+		return 0
+	}
+	if hasWeeklySupport(cfg, items) {
+		return 0
+	}
+	return supportPlaceholderMins
+}
 
 // workDate is the working day a moment belongs to. See workDayStart.
 func workDate(t time.Time) string {
@@ -222,18 +273,21 @@ func (ui *UI) drawWeekStrip() {
 		}
 	}
 
-	prev := widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
-		ui.weekStart = shiftWeek(ui.weekStart, -1)
+	// Walking to another week clears the placeholder. It is a sketch of *this*
+	// week's unlogged rota, and carrying it forward would quietly add three
+	// hours a day to a week nobody asked about.
+	walkTo := func(start string) {
+		ui.weekStart = start
+		ui.supportPlaceholder = false
 		ui.drawWeekStrip()
+	}
+	prev := widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
+		walkTo(shiftWeek(ui.weekStart, -1))
 	})
 	next := widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() {
-		ui.weekStart = shiftWeek(ui.weekStart, 1)
-		ui.drawWeekStrip()
+		walkTo(shiftWeek(ui.weekStart, 1))
 	})
-	here := widget.NewButton("This week", func() {
-		ui.weekStart = weekStartOf(today())
-		ui.drawWeekStrip()
-	})
+	here := widget.NewButton("This week", func() { walkTo(weekStartOf(today())) })
 	if ui.weekStart == weekStartOf(today()) {
 		here.Disable()
 	}
@@ -249,13 +303,27 @@ func (ui *UI) drawWeekStrip() {
 	case "error":
 		note = "could not read the GitHub project."
 	}
-	// The week that is on screen is the week that gets sent — no month picker,
-	// no date range to fill in twice.
+	// The same export as Log List, on the tab the week is actually worked from:
+	// having to change tabs to send the week you are looking at is a step for
+	// nothing. Both buttons run the same code on the same shared week.
 	mail := widget.NewButtonWithIcon("Export week for email", theme.MailComposeIcon(), func() {
 		ui.exportWeekForEmail(days, byDay, state)
 	})
 
-	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), mail,
+	// Display only, and it says so: nothing is written, nothing is pushed, and
+	// it is off again the moment the week changes.
+	support := widget.NewCheck(
+		fmt.Sprintf("+%d min weekday support (display only)", supportPlaceholderMins), nil)
+	// Seeded before the handler is attached. SetChecked fires OnChanged, and a
+	// handler that redraws the strip would build a fresh checkbox, seed that
+	// one, and go round again until the stack ran out.
+	support.SetChecked(ui.supportPlaceholder)
+	support.OnChanged = func(on bool) {
+		ui.supportPlaceholder = on
+		ui.drawWeekStrip()
+	}
+
+	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), support, mail,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
 
 	// Any column about to be thrown away stops breathing first: an animation left
@@ -278,20 +346,12 @@ func (ui *UI) drawWeekStrip() {
 			fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
 	}
 
-	// The boards and the week's issues stand on the tab in their own right. They
-	// used to appear only inside the export dialog, which meant the one view
-	// worth glancing at — what this week was actually spent on — could only be
-	// had by exporting something.
-	var weekItems []WorklogItem
-	for _, d := range days {
-		weekItems = append(weekItems, byDay[d]...)
-	}
-	objs = append(objs, widget.NewSeparator(),
-		ui.weekBoardsPanel(days[0], days[len(days)-1]),
-		ui.weekIssuesPanel(weekItems, state))
-
 	ui.weekBox.Objects = objs
 	ui.weekBox.Refresh()
+
+	// The boards and the week read by issue live on Log List now. They follow the
+	// same week as this strip, so walking the arrows here moves both.
+	ui.drawLogList()
 }
 
 // weekBoardsPanel is the two saved board views, filtered to the shown week.
@@ -450,6 +510,14 @@ func (ui *UI) weekColumn(ds string, items []WorklogItem, local []Row) *dayColumn
 		draftByOrg[strings.ToLower(orgOf(r["issue"]))] += r.Minutes()
 		waiting += r.Minutes()
 	}
+	// The support shift pencilled in, if the placeholder is on and this day has
+	// not already got the real thing. It rides in the same yellow as the drafts,
+	// which is the right colour for it: neither is on the board.
+	placeholder := supportPlaceholderFor(ui.cfg, ui.supportPlaceholder, ds, items)
+	if placeholder > 0 {
+		draftByOrg[strings.ToLower(orgOf(ui.cfg.WorklogOwner))] += placeholder
+		waiting += placeholder
+	}
 
 	name := fmt.Sprintf("%s %d", t.Format("Mon"), t.Day())
 	if ds == today() {
@@ -463,20 +531,17 @@ func (ui *UI) weekColumn(ds string, items []WorklogItem, local []Row) *dayColumn
 	// score if everything standing on it were pushed.
 	banked := "nothing logged"
 	if mins > 0 {
-		banked = fmt.Sprintf("%d min · %d%%", mins, percentOf(mins))
-		if mins >= target {
-			banked += " ✓"
-		}
+		banked = dayScoreLine(mins)
 	}
 	if waiting > 0 {
 		banked += fmt.Sprintf(" · +%d min", waiting)
+		if placeholder > 0 {
+			banked += " (inc. support)"
+		}
 	}
 	projected := ""
 	if waiting > 0 {
-		projected = fmt.Sprintf("%d min · %d%%", mins+waiting, percentOf(mins+waiting))
-		if mins+waiting >= target {
-			projected += " ✓"
-		}
+		projected = dayScoreLine(mins + waiting)
 	}
 	body := []fyne.CanvasObject{
 		head,
@@ -567,33 +632,98 @@ func draftDoneFill() color.Color {
 		theme.Color(theme.ColorNameSuccess), shortTint)
 }
 
-// splitCaption puts one caption at each end of the same line.
+// dayScoreLine is one day's minutes against the target: what it holds, what
+// share of the day that is, and what it still owes.
 //
-// Its own minimum is the wider of the two rather than their sum: a day column is
-// a seventh of the window, and a row that insisted on both widths at once would
-// have widened the strip, the tab, and the window's smallest usable size with it.
+// The percentage alone made the arithmetic the reader's job — "68%" of 480 is
+// how many minutes short? The number that decides whether to log more is the
+// one that was missing, so it is spelled out.
+func dayScoreLine(mins int) string {
+	s := fmt.Sprintf("%d min · %d%%", mins, percentOf(mins))
+	if mins >= target {
+		return s + " ✓"
+	}
+	return s + fmt.Sprintf(" (%dm left)", target-mins)
+}
+
+// splitCaption puts one caption at each end of a line, and drops the second
+// onto a line of its own when the two will not fit side by side.
+//
+// A day column is a seventh of the window. Now that each caption carries what
+// the day still owes as well as its score, two of them side by side overflow the
+// column on any window short of very wide — and fyne does not clip, so the
+// overflow prints over the neighbouring day rather than being cut off.
+//
+// Its width is the wider of the two rather than their sum, so a long caption
+// never widens the strip, the tab, and the window's smallest usable size with
+// it. Its height reserves both rows whenever there are two captions: the layout
+// cannot ask how wide it will be before it is measured, so the row it might need
+// has to be there already.
 type splitCaption struct{}
 
-func (splitCaption) MinSize(objs []fyne.CanvasObject) fyne.Size {
-	size := fyne.NewSize(0, 0)
+// captionsIn is the captions with something to say. An empty one takes no room
+// and forces no second line.
+func captionsIn(objs []fyne.CanvasObject) []fyne.CanvasObject {
+	var out []fyne.CanvasObject
 	for _, o := range objs {
-		size = size.Max(o.MinSize())
+		if t, ok := o.(*canvas.Text); ok && strings.TrimSpace(t.Text) == "" {
+			continue
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+func (splitCaption) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	live := captionsIn(objs)
+	size := fyne.NewSize(0, 0)
+	for _, o := range live {
+		m := o.MinSize()
+		size.Width = fyne.Max(size.Width, m.Width)
+		size.Height = fyne.Max(size.Height, m.Height)
+	}
+	if len(live) > 1 {
+		size.Height = size.Height*float32(len(live)) + theme.Padding()*float32(len(live)-1)
 	}
 	return size
 }
 
 func (splitCaption) Layout(objs []fyne.CanvasObject, size fyne.Size) {
-	for i, o := range objs {
-		m := o.MinSize()
-		o.Resize(m)
-		x := float32(0)
-		if i > 0 { // everything after the first is flush to the right edge
-			x = size.Width - m.Width
-			if x < 0 {
-				x = 0
+	live := captionsIn(objs)
+	for _, o := range objs {
+		o.Resize(o.MinSize())
+	}
+	if len(live) == 0 {
+		return
+	}
+	if len(live) == 1 {
+		m := live[0].MinSize()
+		live[0].Move(fyne.NewPos(0, (size.Height-m.Height)/2))
+		return
+	}
+
+	// Side by side only while they both fit with a gap between them; otherwise
+	// stacked, which is what a narrow window gets.
+	wide := float32(0)
+	for _, o := range live {
+		wide += o.MinSize().Width
+	}
+	if wide+theme.Padding() <= size.Width {
+		for i, o := range live {
+			m := o.MinSize()
+			x := float32(0)
+			if i > 0 {
+				x = size.Width - m.Width
 			}
+			o.Move(fyne.NewPos(x, (size.Height-m.Height)/2))
 		}
-		o.Move(fyne.NewPos(x, (size.Height-m.Height)/2))
+		return
+	}
+	y := float32(0)
+	for _, o := range live {
+		m := o.MinSize()
+		o.Move(fyne.NewPos(0, y))
+		y += m.Height + theme.Padding()
 	}
 }
 

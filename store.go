@@ -336,6 +336,45 @@ func (s *Store) SetIgnored(sha string, ignored bool) error {
 	return os.WriteFile(s.ignoref, data, 0o644)
 }
 
+// commitRef is one entry in a row's refs column: a commit, and the repo it is
+// actually in.
+//
+// The repo used to be left out, and the row editor rebuilt it from the issue the
+// entry was filed against. Those are not the same repo and usually cannot be: an
+// issue lives in a tracker like BigLedger-Support/tuhu-finance while the commit
+// under it is in whichever applet was changed, so every sha on a saved entry
+// linked to a commit URL in the wrong repository and answered 404.
+type commitRef struct{ Repo, Sha string }
+
+// formatCommitRef writes one entry of the refs column.
+func formatCommitRef(repo, sha string) string {
+	if repo = strings.TrimSpace(repo); repo == "" {
+		return strings.TrimSpace(sha)
+	}
+	return repo + "@" + strings.TrimSpace(sha)
+}
+
+// parseCommitRefs reads the refs column, in either spelling.
+//
+// A bare sha with no repo is how every row written before this looked, and those
+// rows are still on disk — they come back with an empty Repo so the caller can
+// fall back the way the editor always did, rather than being dropped.
+func parseCommitRefs(refs string) []commitRef {
+	var out []commitRef
+	for _, entry := range strings.Split(refs, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if repo, sha, ok := strings.Cut(entry, "@"); ok {
+			out = append(out, commitRef{Repo: strings.TrimSpace(repo), Sha: strings.TrimSpace(sha)})
+			continue
+		}
+		out = append(out, commitRef{Sha: entry})
+	}
+	return out
+}
+
 // LoggedShas is the set of commit shas already recorded (from the refs column).
 func (s *Store) LoggedShas() (map[string]bool, error) {
 	rows, err := s.ReadRows()
@@ -344,10 +383,11 @@ func (s *Store) LoggedShas() (map[string]bool, error) {
 	}
 	set := map[string]bool{}
 	for _, r := range rows {
-		for _, x := range strings.Split(r["refs"], ",") {
-			x = strings.TrimSpace(x)
-			if x != "" {
-				set[x] = true
+		// The sha alone: this is matched against the shas coming back from
+		// GitHub, which carry no repo of their own in that comparison.
+		for _, ref := range parseCommitRefs(r["refs"]) {
+			if ref.Sha != "" {
+				set[ref.Sha] = true
 			}
 		}
 	}

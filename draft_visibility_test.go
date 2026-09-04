@@ -67,12 +67,16 @@ func TestCalendarShowsUnpushedWorkInYellow(t *testing.T) {
 
 	var draftText *canvas.Text
 	walk(ui.calBox, func(o fyne.CanvasObject) {
-		if txt, ok := o.(*canvas.Text); ok && txt.Text == "+150m" {
+		if txt, ok := o.(*canvas.Text); ok && txt.Text == "+150m · 31%" {
 			draftText = txt
 		}
 	})
 	if draftText == nil {
 		t.Fatalf("a day with only unpushed work should still say so: %v", labels(ui.calBox))
+	}
+	// And the day still scores itself against the target, at nothing banked.
+	if !contains(labels(ui.calBox), "0/480") {
+		t.Fatalf("the cell should say what the board holds: %v", labels(ui.calBox))
 	}
 	if !sameColor(draftText.Color, theme.Color(theme.ColorNameWarning)) {
 		t.Fatalf("the draft readout should carry the warning colour, got %v", draftText.Color)
@@ -119,12 +123,16 @@ func TestADayTheDraftsCompleteReadsGreenNotShort(t *testing.T) {
 
 	var readout *canvas.Text
 	walk(ui.calBox, func(o fyne.CanvasObject) {
-		if txt, ok := o.(*canvas.Text); ok && txt.Text == "360m  75% +180m" {
+		// 360 banked plus 180 waiting clears the target: 540 of 480 is 112%.
+		if txt, ok := o.(*canvas.Text); ok && txt.Text == "+180m · 112%" {
 			readout = txt
 		}
 	})
 	if readout == nil {
 		t.Fatalf("the day should show what it holds and what is waiting: %v", labels(ui.calBox))
+	}
+	if !contains(labels(ui.calBox), "360/480") {
+		t.Fatalf("the cell should score the board against the target: %v", labels(ui.calBox))
 	}
 	if !sameColor(readout.Color, theme.Color(theme.ColorNameSuccess)) {
 		t.Fatalf("a day the drafts complete should read green, got %v", readout.Color)

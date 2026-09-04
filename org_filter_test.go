@@ -115,7 +115,7 @@ func TestTheReportCarriesAnUnfinishedSupportSetAcrossTheCutOff(t *testing.T) {
 	ui.drawReport()
 
 	got := labels(ui.repBox)
-	if !contains(got, "4 carried in + 3 issues → 1 set(s)") {
+	if !contains(got, "4 carried in + 3 issues, 1 set(s)") {
 		t.Fatalf("the four before the cut-off should finish the set: %v", got)
 	}
 	if !contains(got, "RM 300.00") {
@@ -153,7 +153,7 @@ func TestTheReportNamesWhatCarriesToTheNextPeriod(t *testing.T) {
 	ui.drawReport()
 
 	got := labels(ui.repBox)
-	if !contains(got, "4 issues → 0 set(s), 4 carry to next") {
+	if !contains(got, "4 issues, 0 set(s), 4 carry to next") {
 		t.Fatalf("an unfinished set should say what it leaves behind: %v", got)
 	}
 }

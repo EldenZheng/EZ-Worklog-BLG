@@ -8,6 +8,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 )
 
@@ -28,6 +29,173 @@ func TestWorkDayTurnsOverAtEight(t *testing.T) {
 	}
 	if got := workDate(at(23)); got != "2026-08-12" {
 		t.Fatalf("late evening is its own day, got %s", got)
+	}
+}
+
+// The percentage alone left the reader doing the arithmetic: 68% of 480 is how
+// many minutes short? The number that decides whether to log more is spelled out.
+func TestDayScoreLineSpellsOutWhatIsLeft(t *testing.T) {
+	for _, c := range []struct {
+		mins int
+		want string
+	}{
+		{330, "330 min · 68% (150m left)"},
+		{0, "0 min · 0% (480m left)"},
+		{480, "480 min · 100% ✓"},
+		{540, "540 min · 112% ✓"}, // over target owes nothing
+	} {
+		if got := dayScoreLine(c.mins); got != c.want {
+			t.Fatalf("dayScoreLine(%d) = %q, want %q", c.mins, got, c.want)
+		}
+	}
+}
+
+// Two captions carrying that much text do not fit side by side in a column a
+// seventh of the window wide, and fyne does not clip — the overflow prints over
+// the next day. So the row reserves the second line it may need.
+func TestSplitCaptionStacksWhenTheTwoWillNotFit(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	test.ApplyTheme(t, theme.DefaultTheme())
+
+	left := weekCaption("240 min · 50% (240m left) · +300 min")
+	right := weekCaption("540 min · 112% ✓")
+	objs := []fyne.CanvasObject{left, right}
+	l := splitCaption{}
+
+	// Room for both rows is reserved whether or not they end up used.
+	if m := l.MinSize(objs); m.Height < left.MinSize().Height*2 {
+		t.Fatalf("two captions should reserve two rows, got %v", m)
+	}
+
+	// Narrow: stacked, and the second sits below the first.
+	l.Layout(objs, fyne.NewSize(120, l.MinSize(objs).Height))
+	if right.Position().Y <= left.Position().Y {
+		t.Fatalf("a narrow column should stack them: left %v right %v",
+			left.Position(), right.Position())
+	}
+	if right.Position().X != 0 {
+		t.Fatalf("a stacked caption starts at the left edge, got %v", right.Position())
+	}
+
+	// Wide: side by side, the second flush right.
+	wide := left.MinSize().Width + right.MinSize().Width + 200
+	l.Layout(objs, fyne.NewSize(wide, l.MinSize(objs).Height))
+	if right.Position().Y != left.Position().Y {
+		t.Fatalf("a wide column should keep them on one line: left %v right %v",
+			left.Position(), right.Position())
+	}
+	if got, want := right.Position().X, wide-right.MinSize().Width; got != want {
+		t.Fatalf("the second caption should be flush right: %v, want %v", got, want)
+	}
+
+	// An empty caption is not a second line.
+	solo := []fyne.CanvasObject{weekCaption("nothing logged"), weekCaption("")}
+	if m, one := (splitCaption{}).MinSize(solo), solo[0].MinSize(); m.Height > one.Height {
+		t.Fatalf("one caption is one row, got %v for %v", m, one)
+	}
+}
+
+// The support placeholder pencils an unlogged rota shift onto the weekdays so
+// the week can be read as it will stand. Nothing is written for it.
+func TestSupportPlaceholderCoversWeekdaysWithoutOne(t *testing.T) {
+	cfg := Config{WorklogOwner: "blg-elden"}
+	support := []WorklogItem{{
+		ParentTitle: "Elden: Weekly Support (28th August, 12PM - 3PM)",
+		Title:       "Worklog: 2026-08-28",
+	}}
+
+	for _, c := range []struct {
+		name  string
+		on    bool
+		date  string
+		items []WorklogItem
+		want  int
+	}{
+		{"a weekday with nothing on it", true, "2026-08-24", nil, supportPlaceholderMins},
+		// The real shift is already on the board; a second one pencilled on top
+		// would claim three hours twice.
+		{"a weekday that already has the shift", true, "2026-08-28", support, 0},
+		// Matched on the parent, since the worklog under it is called
+		// "Worklog: <date>" like every other one.
+		{"matched on the item's own title", true, "2026-08-28",
+			[]WorklogItem{{Title: "Elden: Weekly Support (28th August)"}}, 0},
+		{"other work on the day is not the shift", true, "2026-08-24",
+			[]WorklogItem{{ParentTitle: "Chinese translation"}}, supportPlaceholderMins},
+		// The rota is weekdays; a weekend is its own arrangement.
+		{"Saturday", true, "2026-08-29", nil, 0},
+		{"Sunday", true, "2026-08-30", nil, 0},
+		{"switched off", false, "2026-08-24", nil, 0},
+		{"an unreadable date", true, "not a date", nil, 0},
+	} {
+		if got := supportPlaceholderFor(cfg, c.on, c.date, c.items); got != c.want {
+			t.Fatalf("%s: got %d, want %d", c.name, got, c.want)
+		}
+	}
+
+	// With no name configured there is nothing to match a support title on, so
+	// nothing is ever treated as already covered.
+	if hasWeeklySupport(Config{}, support) {
+		t.Fatal("with no display name there is no prefix to match on")
+	}
+}
+
+// It is a sketch of this week, so it does not follow you to the next one.
+func TestSupportPlaceholderClearsWhenTheWeekChanges(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	ui.supportPlaceholder = true
+	ui.drawWeekStrip()
+	if !ui.supportPlaceholder {
+		t.Fatal("drawing the strip should not clear it")
+	}
+
+	next := buttonNamed(ui.weekBox, "This week")
+	if next == nil {
+		t.Fatalf("the strip needs a way home: %v", labels(ui.weekBox))
+	}
+	next.OnTapped()
+	if ui.supportPlaceholder {
+		t.Fatal("walking to another week should take the placeholder off")
+	}
+}
+
+// Switched on, a weekday reads as it would once the shift is logged — and says
+// the extra came from the placeholder rather than from a saved entry.
+func TestSupportPlaceholderShowsOnTheStrip(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	ui.cfg.WorklogOwner = "blg-elden"
+	withProject(ui, "2026-08")
+
+	key := statusCacheKey("2026-08")
+	ui.projItems[key] = []WorklogItem{
+		{Date: "2026-08-10", Minutes: 240, URL: "https://github.com/bigledger/blg-intranet/issues/1"},
+	}
+	ui.projLoaded[key] = true
+
+	ui.supportPlaceholder = true
+	ui.drawRecent()
+
+	got := labels(ui.weekBox)
+	// 240 banked plus the 180 pencilled in is 420 of 480.
+	if !contains(got, "+180 min (inc. support)") {
+		t.Fatalf("the placeholder should be named on the day: %v", got)
+	}
+	if !contains(got, "420 min · 87% (60m left)") {
+		t.Fatalf("the day should read as it would with the shift on it: %v", got)
+	}
+	// The weekend is not on the rota. Checked on the weekend's own columns:
+	// "180 min · 37%" is the right reading for the empty weekdays beside it.
+	for _, ds := range []string{"2026-08-15", "2026-08-16"} {
+		col := ui.weekCols[ds]
+		if col == nil {
+			t.Fatalf("the week is missing %s", ds)
+		}
+		if in := labels(col); contains(in, "support") || contains(in, "180 min") {
+			t.Fatalf("%s is a weekend and carries no placeholder: %v", ds, in)
+		}
 	}
 }
 
@@ -127,12 +295,13 @@ func TestWeekStripShowsWhatEachDayHolds(t *testing.T) {
 		t.Fatalf("a week is seven columns, got %d", n)
 	}
 
-	// 240 of 480 is half the day, and a full day says so.
-	if !contains(got, "240 min · 50%") {
-		t.Fatalf("a day should score itself against the target: %v", got)
+	// 240 of 480 is half the day, and what it still owes is spelled out rather
+	// than left as arithmetic on the percentage.
+	if !contains(got, "240 min · 50% (240m left)") {
+		t.Fatalf("a day should say what it still owes: %v", got)
 	}
 	if !contains(got, "480 min · 100% ✓") {
-		t.Fatalf("a day that made target should be marked: %v", got)
+		t.Fatalf("a day that made target should be marked, with nothing left: %v", got)
 	}
 	if !contains(got, "nothing logged") {
 		t.Fatalf("an empty day should say so rather than read as broken: %v", got)
