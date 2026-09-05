@@ -88,8 +88,9 @@ type UI struct {
 	calTitle   *widget.Label
 	calSummary *widget.Label
 	repTitle   *widget.Label
-	listTitle  *widget.Label
-	listHere   *widget.Button // "This week" on Log List, greyed when already there
+	listTitle   *widget.Label
+	listHere    *widget.Button // "This week" on Log List, greyed when already there
+	listSupport *widget.Check  // mirror of the Log Work support checkbox, kept in sync
 
 	// One rate fetch in flight at a time: opening the Report tab twice in a row
 	// should not queue two.
@@ -242,6 +243,28 @@ func (ui *UI) draftMinutesByDay(fromDate, toDate string) map[string]int {
 		out[d] += r.Minutes()
 	}
 	return out
+}
+
+// draftMinutesOn sums the unpushed drafts standing on one day, skipping a row
+// by id when one is given — the row the editor is looking at. Without the skip
+// its old value would be counted as pending AND the field would be counted as
+// new, so a 300 min draft opened at 300 would read as 600 waiting.
+func (ui *UI) draftMinutesOn(date, excludeRowID string) int {
+	sum := 0
+	rows, err := ui.store.ReadRows()
+	if err != nil {
+		return 0
+	}
+	for _, r := range ui.shownRows(rows) {
+		if r["pushed_at"] != "" || r["date"] != date {
+			continue
+		}
+		if excludeRowID != "" && r["id"] == excludeRowID {
+			continue
+		}
+		sum += r.Minutes()
+	}
+	return sum
 }
 
 // itemOrg is the organisation a worklog item belongs to: its own issue's owner,
@@ -1817,7 +1840,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			labeled("Worklog mins", minE),
 			labeled("Issue", issE),
 		),
-		ui.dayFillReadout(dateE),
+		ui.dayFillReadout(dateE, minE, r["id"]),
 	)
 	// Caption beside the dropdown rather than stacked over it: the bar shares a
 	// line with Back, and a two-row label would drag that whole line taller.
@@ -2018,7 +2041,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 			labeled("Worklog mins", minE),
 			labeled("Issue", issE),
 		),
-		ui.dayFillReadout(dateE),
+		ui.dayFillReadout(dateE, minE, ""),
 	)
 	actions := container.NewHBox(
 		widget.NewLabel("Push as"), wideSelect(modeSel), aiBtn, saveBtn, pushBtn,

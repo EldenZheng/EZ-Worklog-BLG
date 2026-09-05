@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"strconv"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -327,9 +328,30 @@ func (p *worklogDatePicker) dayCell(ds string, day, mins, draft int) fyne.Canvas
 // The two halves sit at either end of the line rather than being joined by an
 // arrow. An arrow is one more glyph to find in whatever font the system hands
 // us, and the one that was there rendered as a box.
-func (ui *UI) dayFillReadout(p *worklogDatePicker) fyne.CanvasObject {
+//
+// The right end grows a third piece — what the day would score once the number
+// typed in the Worklog mins field lands on it — so the answer to "does this
+// entry finish the day" is on the same line as the picker rather than a tab
+// away. Passing a nil minE keeps the old two-piece line.
+//
+// excludeRowID names the draft the editor is looking at, so its saved minutes
+// stop being counted as pending the moment the field is on screen — otherwise
+// a 300-minute draft opened at 300 would read as 600 waiting the second the
+// popup drew.
+func (ui *UI) dayFillReadout(p *worklogDatePicker, minE *widget.Entry, excludeRowID string) fyne.CanvasObject {
 	left := widget.NewLabel("")
 	right := widget.NewLabelWithStyle("", fyne.TextAlignTrailing, fyne.TextStyle{})
+
+	parseMins := func() int {
+		if minE == nil {
+			return 0
+		}
+		n, err := strconv.Atoi(strings.TrimSpace(minE.Text))
+		if err != nil || n <= 0 {
+			return 0
+		}
+		return n
+	}
 
 	update := func() {
 		date := p.ISO()
@@ -342,14 +364,18 @@ func (ui *UI) dayFillReadout(p *worklogDatePicker) fyne.CanvasObject {
 		switch state {
 		case "ok":
 			left.SetText(fmt.Sprintf("%s already on GitHub: %s", date, dayScoreLine(mins)))
-			waiting := 0
-			for _, m := range ui.draftMinutesByDay(date, date) {
-				waiting += m
-			}
+			waiting := ui.draftMinutesOn(date, excludeRowID)
+			entry := parseMins()
+			var parts []string
 			if waiting > 0 {
-				right.SetText(fmt.Sprintf("%d min on pending log, then %s",
+				parts = append(parts, fmt.Sprintf("%d min on pending log, then %s",
 					waiting, dayScoreLine(mins+waiting)))
 			}
+			if entry > 0 {
+				parts = append(parts, fmt.Sprintf("+%d min this entry, then %s",
+					entry, dayScoreLine(mins+waiting+entry)))
+			}
+			right.SetText(strings.Join(parts, "  ·  "))
 		case "loading":
 			left.SetText(date + ": checking GitHub…")
 		case "off":
@@ -360,6 +386,18 @@ func (ui *UI) dayFillReadout(p *worklogDatePicker) fyne.CanvasObject {
 	}
 	update()
 	p.OnChanged = func(string) { update() }
+	if minE != nil {
+		// Chain onto whatever the caller has already wired: validators, tests,
+		// autosave — none of those should stop firing because this readout also
+		// wants to know when the number changed.
+		prev := minE.OnChanged
+		minE.OnChanged = func(s string) {
+			if prev != nil {
+				prev(s)
+			}
+			update()
+		}
+	}
 	return container.NewBorder(nil, nil, nil, right, left)
 }
 
