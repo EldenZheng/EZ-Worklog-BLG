@@ -149,6 +149,41 @@ func TestDayChartBarsFollowTheWidgetSize(t *testing.T) {
 	}
 }
 
+// AppTabs can only be reached by name or by position, so both are written down
+// as constants — and both have to match the bar that is actually built.
+//
+// They drifted once already: renaming "Log work" to "Log Work" left the switch
+// in main matching nothing, so opening that tab stopped refreshing the commit
+// list, and adding Log List in the middle pushed Settings from 3 to 4 so a
+// first run opened Report instead. Neither said anything at build time.
+func TestTabNamesAndIndicesMatchTheBarThatIsBuilt(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("t")
+	ui := &UI{store: newStore(t.TempDir()), win: w,
+		calMonth: "2026-08", repMonth: "2026-08"}
+	ui.cfg = Config{Repos: []string{"bigledger"}} // no project URL: stays offline
+	ui.buildAllTabs()
+
+	want := []string{
+		logWorkTabName, logListTabName, statusTabName, reportTabName, settingsTabName,
+	}
+	if len(ui.tabs.Items) != len(want) {
+		t.Fatalf("expected %d tabs, got %d", len(want), len(ui.tabs.Items))
+	}
+	for i, name := range want {
+		if got := ui.tabs.Items[i].Text; got != name {
+			t.Fatalf("tab %d is %q, want %q", i, got, name)
+		}
+	}
+	if ui.tabs.Items[statusTabIndex].Text != statusTabName {
+		t.Fatalf("statusTabIndex points at %q", ui.tabs.Items[statusTabIndex].Text)
+	}
+	if ui.tabs.Items[settingsTabIndex].Text != settingsTabName {
+		t.Fatalf("settingsTabIndex points at %q", ui.tabs.Items[settingsTabIndex].Text)
+	}
+}
+
 // Clicking a bar switches to the Status tab with that day selected, loading a
 // different month if the report was looking at one.
 func TestOpenDayOnCalendarSwitchesTabs(t *testing.T) {

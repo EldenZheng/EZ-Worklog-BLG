@@ -87,11 +87,15 @@ func TestFindSubIssueLive(t *testing.T) {
 	if len(node.SubIssues.Nodes) == 0 {
 		t.Fatal("sub-issues did not come back; the GraphQL feature header is likely missing")
 	}
-	got := findSubIssue(node, "Worklog: 2026-08-09")
+	// Resume is keyed on the URL the row recorded, not on the title: every
+	// worklog for a day is titled the same, so a title match cannot tell one
+	// entry's sub-issue from another's.
+	want := node.SubIssues.Nodes[0].URL
+	got := findSubIssueByURL(node, want)
 	if got == nil {
 		var titles []string
 		for _, s := range node.SubIssues.Nodes {
-			titles = append(titles, s.Title)
+			titles = append(titles, s.Title+" "+s.URL)
 		}
 		t.Fatalf("retry would create a duplicate; sub-issues present: %s", strings.Join(titles, " | "))
 	}

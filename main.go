@@ -640,11 +640,18 @@ func dataDir() string {
 //go:embed icon.png
 var appIconPNG []byte
 
+// windowTitle is the app window's title. Named once because the Windows
+// maximise call finds the window by it — a rename here that missed there would
+// leave the window at 1440x920.
+const windowTitle = "Worklog"
+
 func main() {
 	a := app.NewWithID("com.eldenz.worklog")
 	a.SetIcon(fyne.NewStaticResource("icon.png", appIconPNG))
-	w := a.NewWindow("Worklog")
+	w := a.NewWindow(windowTitle)
+	// The size to come back to if the window is un-maximised.
 	w.Resize(fyne.NewSize(1440, 920))
+	w.CenterOnScreen()
 
 	store := newStore(dataDir())
 	cfg, has := store.LoadConfig()
@@ -658,14 +665,20 @@ func main() {
 	}
 
 	ui.buildAllTabs()
+	// Matched against the tab names, so the names and these have to stay in
+	// step: renaming "Log work" to "Log Work" quietly stopped the commit list
+	// refreshing when its tab was opened, because nothing matched any more.
 	ui.tabs.OnSelected = func(ti *container.TabItem) {
 		switch ti.Text {
-		case "Log work":
+		case logWorkTabName:
 			ui.loadPending(false)
-		case "Status":
+		case logListTabName:
+			ui.loadPending(false)
+			ui.drawLogList()
+		case statusTabName:
 			ui.drawCalendar()
 			ui.loadStatus(false)
-		case "Report":
+		case reportTabName:
 			ui.refreshRate(false)
 			ui.drawReport()
 			ui.loadReport(false)
@@ -675,17 +688,25 @@ func main() {
 
 	ui.drawRecent()
 	if !has {
-		ui.tabs.SelectIndex(3) // Settings first run
+		ui.tabs.SelectIndex(settingsTabIndex) // Settings first run
 	}
 	if os.Getenv("WORKLOG_AUTOFETCH") == "1" {
 		ui.cfg.Repos = []string{"bigledger"} // smoke-test override
 	}
-	// "Log work" is the tab shown at startup, so OnSelected never fires for it.
+	// "Log Work" is the tab shown at startup, so OnSelected never fires for it.
 	// Kick the first fetch off here, after a beat, so the window is up before
 	// the list starts changing under it.
 	go func() {
 		time.Sleep(750 * time.Millisecond)
 		fyne.Do(func() { ui.loadPending(false) })
+	}()
+	// Maximise once the window is up. fyne 2.8 has no Maximise method, so this
+	// asks Windows directly by title — the same effect as clicking the box in
+	// the title bar. Left as the ordinary un-maximised size everywhere else,
+	// where the platform's own gesture already does the job.
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		fyne.Do(func() { maximizeAppWindow(windowTitle) })
 	}()
 	w.ShowAndRun()
 }
@@ -734,11 +755,11 @@ func (ui *UI) refreshRate(force bool) {
 // exercised without a window manager.
 func (ui *UI) buildAllTabs() {
 	ui.tabs = container.NewAppTabs(
-		container.NewTabItem("Log Work", ui.buildLogTab()),
-		container.NewTabItem("Log List", ui.buildLogListTab()),
-		container.NewTabItem("Status", ui.buildStatusTab()),
-		container.NewTabItem("Report", ui.buildReportTab()),
-		container.NewTabItem("Settings", ui.buildSettingsTab()),
+		container.NewTabItem(logWorkTabName, ui.buildLogTab()),
+		container.NewTabItem(logListTabName, ui.buildLogListTab()),
+		container.NewTabItem(statusTabName, ui.buildStatusTab()),
+		container.NewTabItem(reportTabName, ui.buildReportTab()),
+		container.NewTabItem(settingsTabName, ui.buildSettingsTab()),
 	)
 }
 

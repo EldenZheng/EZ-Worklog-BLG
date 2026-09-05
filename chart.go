@@ -402,7 +402,17 @@ func (ui *UI) openDayOnCalendar(date string) {
 	}
 }
 
-// statusTabIndex is where the Status tab sits in the tab bar; the report links
-// into it by position, which is all AppTabs offers. Log List sits between Log
-// work and Status, so this is third.
-const statusTabIndex = 2
+// The tabs, named once. AppTabs offers no way to reach a tab except by name or
+// by position, so both are spelled out here rather than written out again at
+// each place that needs one — a rename or a new tab in the middle used to
+// silently break whichever switch or SelectIndex was left behind.
+const (
+	logWorkTabName  = "Log Work"
+	logListTabName  = "Log List"
+	statusTabName   = "Status"
+	reportTabName   = "Report"
+	settingsTabName = "Settings"
+
+	statusTabIndex   = 2
+	settingsTabIndex = 4
+)

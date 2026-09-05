@@ -738,9 +738,18 @@ func weekCaption(s string) *canvas.Text {
 // the two read as the same card wherever it happens to be standing.
 func (ui *UI) dayRowCard(r Row, refresh func()) fyne.CanvasObject {
 	accent := orgColor(ui.cfg, orgOf(r["issue"]))
-	title := widget.NewLabelWithStyle(truncate(ui.weekRowTitle(r), weekCardChars),
+	// One line, elided at the width the column actually has.
+	//
+	// It used to be cut at a character count and then word-wrapped, and a count
+	// is not a width: forty-four narrow characters fit on one line while
+	// forty-four wide ones need two. Cards on the same row came out different
+	// heights for no reason a reader could see, and the columns stopped lining
+	// up. Letting fyne elide at the real width makes every card the same height
+	// whatever its title says.
+	title := widget.NewLabelWithStyle(ui.weekRowTitle(r),
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	title.Wrapping = fyne.TextWrapWord
+	title.Wrapping = fyne.TextWrapOff
+	title.Truncation = fyne.TextTruncateEllipsis
 
 	// The minutes are the number this card exists to carry — how much of the day
 	// it would take — so they are said out loud in the org's own colour rather
