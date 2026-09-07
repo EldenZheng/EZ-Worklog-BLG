@@ -407,12 +407,13 @@ func (ui *UI) openDayOnCalendar(date string) {
 // each place that needs one — a rename or a new tab in the middle used to
 // silently break whichever switch or SelectIndex was left behind.
 const (
-	logWorkTabName  = "Log Work"
-	logListTabName  = "Log List"
-	statusTabName   = "Status"
-	reportTabName   = "Report"
-	settingsTabName = "Settings"
+	logWorkTabName    = "Log Work"
+	logListTabName    = "Log List"
+	commitListTabName = "Commit List"
+	statusTabName     = "Status"
+	reportTabName     = "Report"
+	settingsTabName   = "Settings"
 
-	statusTabIndex   = 2
-	settingsTabIndex = 4
+	statusTabIndex   = 3
+	settingsTabIndex = 5
 )

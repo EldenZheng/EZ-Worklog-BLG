@@ -71,14 +71,16 @@ type UI struct {
 	daySwap    *fyne.Container // holds either the day's detail or the prompt
 	repBox     *fyne.Container
 	listBox    *fyne.Container // the Log List tab: boards, the week by issue, what is pending
+	commitBox  *fyne.Container // the Commit List tab: this week's commits by day and parent issue
 	tabs       *container.AppTabs
 
 	// The column each tab's panels stand in. Held so a panel that changed height
 	// can have its column re-measure it — see relayout.
-	logBody  *fyne.Container
-	calBody  *fyne.Container
-	repBody  *fyne.Container
-	listBody *fyne.Container
+	logBody    *fyne.Container
+	calBody    *fyne.Container
+	repBody    *fyne.Container
+	listBody   *fyne.Container
+	commitBody *fyne.Container
 
 	// The bottom list is a to-do, not a history: it shows what is still waiting
 	// to reach GitHub. This ticks over to the full month when the pushed ones
@@ -91,6 +93,18 @@ type UI struct {
 	listTitle   *widget.Label
 	listHere    *widget.Button // "This week" on Log List, greyed when already there
 	listSupport *widget.Check  // mirror of the Log Work support checkbox, kept in sync
+
+	commitTitle *widget.Label
+	commitHere  *widget.Button // "This week" on Commit List
+
+	// Commits per week, keyed by weekStart (YYYY-MM-DD Monday). Fetched on demand
+	// when the tab is opened or the week is walked. Loading and error state are
+	// held beside the results so the UI can show "fetching…" or the last error
+	// without leaving the tab.
+	weekCommits    map[string][]Commit
+	weekCommitErrs map[string][]string
+	weekCommitLoad map[string]bool
+	weekCommitAt   map[string]time.Time
 
 	// One rate fetch in flight at a time: opening the Report tab twice in a row
 	// should not queue two.
@@ -342,6 +356,103 @@ func (ui *UI) loadPending(force bool) {
 		ui.pending = res
 		ui.renderPending()
 		ui.loadIssueInfos()
+	})
+}
+
+// loadWeekCommits fetches every commit the author authored during the shown
+// week (weekStart..weekStart+6) and hands drawCommitList the result. Each week
+// is cached so walking back to a week already fetched is instant; force skips
+// the cache. Refetches whenever the tab is opened on a stale entry.
+func (ui *UI) loadWeekCommits(force bool) {
+	if ui.commitBox == nil {
+		return
+	}
+	ui.ensureWeekCommitCache()
+	weekStart := orDefault(ui.weekStart, weekStartOf(today()))
+	days := weekDates(weekStart)
+	from, to := days[0], days[len(days)-1]
+
+	if ui.weekCommitLoad[weekStart] {
+		return
+	}
+	if !force {
+		if _, cached := ui.weekCommits[weekStart]; cached {
+			if !pendingIsStale(ui.weekCommitAt[weekStart]) {
+				return
+			}
+		}
+	}
+	if len(ui.cfg.Repos) == 0 {
+		return // buildCommitListTab shows the same nudge Log Work does
+	}
+	ui.weekCommitLoad[weekStart] = true
+	ui.drawCommitList() // repaint so the header can say "fetching…"
+
+	var (
+		commits []Commit
+		errs    []string
+		ferr    error
+	)
+	ui.async(func() error {
+		commits, errs, ferr = ui.store.FetchWeekCommits(ui.cfg, from, to)
+		return nil
+	}, func() {
+		ui.weekCommitLoad[weekStart] = false
+		if ferr != nil {
+			ui.weekCommitErrs[weekStart] = []string{ferr.Error()}
+			ui.drawCommitList()
+			return
+		}
+		ui.weekCommits[weekStart] = commits
+		ui.weekCommitErrs[weekStart] = errs
+		ui.weekCommitAt[weekStart] = time.Now()
+		// Seed issue titles for the commits' parent issues so bubbles show a
+		// title rather than a bare owner/repo#123. Reuses loadPending's cache.
+		ui.loadCommitIssueInfos(commits)
+		ui.drawCommitList()
+	})
+}
+
+func (ui *UI) ensureWeekCommitCache() {
+	if ui.weekCommits == nil {
+		ui.weekCommits = map[string][]Commit{}
+		ui.weekCommitErrs = map[string][]string{}
+		ui.weekCommitLoad = map[string]bool{}
+		ui.weekCommitAt = map[string]time.Time{}
+	}
+}
+
+// loadCommitIssueInfos resolves the parent-issue titles behind the fetched
+// commits, so a bubble labelled "bigledger/blg-intranet#42" gains its title.
+// Piggybacks the same issueInfo cache pendings use, so an issue seen on both
+// tabs only fetches once.
+func (ui *UI) loadCommitIssueInfos(commits []Commit) {
+	if ui.issueInfo == nil {
+		ui.issueInfo = map[string]IssueInfo{}
+	}
+	seen := map[string]bool{}
+	var refs []string
+	for _, c := range commits {
+		if c.Issue == "" || seen[c.Issue] {
+			continue
+		}
+		seen[c.Issue] = true
+		if _, done := ui.issueInfo[c.Issue]; !done {
+			refs = append(refs, c.Issue)
+		}
+	}
+	if len(refs) == 0 {
+		return
+	}
+	var infos map[string]IssueInfo
+	ui.async(func() error {
+		infos, _ = FetchIssueInfos(refs)
+		return nil
+	}, func() {
+		for ref, info := range infos {
+			ui.issueInfo[ref] = info
+		}
+		ui.drawCommitList()
 	})
 }
 
@@ -698,6 +809,9 @@ func main() {
 		case logListTabName:
 			ui.loadPending(false)
 			ui.drawLogList()
+		case commitListTabName:
+			ui.loadWeekCommits(false)
+			ui.drawCommitList()
 		case statusTabName:
 			ui.drawCalendar()
 			ui.loadStatus(false)
@@ -780,6 +894,7 @@ func (ui *UI) buildAllTabs() {
 	ui.tabs = container.NewAppTabs(
 		container.NewTabItem(logWorkTabName, ui.buildLogTab()),
 		container.NewTabItem(logListTabName, ui.buildLogListTab()),
+		container.NewTabItem(commitListTabName, ui.buildCommitListTab()),
 		container.NewTabItem(statusTabName, ui.buildStatusTab()),
 		container.NewTabItem(reportTabName, ui.buildReportTab()),
 		container.NewTabItem(settingsTabName, ui.buildSettingsTab()),

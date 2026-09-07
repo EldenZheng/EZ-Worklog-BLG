@@ -1051,6 +1051,86 @@ func (s *Store) FetchPending(cfg Config) (PendingResult, error) {
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).
 		AddDate(0, 0, -(days - 1))
 	endExclusive := start.AddDate(0, 0, days)
+
+	sinceDate := start.Format("2006-01-02")
+	untilDate := endExclusive.AddDate(0, 0, -1).Format("2006-01-02")
+	commits, errs, err := s.gatherAuthorCommits(cfg, start, endExclusive)
+	if err != nil {
+		return PendingResult{}, err
+	}
+
+	done, err := s.LoggedShas()
+	if err != nil {
+		return PendingResult{}, err
+	}
+	skip, err := s.IgnoredShas()
+	if err != nil {
+		return PendingResult{}, err
+	}
+	groups := groupPending(commits, done, skip)
+	live := 0
+	for _, g := range groups {
+		if !g.Ignored {
+			live++
+		}
+	}
+	return PendingResult{
+		Groups: groups, Errors: errs, Count: live,
+		Range: []string{sinceDate, untilDate},
+	}, nil
+}
+
+// FetchWeekCommits returns every commit the author authored in the given
+// inclusive date window [from, to]. Deduped by sha, merges dropped, sorted
+// newest-first. Unlike FetchPending it keeps commits that are already logged —
+// the Commit List tab shows what shipped, regardless of whether an entry was
+// written for it.
+func (s *Store) FetchWeekCommits(cfg Config, from, to string) ([]Commit, []string, error) {
+	start, err := time.ParseInLocation("2006-01-02", from, time.Local)
+	if err != nil {
+		return nil, nil, err
+	}
+	end, err := time.ParseInLocation("2006-01-02", to, time.Local)
+	if err != nil {
+		return nil, nil, err
+	}
+	endExclusive := end.AddDate(0, 0, 1)
+	commits, errs, err := s.gatherAuthorCommits(cfg, start, endExclusive)
+	if err != nil {
+		return nil, errs, err
+	}
+	seen := map[string]bool{}
+	out := make([]Commit, 0, len(commits))
+	for _, c := range commits {
+		if seen[c.Sha] || isMergeCommit(c) {
+			continue
+		}
+		seen[c.Sha] = true
+		// The window is padded a day when discovery reaches out to GitHub, so
+		// clip to the requested range.
+		if c.Date < from || c.Date > to {
+			continue
+		}
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Date != b.Date {
+			return a.Date > b.Date
+		}
+		if a.Issue != b.Issue {
+			return a.Issue > b.Issue
+		}
+		return a.Sha < b.Sha
+	})
+	return out, errs, nil
+}
+
+// gatherAuthorCommits does the branch-and-search discovery shared by
+// FetchPending (which then done-filters) and FetchWeekCommits (which does not).
+// Returns raw commits with duplicates and merges left in — callers pick which
+// filters apply.
+func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) ([]Commit, []string, error) {
 	since := start.Format(time.RFC3339)
 	until := endExclusive.Format(time.RFC3339)
 
@@ -1066,7 +1146,7 @@ func (s *Store) FetchPending(cfg Config) (PendingResult, error) {
 		if u, err := ghCurrentUser(); err == nil {
 			author = u
 		} else {
-			return PendingResult{}, err
+			return nil, nil, err
 		}
 	}
 
@@ -1224,25 +1304,7 @@ func (s *Store) FetchPending(cfg Config) (PendingResult, error) {
 	branchWG.Wait()
 	wg.Wait()
 
-	done, err := s.LoggedShas()
-	if err != nil {
-		return PendingResult{}, err
-	}
-	skip, err := s.IgnoredShas()
-	if err != nil {
-		return PendingResult{}, err
-	}
-	groups := groupPending(commits, done, skip)
-	live := 0
-	for _, g := range groups {
-		if !g.Ignored {
-			live++
-		}
-	}
-	return PendingResult{
-		Groups: groups, Errors: errs, Count: live,
-		Range: []string{sinceDate, untilDate},
-	}, nil
+	return commits, errs, nil
 }
 
 // groupPending turns the fetched commits into one bubble each, dropping merges,
