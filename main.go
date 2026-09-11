@@ -994,15 +994,53 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// they share one form and add the one field each of them needs: nothing for
 	// a meeting, an issue link for "other", a repo and a title for one that has
 	// no issue yet.
-	mDate := newDateEntryISO(today())
-	mDesc := widget.NewEntry()
-	mDesc.SetPlaceHolder("What was it?")
+	// Same date picker the row-editor popup uses, so the tab and the popup ask
+	// the "which day" question the same way — with the month grid painted by
+	// how full each day already is.
+	mDate := newWorklogDatePicker(ui, today())
+	// Description is a textarea now — meeting write-ups run to several lines
+	// and the old single-line field truncated visibly at the caret. Only shown
+	// for meetings; for Other and Independent it is auto-titled "Worklog: <date>"
+	// and kept off screen entirely, since asking the reader to name each day's
+	// worklog was the field's only job.
+	mDesc := widget.NewMultiLineEntry()
+	mDesc.SetMinRowsVisible(3)
+	mDesc.SetPlaceHolder("What was it? (meeting notes)")
 	mMin := widget.NewEntry()
 	mMin.SetPlaceHolder("minutes")
 	mRemarks := widget.NewMultiLineEntry()
 	mRemarks.SetMinRowsVisible(4)
 	mRemarks.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
 	mMsg := widget.NewLabel("")
+
+	// Mode selector — the same one the row editor grows. Shown for Other and
+	// Independent since those two produce a written entry that can either take
+	// a Worklog sub-issue or land on the issue itself; Meeting is always the
+	// day's meeting issue and Commits carries its own mode per group.
+	mMode := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
+	if strings.EqualFold(ui.cfg.DefaultMode, "issue") {
+		mMode.SetSelected("The issue itself")
+	} else {
+		mMode.SetSelected("Worklog sub-issue")
+	}
+	mModeVal := func() string {
+		if mMode.Selected == "The issue itself" {
+			return "issue"
+		}
+		return "subissue"
+	}
+	// The "Push as" pair rides alongside the action buttons on the same line —
+	// it lives on the row a push is committed from, not stacked above it — so a
+	// wrapped VBox would sit awkwardly at the foot of the tab. Held in one box
+	// so both pieces show or hide together. mMode is wrapped in a fixed-width
+	// grid because widget.Select's own MinSize was tight enough to render
+	// "Worklog sub-issue" as "Worklog su…".
+	modeBox := container.New(layout.NewGridWrapLayout(fyne.NewSize(190, mMode.MinSize().Height)), mMode)
+	mPushAs := container.NewHBox(
+		widget.NewLabelWithStyle("Push as", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		modeBox,
+	)
+	mPushAs.Hide()
 
 	// "Other": an issue that already exists.
 	mIssue := widget.NewEntry()
@@ -1024,20 +1062,42 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	)
 	indepRow.Hide()
 
-	mBtn := widget.NewButton("Log it", func() {
+	// Description sits on its own row so a textarea has room to breathe. Hidden
+	// for the two kinds that title themselves ("Worklog: <date>") since the
+	// field would only ever repeat the date they already picked.
+	descRow := labeled("Description", mDesc)
+	descRow.Hide()
+
+	// autoDescFor is the auto-title Other and Independent entries wear. Matches
+	// the pushed sub-issue's title on GitHub, so the CSV line and the board
+	// carry the same string.
+	autoDescFor := func(iso string) string { return "Worklog: " + iso }
+
+	// Both buttons share this closure. push=false saves a draft (like the popup
+	// editor's "Save"); push=true saves and immediately pushes to GitHub via
+	// resolveForPush + PushEntry, the same path the row editor uses. Reset the
+	// form only after a successful save so a failure keeps the fields for a
+	// second attempt.
+	mSave := func(push bool) {
 		mins, _ := strconv.Atoi(strings.TrimSpace(mMin.Text))
 		if mins <= 0 {
 			mMsg.SetText("Minutes must be more than zero.")
 			return
 		}
-		date := isoDate(mDate)
+		date := mDate.ISO()
 		if date == "" {
 			mMsg.SetText("Pick a date.")
 			return
 		}
+		// Description is the visible textarea for a meeting; for Other and
+		// Independent the field is hidden and the auto-title is written in.
+		desc := strings.TrimSpace(mDesc.Text)
+		if kind == kindOther || kind == kindIndependent {
+			desc = autoDescFor(date)
+		}
 		row := Row{
 			"date": date, "minutes": strconv.Itoa(mins),
-			"type": kind, "description": mDesc.Text,
+			"type": kind, "description": desc,
 			"remarks": strings.TrimSpace(mRemarks.Text),
 		}
 		switch kind {
@@ -1053,7 +1113,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 				return
 			}
 			row["issue"] = ref
-			row["mode"] = orDefault(ui.cfg.DefaultMode, "subissue")
+			row["mode"] = mModeVal()
 		case kindIndependent:
 			repo := repoPick.value()
 			title := strings.TrimSpace(mTitle.Text)
@@ -1062,30 +1122,90 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 				return
 			}
 			row["parent_repo"], row["parent_title"] = repo, title
-			row["mode"] = "subissue"
+			row["mode"] = mModeVal()
 		}
-		if _, err := ui.store.AppendRows([]Row{row}); err != nil {
+		made, err := ui.store.AppendRows([]Row{row})
+		if err != nil {
 			ui.errf(err)
 			return
 		}
-		mMsg.SetText("Saved — push it from the entry below when you are ready.")
-		mDesc.SetText("")
-		mMin.SetText("")
-		mRemarks.SetText("")
-		mTitle.SetText("")
-		ui.drawRecent()
-		ui.drawWeekStrip()
-	})
+		saved := made[0]
 
+		resetForm := func() {
+			mDesc.SetText("")
+			mMin.SetText("")
+			mRemarks.SetText("")
+			mTitle.SetText("")
+			mIssue.SetText("")
+			ui.drawRecent()
+			ui.drawWeekStrip()
+		}
+
+		if !push {
+			mMsg.SetText("Saved as draft — push it from the entry below when you are ready.")
+			resetForm()
+			return
+		}
+
+		body := strings.TrimSpace(saved["remarks"])
+		if body == "" {
+			body = saved["description"]
+		}
+		if body == "" {
+			mMsg.SetText("Saved as draft — nothing to push: remarks and description are both empty.")
+			resetForm()
+			return
+		}
+
+		mMsg.SetText("Pushing…")
+		stop := ui.pushSpinner("Pushing to GitHub…")
+		var res PushResult
+		var perr error
+		ui.async(func() error {
+			resolved, err := ui.resolveForPush(saved)
+			if err != nil {
+				perr = err
+				return nil
+			}
+			saved = resolved
+			res, perr = PushEntry(ui.cfg, saved["issue"], saved["date"], saved["owner"],
+				mins, body, orDefault(saved["mode"], "issue"), saved["issue_url"])
+			return nil
+		}, func() {
+			stop()
+			if perr != nil {
+				mMsg.SetText("Saved as draft, but push failed: " + perr.Error() +
+					" Retry from the entry below.")
+				ui.drawRecent()
+				return
+			}
+			summary, _ := ui.applyPushResult(saved["id"], res)
+			ui.refreshAfterPush(saved["date"])
+			mMsg.SetText(strings.ReplaceAll(summary, "\n\n", "  |  "))
+			resetForm()
+		})
+	}
+
+	saveBtn := widget.NewButton("Save draft", func() { mSave(false) })
+	pushBtn := widget.NewButton("Save & push", func() { mSave(true) })
+	pushBtn.Importance = widget.HighImportance
+	// Push-as sits at the left, actions at the right — the mode is the last
+	// choice made before the button that acts on it, so they sit together on
+	// one line rather than the mode stacked above.
+	actionRow := container.NewBorder(nil, nil, mPushAs, container.NewHBox(saveBtn, pushBtn))
+
+	// Date on its own row so the picker's month can drop under it without
+	// fighting Minutes for width; Minutes rides alongside as a narrower field.
+	dateRow := container.New(newRatioRow(0.72, 0.28),
+		labelledPicker("Date", mDate),
+		labeled("Minutes", mMin),
+	)
 	manualPane := container.NewVBox(
-		container.New(newRatioRow(0.22, 0.56, 0.22),
-			labeled("Date", mDate),
-			labeled("Description", mDesc),
-			labeled("Minutes", mMin),
-		),
+		dateRow,
+		descRow,
 		otherRow, indepRow,
 		labeled("Remarks", mRemarks),
-		mBtn, mMsg,
+		actionRow, mMsg,
 	)
 	manualPane.Hide()
 
@@ -1103,19 +1223,32 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 				commitPane.Hide()
 				manualPane.Show()
 			}
-			// Only the field that kind needs, so the form never asks for an
+			// Only the fields each kind needs, so the form never asks for an
 			// issue link and a new issue's title at the same time.
+			showIf(descRow, kind == kindMeeting)
 			showIf(otherRow, kind == kindOther)
 			showIf(indepRow, kind == kindIndependent)
+			showIf(mPushAs, kind == kindOther || kind == kindIndependent)
 			switch kind {
 			case kindMeeting:
-				mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(isoDate(mDate), today())) + ".")
+				mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(mDate.ISO(), today())) + ".")
 			default:
 				mMsg.SetText("")
 			}
 		})
 	seg.Horizontal = true
 	seg.SetSelected("Commits")
+	// Meeting's hint line names the day's issue; picking a new date should retitle
+	// the hint so it matches what the push will file under.
+	prevDateChange := mDate.OnChanged
+	mDate.OnChanged = func(iso string) {
+		if prevDateChange != nil {
+			prevDateChange(iso)
+		}
+		if kind == kindMeeting {
+			mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(iso, today())) + ".")
+		}
+	}
 
 	ui.recentBox = container.NewVBox()
 	// The week sits under the saved entries: its columns grow as tall as the
