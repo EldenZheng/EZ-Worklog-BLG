@@ -215,10 +215,13 @@ func (p *worklogDatePicker) refresh() {
 	// What the board holds for this month, and what is saved here for it. Both
 	// are read through the same doors the rest of the app uses, so a month
 	// already fetched costs nothing and one that is not kicks its fetch off.
-	byDay := map[string]int{}
+	byDay := map[string]map[string]int{}
 	items, _ := p.ui.monthWorklogs(p.month)
 	for _, it := range items {
-		byDay[it.Date] += it.Minutes
+		if byDay[it.Date] == nil {
+			byDay[it.Date] = map[string]int{}
+		}
+		byDay[it.Date][itemOrg(it)] += it.Minutes
 	}
 	drafts := map[string]int{}
 	if from, to, err := monthBounds(p.month); err == nil {
@@ -251,7 +254,7 @@ func (p *worklogDatePicker) refresh() {
 // pickerCellMinHeight is a floor, not a size: the date, its score and what it
 // still owes, with enough room left that a day is a comfortable target for the
 // pointer.
-const pickerCellMinHeight = 58
+const pickerCellMinHeight = 74
 
 // dayOwedLine is the second caption under a date: what that day still owes,
 // counting the drafts, because those are hours already worked.
@@ -275,7 +278,11 @@ func dayOwedLine(mins, draft int) string {
 
 // dayCell is one day in the picker: the date, what it holds against the target,
 // and the wash that says which kind of day it is.
-func (p *worklogDatePicker) dayCell(ds string, day, mins, draft int) fyne.CanvasObject {
+func (p *worklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.CanvasObject {
+	mins := 0
+	for _, m := range byOrg {
+		mins += m
+	}
 	state := dayState(mins, draft)
 
 	num := canvas.NewText(strconv.Itoa(day), theme.Color(theme.ColorNameForeground))
@@ -310,8 +317,12 @@ func (p *worklogDatePicker) dayCell(ds string, day, mins, draft int) fyne.Canvas
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.SetMinSize(fyne.NewSize(0, pickerCellMinHeight))
 
-	stack := container.NewStack(floor, wash, border,
-		container.NewPadded(container.NewVBox(body...)))
+	// Use the Status cell's org fill and the Log tab's progress bar. Both read
+	// the same minutes; drafts stay yellow and never count as pushed work.
+	bar := meterBarWithDraft(p.ui.cfg, byOrg, map[string]int{"@draft": draft}, target, 6)
+	stack := container.NewStack(floor, wash,
+		vMeterFill(p.ui.cfg, byOrg, draft, target, cellCornerRadius), border,
+		container.NewPadded(container.NewBorder(nil, bar, nil, nil, container.NewVBox(body...))))
 	return newTappable(stack, func() {
 		p.date = ds
 		p.entry.SetText(ds)

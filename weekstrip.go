@@ -545,7 +545,7 @@ func (ui *UI) weekColumn(ds string, items []WorklogItem, local []Row) *dayColumn
 	}
 	body := []fyne.CanvasObject{
 		head,
-		meterBarWithDraft(ui.cfg, byOrg, draftByOrg, target, 8),
+		ui.progressBar("strip/"+t.Format("Mon"), ds, byOrg, draftByOrg, target, 8),
 		container.New(splitCaption{}, weekCaption(banked), weekCaption(projected)),
 	}
 
@@ -769,7 +769,7 @@ func (ui *UI) dayRowCard(r Row, refresh func()) fyne.CanvasObject {
 
 	push, edit, del := ui.rowActions(r, refresh)
 	body := container.NewVBox(title, mins, where,
-		container.NewBorder(nil, nil, push, container.NewHBox(edit, del)))
+		container.NewBorder(nil, nil, withPointerCursor(push), container.NewHBox(withPointerCursor(edit), withPointerCursor(del))))
 
 	bg := canvas.NewRectangle(blendColor(
 		theme.Color(theme.ColorNameInputBackground), accent, 0.10))
@@ -986,6 +986,8 @@ func newDragTile(ui *UI, r Row, content fyne.CanvasObject) *dragTile {
 func (t *dragTile) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(t.content)
 }
+
+func (t *dragTile) Cursor() desktop.Cursor { return desktop.PointerCursor }
 
 func (t *dragTile) Dragged(e *fyne.DragEvent) {
 	if !t.lifted {

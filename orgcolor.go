@@ -190,8 +190,29 @@ func meterBarWithDraft(cfg Config, byOrg, draft map[string]int, goal int, height
 	track := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
 	track.CornerRadius = height / 2
 	track.SetMinSize(fyne.NewSize(0, height))
-	if goal <= 0 {
+	var weights []float32
+	var segs []fyne.CanvasObject
+	for _, part := range meterParts(cfg, byOrg, draft, goal) {
+		weights = append(weights, part.weight)
+		seg := canvas.NewRectangle(part.fill)
+		seg.CornerRadius = height / 2
+		seg.SetMinSize(fyne.NewSize(0, height))
+		segs = append(segs, seg)
+	}
+	if len(segs) == 0 {
 		return track
+	}
+	if rest := 1 - sumOf(weights); rest > 0.001 {
+		weights = append(weights, rest)
+		segs = append(segs, canvas.NewRectangle(color.Transparent))
+	}
+	fill := container.New(newTightRow(weights...), segs...)
+	return container.NewStack(track, fill)
+}
+
+func meterParts(cfg Config, byOrg, draft map[string]int, goal int) []meterPart {
+	if goal <= 0 {
+		return nil
 	}
 
 	banked := orgsByShare(cfg, byOrg)
@@ -207,40 +228,26 @@ func meterBarWithDraft(cfg Config, byOrg, draft map[string]int, goal int, height
 	}
 	total += pending
 	if total <= 0 {
-		return track
+		return nil
 	}
 
-	var weights []float32
-	var segs []fyne.CanvasObject
+	var parts []meterPart
 	scale := 1.0
 	if total > goal {
 		scale = float64(goal) / float64(total) // full bar, shares preserved
 	}
-	add := func(mins int, fill color.Color) {
+	add := func(key string, mins int, fill color.Color) {
 		w := float32(float64(mins) / float64(goal) * scale)
 		if w <= 0 {
 			return
 		}
-		weights = append(weights, w)
-		seg := canvas.NewRectangle(fill)
-		seg.CornerRadius = height / 2
-		seg.SetMinSize(fyne.NewSize(0, height))
-		segs = append(segs, seg)
+		parts = append(parts, meterPart{key: key, fill: fill, weight: w})
 	}
 	for _, o := range banked {
-		add(byOrg[o], orgColor(cfg, o))
+		add(o, byOrg[o], orgColor(cfg, o))
 	}
-	add(pending, draftWash())
-	if rest := 1 - sumOf(weights); rest > 0.001 {
-		weights = append(weights, rest)
-		segs = append(segs, canvas.NewRectangle(color.Transparent))
-	}
-	if len(segs) == 0 {
-		return track
-	}
-	// Tight row: a meter's segments meet, they do not sit apart.
-	fill := container.New(newTightRow(weights...), segs...)
-	return container.NewStack(track, fill)
+	add("@draft", pending, draftWash())
+	return parts
 }
 
 // meterTint is how much of the org's colour goes into a calendar cell's fill.

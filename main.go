@@ -28,8 +28,9 @@ import (
 
 type tappable struct {
 	widget.BaseWidget
-	content fyne.CanvasObject
-	onTap   func()
+	content  fyne.CanvasObject
+	onTap    func()
+	feedback *cardFeedback
 }
 
 func newTappable(content fyne.CanvasObject, onTap func()) *tappable {
@@ -39,9 +40,15 @@ func newTappable(content fyne.CanvasObject, onTap func()) *tappable {
 }
 
 func (t *tappable) CreateRenderer() fyne.WidgetRenderer {
+	if t.feedback != nil {
+		return &feedbackRenderer{WidgetRenderer: widget.NewSimpleRenderer(t.content), feedback: t.feedback}
+	}
 	return widget.NewSimpleRenderer(t.content)
 }
 func (t *tappable) Tapped(_ *fyne.PointEvent) {
+	if t.feedback != nil {
+		t.feedback.press()
+	}
 	if t.onTap != nil {
 		t.onTap()
 	}
@@ -87,9 +94,9 @@ type UI struct {
 	// are wanted back.
 	showPushed *widget.Check
 
-	calTitle   *widget.Label
-	calSummary *widget.Label
-	repTitle   *widget.Label
+	calTitle    *widget.Label
+	calSummary  *widget.Label
+	repTitle    *widget.Label
 	listTitle   *widget.Label
 	listHere    *widget.Button // "This week" on Log List, greyed when already there
 	listSupport *widget.Check  // mirror of the Log Work support checkbox, kept in sync
@@ -147,6 +154,7 @@ type UI struct {
 	// what you are looking at, and it would have to be made three times over if
 	// switching tabs quietly brought the other one back.
 	orgOff map[string]bool
+	meters map[string]*meterMotion
 }
 
 // relayout re-measures the column a panel stands in, after the panel's contents
@@ -803,6 +811,7 @@ func main() {
 	// step: renaming "Log work" to "Log Work" quietly stopped the commit list
 	// refreshing when its tab was opened, because nothing matched any more.
 	ui.tabs.OnSelected = func(ti *container.TabItem) {
+		ui.finishProgress()
 		switch ti.Text {
 		case logWorkTabName:
 			ui.loadPending(false)
@@ -1258,7 +1267,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	ui.showPushed = widget.NewCheck("Also show entries already pushed this month", func(bool) {
 		ui.drawRecent()
 	})
-	logCard := widget.NewCard("", "", container.NewVBox(seg, commitPane, manualPane))
+	logCard := widget.NewCard("", "", container.NewVBox(withPointerCursor(seg), commitPane, manualPane))
 	// The key sits at the foot of the tab, where the Status tab keeps its own:
 	// it governs everything above it — the commits, the saved entries and the
 	// week — so it belongs under the lot rather than over one of them.
@@ -1447,7 +1456,7 @@ func (ui *UI) sections(groups []Group) fyne.CanvasObject {
 	var objs []fyne.CanvasObject
 	for i, s := range all {
 		if i > 0 {
-			objs = append(objs, widget.NewSeparator())
+			objs = append(objs, container.NewPadded(widget.NewSeparator()))
 		}
 		// The loose tiles are "other" only when something named stands above
 		// them. With nothing grouped they are the whole list, and a heading
@@ -1482,10 +1491,12 @@ func (ui *UI) sectionHeading(s pendingSection) fyne.CanvasObject {
 		}
 		side = fmt.Sprintf("%s  ·  %s", shortIssueLabel(info, s.issue), tally)
 	}
-	return container.NewHBox(
-		widget.NewLabelWithStyle(truncate(title, bubbleTitleChars),
-			fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabelWithStyle(side, fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
+	heading := widget.NewLabelWithStyle(truncate(title, bubbleTitleChars),
+		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	heading.Wrapping = fyne.TextWrapWord
+	detail := widget.NewLabelWithStyle(side, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	detail.Wrapping = fyne.TextWrapBreak
+	return container.NewVBox(heading, detail)
 }
 
 // bubbleGrid is one block of tiles, wrapped into as many rows as the width
@@ -1633,14 +1644,11 @@ func (ui *UI) groupBubble(g Group, underHeading bool) fyne.CanvasObject {
 	}
 	skip := widget.NewButton(action, func() { ui.setIgnored(g, !g.Ignored) })
 	skip.Importance = widget.LowImportance
-	// A spacer under it: in the right slot of a Border the button would
-	// otherwise be stretched down the whole height of the tile.
-	corner := container.NewVBox(skip, layout.NewSpacer())
-
-	// Border, not VBox: the footer stays pinned to the bottom of the fixed-size
-	// tile and the title takes whatever height is left, so tiles line up whether
-	// their heading wraps to one line or two.
-	body := container.NewBorder(nil, footer, nil, corner, titleLbl)
+	// The title gets the full width. The secondary action has its own short
+	// row so it cannot squeeze every line of a long title into a narrow column.
+	actionRow := container.NewHBox(layout.NewSpacer(), skip)
+	alignedFooter := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), footer)
+	body := container.NewBorder(nil, container.NewVBox(alignedFooter, actionRow), nil, nil, titleLbl)
 
 	// A plain Card is near-invisible on the dark theme — dark text on a dark
 	// surface against a dark window. Tint the surface towards the org's colour
@@ -1661,7 +1669,7 @@ func (ui *UI) groupBubble(g Group, underHeading bool) fyne.CanvasObject {
 	// the one it is given rather than shrinking inside it.
 	inner := container.NewBorder(nil, nil, stripe, nil, container.NewPadded(body))
 	tile := container.NewStack(bg, container.NewPadded(inner))
-	return newTappable(tile, func() { ui.openGroupEditor(g) })
+	return newCardTappable(tile, func() { ui.openGroupEditor(g) })
 }
 
 // shortIssueLabel drops the org from a ref. Every repo in view belongs to the
@@ -2659,12 +2667,12 @@ func (ui *UI) rowTile(r Row, refresh func()) fyne.CanvasObject {
 	// Minutes, not hours and minutes: this is the number that goes in the
 	// worklog field, and reading "1h 30m" here meant converting it back to 90
 	// every time before pushing.
-	foot := container.NewVBox(
+	foot := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), container.NewVBox(
 		caption(fmt.Sprintf("%s  ·  %d min  ·  %s", r["date"], r.Minutes(), issue)),
-		caption(state))
+		caption(state)))
 
 	push, edit, del := ui.rowActions(r, refresh)
-	actions := container.NewHBox(push, layout.NewSpacer(), edit, del)
+	actions := container.NewHBox(withPointerCursor(push), layout.NewSpacer(), withPointerCursor(edit), withPointerCursor(del))
 
 	body := container.NewBorder(nil, container.NewVBox(foot, actions), nil, nil, title)
 	bg := canvas.NewRectangle(blendColor(
@@ -3068,7 +3076,7 @@ func (ui *UI) drawDayPanel() {
 		head,
 		widget.NewLabelWithStyle(fmt.Sprintf("%d/%d min (%d%%)", total, target, pc),
 			fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-		meterBar(ui.cfg, byOrg, target, 12),
+		ui.progressBar("detail", ui.selDay, byOrg, nil, target, 12),
 	}
 	for _, org := range orgsByShare(ui.cfg, byOrg) {
 		body = append(body, container.New(newRatioRow(0.08, 0.52, 0.40),
@@ -3167,7 +3175,9 @@ func (ui *UI) buildReportTab() fyne.CanvasObject {
 		ui.drawReport()
 		ui.loadReport(true)
 	})
-	head := container.NewHBox(prev, ui.repTitle, next, layout.NewSpacer(), refresh, exportBtn)
+	navigation := container.NewHBox(prev, ui.repTitle, next)
+	actions := container.NewHBox(layout.NewSpacer(), refresh, exportBtn)
+	head := container.New(newFlowGrid(360, 0, 40), navigation, actions)
 
 	ui.repBox = container.NewVBox()
 	ui.repBody = container.NewVBox(head, ui.repBox)
@@ -3245,6 +3255,7 @@ func (ui *UI) drawReport() {
 	// Working days are read off the calendar, so the tile is right even for a
 	// period nobody has logged a minute into yet.
 	wdGone, wdTotal := workingDaysProgress(fromDate, toDate, today())
+	daysGone, daysTotal := calendarDaysProgress(fromDate, toDate, today())
 	wdLeft := wdTotal - wdGone
 	wdNote := fmt.Sprintf("Working days gone — %d left", wdLeft)
 	if wdTotal != divisor {
@@ -3262,17 +3273,28 @@ func (ui *UI) drawReport() {
 	}
 	supportNote = "Weekend support bonus (" + supportNote + ")"
 
-	stats := container.NewGridWithColumns(3,
-		statTile(money(totalReceivable), "Receivable including support"),
-		statTile(conv, "Converted receivable"),
-		statTile(money(supportBonus), supportNote),
-		statTile(fmt.Sprintf("%.2f", rep.PayableDays), "Payable days × "+money(rep.DailyRate)),
-		statTile(fmt.Sprintf("%d/%d", rep.DaysComplete, rep.DaysLogged), "Complete / logged"),
-		statTile(fmt.Sprintf("%d/%d", wdGone, wdTotal), wdNote),
-		statTile(fmt.Sprintf("%.1fh", float64(rep.TotalMin)/60), "Time logged"),
-		statTile(strconv.Itoa(len(items)), "Worklog items ("+orDefault(ui.cfg.WorklogOwner, "all")+")"),
-		statTile(hoursMins(draftTotal), "Saved here, not pushed"),
+	stats := container.New(newFlowGrid(260, 0, 126),
+		reportMetric(money(totalReceivable), "Receivable including support", "Converted receivable: "+conv),
+		reportMetric(fmt.Sprintf("%.1fh", float64(rep.TotalMin)/60), "Time logged", fmt.Sprintf("%d complete / %d logged days", rep.DaysComplete, rep.DaysLogged)),
+		reportMetric(hoursMins(draftTotal), "Saved here, not pushed", "Not included in receivable"),
 	)
+	payment := reportSection("Payment breakdown",
+		reportFact("Worklog receivable", money(rep.Receivable)),
+		reportFact("Weekend support bonus", money(supportBonus)),
+		reportText(supportNote),
+		widget.NewSeparator(),
+		reportFact("Payable days × "+money(rep.DailyRate), fmt.Sprintf("%.2f", rep.PayableDays)),
+		reportFact("Converted receivable", conv))
+	activity := reportSection("Period at a glance",
+		reportFact("Calendar days gone", fmt.Sprintf("%d/%d", daysGone, daysTotal)),
+		reportText(fmt.Sprintf("%d calendar days left · includes weekends; today is remaining", daysTotal-daysGone)),
+		widget.NewSeparator(),
+		reportFact("Complete / logged", fmt.Sprintf("%d/%d", rep.DaysComplete, rep.DaysLogged)),
+		reportFact("Working days gone", fmt.Sprintf("%d/%d", wdGone, wdTotal)),
+		reportText(wdNote),
+		widget.NewSeparator(),
+		reportFact("Worklog items", strconv.Itoa(len(items))),
+		reportText("Worklog owner: "+orDefault(ui.cfg.WorklogOwner, "all")))
 
 	// The chart is per day, so it needs the split per day — the period totals
 	// only say who the month belonged to, not which day was whose. Every day in
@@ -3341,26 +3363,24 @@ func (ui *UI) drawReport() {
 		split = append(split, widget.NewLabel("Nothing logged in this period."))
 	}
 
-	var detail []fyne.CanvasObject
+	var dayDetails []fyne.CanvasObject
 	if len(rep.Incomplete) > 0 {
-		detail = append(detail, bold("Days under 480"))
-		hdr := container.NewGridWithColumns(3, bold("Date"), bold("Logged"), bold("Missing"))
-		detail = append(detail, hdr)
+		rows := []fyne.CanvasObject{container.NewGridWithColumns(3, bold("Date"), bold("Logged (min)"), bold("Missing (min)"))}
 		for _, x := range rep.Incomplete {
-			detail = append(detail, container.NewGridWithColumns(3,
+			rows = append(rows, container.NewGridWithColumns(3,
 				widget.NewLabel(x.Date), widget.NewLabel(strconv.Itoa(x.Minutes)),
 				widget.NewLabel(strconv.Itoa(target-x.Minutes))))
 		}
+		dayDetails = append(dayDetails, reportSection("Days under 480", rows...))
 	}
 	if len(rep.Over) > 0 {
-		detail = append(detail, bold("Days over 480"))
-		hdr := container.NewGridWithColumns(3, bold("Date"), bold("Logged"), bold("Excess"))
-		detail = append(detail, hdr)
+		rows := []fyne.CanvasObject{container.NewGridWithColumns(3, bold("Date"), bold("Logged (min)"), bold("Excess (min)"))}
 		for _, x := range rep.Over {
-			detail = append(detail, container.NewGridWithColumns(3,
+			rows = append(rows, container.NewGridWithColumns(3,
 				widget.NewLabel(x.Date), widget.NewLabel(strconv.Itoa(x.Minutes)),
 				widget.NewLabel("+"+strconv.Itoa(x.Minutes-target))))
 		}
+		dayDetails = append(dayDetails, reportSection("Days over 480", rows...))
 	}
 	// With no salary set every figure on the tab is a real zero, which reads as
 	// a month that earned nothing rather than as a setting nobody has filled in.
@@ -3377,20 +3397,24 @@ func (ui *UI) drawReport() {
 		summary += fmt.Sprintf(" Rate 1 %s = %s %s, updated %s.",
 			rep.Currency, commaAmount(rep.FxRate), rep.DisplayCurrency, rep.FxUpdated)
 	}
-	detail = append(detail, widget.NewLabel(summary))
+	notes := []fyne.CanvasObject{reportText(summary)}
 	if draftTotal > 0 {
-		detail = append(detail, colorLabel(fmt.Sprintf(
+		notes = append(notes, reportWarning(fmt.Sprintf(
 			"%s in this period is saved on this machine and not pushed — drawn yellow on the "+
 				"chart and left out of every figure above. Push it from Log work to have it count.",
-			hoursMins(draftTotal)), theme.ColorNameWarning))
+			hoursMins(draftTotal))))
 	}
 
 	ui.repBox.Objects = []fyne.CanvasObject{
 		stats,
 		container.NewVBox(chart),
 		container.NewVBox(split...),
-		container.NewVBox(detail...),
+		container.New(newFlowGrid(360, 0, 0), payment, activity),
 	}
+	if len(dayDetails) > 0 {
+		ui.repBox.Objects = append(ui.repBox.Objects, container.New(newFlowGrid(360, 0, 0), dayDetails...))
+	}
+	ui.repBox.Objects = append(ui.repBox.Objects, reportSection("How this is calculated", notes...))
 	ui.repBox.Refresh()
 	relayout(ui.repBody)
 }
@@ -3635,13 +3659,6 @@ func wideSelect(sel *widget.Select) fyne.CanvasObject {
 	spacer := canvas.NewRectangle(color.Transparent)
 	spacer.SetMinSize(fyne.NewSize(w, 0))
 	return container.NewStack(spacer, sel)
-}
-
-func statTile(value, label string) fyne.CanvasObject {
-	return widget.NewCard("", "", container.NewVBox(
-		widget.NewLabelWithStyle(value, fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true}),
-		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{}),
-	))
 }
 
 // truncate elides to n characters. It counts runes, not bytes: cutting an issue

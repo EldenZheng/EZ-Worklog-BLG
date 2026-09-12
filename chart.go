@@ -354,6 +354,7 @@ func (ui *UI) chartWithReadout(days []chartDay, fromDate, toDate string) fyne.Ca
 		}
 	}
 	readout := widget.NewLabelWithStyle(idle, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	readout.Wrapping = fyne.TextWrapWord
 	chart.onHover = func(date string) {
 		if date == "" {
 			readout.SetText(idle)

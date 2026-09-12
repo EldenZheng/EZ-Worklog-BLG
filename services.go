@@ -238,6 +238,27 @@ func workingDaysProgress(fromDate, toDate, asOf string) (gone, total int) {
 	return gone, total
 }
 
+// calendarDaysProgress includes weekends. Only finished calendar dates count
+// as gone, matching workingDaysProgress: today remains available to log work.
+func calendarDaysProgress(fromDate, toDate, asOf string) (gone, total int) {
+	start, err1 := time.Parse("2006-01-02", fromDate)
+	end, err2 := time.Parse("2006-01-02", toDate)
+	if err1 != nil || err2 != nil || end.Before(start) {
+		return 0, 0
+	}
+	now, err := time.Parse("2006-01-02", asOf)
+	if err != nil {
+		now = end.AddDate(0, 0, 1)
+	}
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		total++
+		if d.Before(now) {
+			gone++
+		}
+	}
+	return gone, total
+}
+
 // totalsFromItems sums project worklog minutes per date for one month.
 func totalsFromItems(items []WorklogItem, month string) map[string]int {
 	t := map[string]int{}

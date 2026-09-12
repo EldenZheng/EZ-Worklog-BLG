@@ -4,6 +4,7 @@
 
 # Working copies kept beside a file while it was being changed.
 *.bak
+.build/
 
 # Personal data and credentials. config.json holds the Anthropic API key once
 # one is set in Settings, worklog.csv is the logged work itself, and

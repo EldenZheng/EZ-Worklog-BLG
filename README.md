@@ -53,11 +53,17 @@ go build -o Worklog .
 ./Worklog
 ```
 
-On Windows, drop the console window that would otherwise open behind the app:
+On Windows, use the application build script (and optionally run the offline tests):
 
 ```
-go build -ldflags "-H windowsgui -s -w" -o Worklog.exe .
+.\build.ps1 -Test -Output ..\Worklog.exe
 ```
+
+This hides the console window and applies the application's hand-cursor policy
+to Fyne buttons, checkboxes, radio options, dropdowns, popup menu items and tabs.
+The script builds a private copy of the pinned Fyne version under `.build`;
+it does not modify the shared module cache or the project's dependencies.
+A plain `go build` uses Fyne's default cursors.
 
 > **Use `go build`, not `go run .`** — the app keeps its data in the directory
 > the binary sits in, and `go run` builds into a temporary directory that is

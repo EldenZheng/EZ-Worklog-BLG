@@ -2,16 +2,64 @@ package main
 
 import (
 	"fmt"
+	"image/color"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+func TestPickerProgressUsesOrgAndDraftColours(t *testing.T) {
+	ui := statusUI(t)
+	defer fyne.CurrentApp().Quit()
+	ui.cfg.ProjectURL = "https://github.com/orgs/bigledger/projects/9"
+	ui.projItems[statusCacheKey("2026-08")] = []WorklogItem{
+		{Date: "2026-08-11", Minutes: 120, URL: "https://github.com/bigledger/repo/issues/1"},
+		{Date: "2026-08-11", Minutes: 60, ParentURL: "https://github.com/BigLedger-Support/repo/issues/2"},
+	}
+	if _, err := ui.store.AppendRows([]Row{{"date": "2026-08-11", "minutes": "60", "type": kindCommit, "issue": "bigledger/repo#3"}}); err != nil {
+		t.Fatal(err)
+	}
+	p := newWorklogDatePicker(ui, "2026-08-11")
+	check := func(want map[color.NRGBA]float32) {
+		t.Helper()
+		var cell *tappable
+		walk(p.grid, func(o fyne.CanvasObject) {
+			if c, ok := o.(*tappable); ok && contains(labels(c), "180/480") {
+				cell = c
+			}
+		})
+		if cell == nil {
+			t.Fatal("missing scored day")
+		}
+		cell.Resize(fyne.NewSize(200, 100))
+		widths := map[color.NRGBA]float32{}
+		walk(cell, func(o fyne.CanvasObject) {
+			if r, ok := o.(*canvas.Rectangle); ok && r.Size().Height == 6 {
+				widths[color.NRGBAModel.Convert(r.FillColor).(color.NRGBA)] += r.Size().Width
+			}
+		})
+		if widths[orgPalette[0]] <= 0 {
+			t.Fatal("missing blue progress segment")
+		}
+		for c, ratio := range want {
+			if got := widths[c] / widths[orgPalette[0]]; got < ratio-0.01 || got > ratio+0.01 {
+				t.Fatalf("progress colour %v has ratio %g, want %g", c, got, ratio)
+			}
+		}
+	}
+	check(map[color.NRGBA]float32{orgPalette[1]: 0.5, draftWash(): 0.5})
+	// Rendering progress must not change the selected date.
+	if p.ISO() != "2026-08-11" {
+		t.Fatal("rendering progress changed the selected date")
+	}
+}
 
 // The worklog date is chosen from a month grid that paints each day by how full
 // it already is — see datepicker.go for why fyne's own DateEntry could not.

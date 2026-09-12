@@ -238,7 +238,7 @@ func (ui *UI) listDayColumn(ds string, items []WorklogItem, local []Row) fyne.Ca
 
 	body := container.NewVBox(
 		head,
-		meterBarWithDraft(ui.cfg, byOrg, draftByOrg, target, 8),
+		ui.progressBar("list/"+t.Format("Mon"), ds, byOrg, draftByOrg, target, 8),
 		container.New(splitCaption{}, weekCaption(banked), weekCaption(projected)),
 	)
 	return container.NewStack(floor, frame, container.NewPadded(body))
@@ -317,11 +317,10 @@ func (ui *UI) weekProgressPanel(days []string, byDay map[string][]WorklogItem, i
 		}
 	}
 
-	return container.NewVBox(
-		container.NewHBox(bold("This week"), widget.NewLabelWithStyle(line,
-			fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})),
-		meterBarWithDraft(ui.cfg, byOrg, draftByOrg, goal, 10),
-	)
+	summary := widget.NewLabelWithStyle(line, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
+	summary.Wrapping = fyne.TextWrapWord
+	return container.NewVBox(bold("This week"), summary,
+		ui.progressBar("week", strings.Join(days, ","), byOrg, draftByOrg, goal, 10))
 }
 
 // weekGoal is what the week is measured against: the daily target for every day
