@@ -279,7 +279,8 @@ func fetchIssueInfo(ref string) (IssueInfo, error) {
 
 // FetchIssueInfos resolves many refs concurrently, de-duplicated. Errors are
 // returned per ref so one unreadable issue does not blank the rest.
-func FetchIssueInfos(refs []string) (map[string]IssueInfo, map[string]error) {
+func FetchIssueInfos(refs []string, progress ...func(fetchProgress)) (map[string]IssueInfo, map[string]error) {
+	counter := newFetchCounter("issue titles", progress)
 	infos := map[string]IssueInfo{}
 	errs := map[string]error{}
 	var mu sync.Mutex
@@ -292,9 +293,11 @@ func FetchIssueInfos(refs []string) (map[string]IssueInfo, map[string]error) {
 			continue
 		}
 		seen[ref] = true
+		counter.add()
 		wg.Add(1)
 		go func(ref string) {
 			defer wg.Done()
+			defer counter.finish()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			info, err := fetchIssueInfo(ref)
@@ -306,6 +309,7 @@ func FetchIssueInfos(refs []string) (map[string]IssueInfo, map[string]error) {
 			mu.Unlock()
 		}(ref)
 	}
+	counter.seal()
 	wg.Wait()
 	return infos, errs
 }
@@ -555,7 +559,7 @@ func worklogFromNode(content *projectItemContent, values []pvFieldValue) (Worklo
 // FetchProjectWorklogs reads a date range of an owner's worklogs directly from
 // the configured project. GitHub applies the owner/date filters before sending
 // results, avoiding both a full-board scan and one request per issue.
-func FetchProjectWorklogs(cfg Config, ownerFilter, fromDate, toDate string) ([]WorklogItem, error) {
+func FetchProjectWorklogs(cfg Config, ownerFilter, fromDate, toDate string, progress ...func(fetchProgress)) ([]WorklogItem, error) {
 	urls := projectURLs(cfg)
 	if len(urls) == 0 {
 		return nil, ghErr("Set the Worklog project URL in Settings to load Status and Report from GitHub.")
@@ -578,18 +582,48 @@ func FetchProjectWorklogs(cfg Config, ownerFilter, fromDate, toDate string) ([]W
 	}
 	filter := worklogProjectFilter(owner, fromDate, toDate)
 
-	// One board per org, so a month is the union of them all. A failure is not
-	// swallowed into a partial total: half a month reads as a real month and
-	// would under-report the pay, so the first board that cannot be read stops
-	// the lot and the tab shows why.
+	return fetchProjectBoards(urls, owner, filter, fetchOneProject, progress...)
+}
+
+// Independent boards can load together. Keep a small concurrency limit and
+// merge in configuration order so duplicate issues retain the same precedence.
+// Any failed board still fails the whole result: partial totals could underpay.
+func fetchProjectBoards(urls []string, owner, filter string,
+	fetch func(string, string, string) ([]WorklogItem, error), progress ...func(fetchProgress)) ([]WorklogItem, error) {
+	counter := newFetchCounter("boards", progress)
+	for range urls {
+		counter.add()
+	}
+	counter.seal()
+	type result struct {
+		items []WorklogItem
+		err   error
+	}
+	results := make([]result, len(urls))
+	var wg sync.WaitGroup
+	// Boards are independent GraphQL calls, so widen the concurrency: three at a
+	// time serialised most fetches behind the slowest board. Eight keeps the gh
+	// process from spawning a wave of workers on tokens that dislike it, while
+	// still letting a report with two or three boards run all of them at once.
+	limit := make(chan struct{}, 8)
+	for i, url := range urls {
+		wg.Add(1)
+		go func(i int, url string) {
+			defer wg.Done()
+			defer counter.finish()
+			limit <- struct{}{}
+			defer func() { <-limit }()
+			results[i].items, results[i].err = fetch(url, owner, filter)
+		}(i, url)
+	}
+	wg.Wait()
 	var items []WorklogItem
 	seen := map[string]bool{}
-	for _, u := range urls {
-		got, err := fetchOneProject(u, owner, filter)
-		if err != nil {
-			return nil, err
+	for _, result := range results {
+		if result.err != nil {
+			return nil, result.err
 		}
-		for _, it := range got {
+		for _, it := range result.items {
 			// A worklog issue can sit on two boards at once; counting it twice
 			// would inflate the day.
 			if it.URL != "" && seen[it.URL] {
@@ -1040,7 +1074,7 @@ func expandRepos(entries []string) ([]string, []string) {
 }
 
 // FetchPending returns unlogged commits in the lookback window, grouped.
-func (s *Store) FetchPending(cfg Config) (PendingResult, error) {
+func (s *Store) FetchPending(cfg Config, progress ...func(fetchProgress)) (PendingResult, error) {
 	days := cfg.LookbackDays
 	if days < 1 {
 		days = 7
@@ -1054,7 +1088,7 @@ func (s *Store) FetchPending(cfg Config) (PendingResult, error) {
 
 	sinceDate := start.Format("2006-01-02")
 	untilDate := endExclusive.AddDate(0, 0, -1).Format("2006-01-02")
-	commits, errs, err := s.gatherAuthorCommits(cfg, start, endExclusive)
+	commits, errs, err := s.gatherAuthorCommits(cfg, start, endExclusive, progress...)
 	if err != nil {
 		return PendingResult{}, err
 	}
@@ -1085,7 +1119,7 @@ func (s *Store) FetchPending(cfg Config) (PendingResult, error) {
 // newest-first. Unlike FetchPending it keeps commits that are already logged —
 // the Commit List tab shows what shipped, regardless of whether an entry was
 // written for it.
-func (s *Store) FetchWeekCommits(cfg Config, from, to string) ([]Commit, []string, error) {
+func (s *Store) FetchWeekCommits(cfg Config, from, to string, progress ...func(fetchProgress)) ([]Commit, []string, error) {
 	start, err := time.ParseInLocation("2006-01-02", from, time.Local)
 	if err != nil {
 		return nil, nil, err
@@ -1095,7 +1129,7 @@ func (s *Store) FetchWeekCommits(cfg Config, from, to string) ([]Commit, []strin
 		return nil, nil, err
 	}
 	endExclusive := end.AddDate(0, 0, 1)
-	commits, errs, err := s.gatherAuthorCommits(cfg, start, endExclusive)
+	commits, errs, err := s.gatherAuthorCommits(cfg, start, endExclusive, progress...)
 	if err != nil {
 		return nil, errs, err
 	}
@@ -1130,7 +1164,7 @@ func (s *Store) FetchWeekCommits(cfg Config, from, to string) ([]Commit, []strin
 // FetchPending (which then done-filters) and FetchWeekCommits (which does not).
 // Returns raw commits with duplicates and merges left in — callers pick which
 // filters apply.
-func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) ([]Commit, []string, error) {
+func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time, progress ...func(fetchProgress)) ([]Commit, []string, error) {
 	since := start.Format(time.RFC3339)
 	until := endExclusive.Format(time.RFC3339)
 
@@ -1150,8 +1184,6 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) (
 		}
 	}
 
-	// Split entries: bare org names use one fast search query; explicit
-	// owner/repo entries are scanned directly.
 	sinceDate := start.Format("2006-01-02")
 	untilDate := endExclusive.AddDate(0, 0, -1).Format("2006-01-02")
 	sem := make(chan struct{}, 8)
@@ -1163,28 +1195,24 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) (
 		}
 		mu.Unlock()
 	}
-	scan := func(entry string) {
-		defer wg.Done()
-		sem <- struct{}{}
-		defer func() { <-sem }()
-		if strings.Contains(entry, "/") {
-			collect(repoCommits(entry, "", author, since, until))
-		} else {
-			collect(searchCommits(entry, author, sinceDate, untilDate))
-		}
-	}
+
+	// Phase 1 — discovery. Pre-count the fixed set of listings: one event feed
+	// plus one repos-pushed-since call per bare-org config entry. That total is
+	// known before any request goes out, so the phase renders a percentage from
+	// the first finish onward instead of the old infinite bar.
+	bareOrgs := 0
 	for _, entry := range cfg.Repos {
 		entry = strings.TrimSpace(entry)
-		if entry == "" {
-			continue
+		if entry != "" && !strings.Contains(entry, "/") {
+			bareOrgs++
 		}
-		wg.Add(1)
-		go scan(entry)
 	}
+	counter := newFetchCounter("Discovering repositories and branches", progress)
+	counter.addPhase("Discovering repositories and branches", 1+bareOrgs)
 
-	// Neither source above sees unmerged branches, so also walk every branch the
-	// author worked on in the window and list it explicitly. Results are unioned
-	// with the default-branch sweep and de-duplicated by sha.
+	// Neither commit source below sees unmerged branches, so also walk every
+	// branch the author worked on in the window and list it explicitly. Results
+	// are unioned with the default-branch sweep and de-duplicated by sha.
 	//
 	// Which repos to walk comes from two places at once, because either alone
 	// has a hole. The organisation listing is authoritative but only covers the
@@ -1202,6 +1230,7 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) (
 	discoverWG.Add(1)
 	go func() {
 		defer discoverWG.Done()
+		defer counter.finish()
 		ev, refErr = userEvents(author, start, endExclusive)
 	}()
 	for i, entry := range cfg.Repos {
@@ -1213,6 +1242,7 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) (
 		discoverWG.Add(1)
 		go func() {
 			defer discoverWG.Done()
+			defer counter.finish()
 			names, e := reposPushedSince(entry, cutoff)
 			owned[i] = names
 			if e != "" {
@@ -1227,6 +1257,37 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) (
 		mu.Lock()
 		errs = append(errs, refErr)
 		mu.Unlock()
+	}
+
+	// Phase 2 — commit scans. Count the config-repo scans up front; branch scans
+	// come from the sweepRepos loop below (added as each repo's activity log is
+	// read), so the total may grow briefly. Emit-on-add keeps the percentage
+	// live and the caption tells the user which stage they are in.
+	scanStart := 0
+	for _, entry := range cfg.Repos {
+		if strings.TrimSpace(entry) != "" {
+			scanStart++
+		}
+	}
+	counter.addPhase("Scanning commits", scanStart)
+	scan := func(entry string) {
+		defer wg.Done()
+		defer counter.finish()
+		sem <- struct{}{}
+		defer func() { <-sem }()
+		if strings.Contains(entry, "/") {
+			collect(repoCommits(entry, "", author, since, until))
+		} else {
+			collect(searchCommits(entry, author, sinceDate, untilDate))
+		}
+	}
+	for _, entry := range cfg.Repos {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		wg.Add(1)
+		go scan(entry)
 	}
 
 	// The union, in config order first so the sweep starts on the repos the user
@@ -1266,9 +1327,11 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) (
 		if seen {
 			return
 		}
+		counter.add()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer counter.finish()
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			collect(repoCommits(p.repo, p.ref, author, since, until))
@@ -1302,6 +1365,7 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time) (
 		}()
 	}
 	branchWG.Wait()
+	counter.seal()
 	wg.Wait()
 
 	return commits, errs, nil
@@ -1596,6 +1660,7 @@ func exactField(fields []field, name string) *field {
 	}
 	return nil
 }
+
 type project struct {
 	ID     string `json:"id"`
 	Number int    `json:"number"`
@@ -1617,11 +1682,11 @@ type subIssue struct {
 }
 
 type issueNode struct {
-	ID           string `json:"id"`
-	Number       int    `json:"number"`
-	Title        string `json:"title"`
-	URL          string `json:"url"`
-	SubIssues    struct {
+	ID        string `json:"id"`
+	Number    int    `json:"number"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
+	SubIssues struct {
 		Nodes []subIssue `json:"nodes"`
 	} `json:"subIssues"`
 	ProjectItems struct {
@@ -1909,7 +1974,8 @@ func setStatusDone(projectID, itemID string, fields []field) (string, error) {
 // addProjectV2ItemById returns the existing item when the content is already on
 // the board, so calling it again after a partial failure is safe.
 func pushToProject(issueURL, contentID string, items []projectItem,
-	wdate, owner string, mins int, remarks string, notes, problems []string) (PushResult, error) {
+	wdate, owner string, mins int, remarks string, notes, problems []string,
+	emit func(int, string), from, to int) (PushResult, error) {
 
 	chosen := pickProject(items)
 	if chosen == nil {
@@ -1919,6 +1985,12 @@ func pushToProject(issueURL, contentID string, items []projectItem,
 		}, nil
 	}
 	proj := &chosen.Project
+	// Split the [from, to] slice into three equal stretches: add / setFields /
+	// setStatus. Anchoring the ticks to the slice this call was handed keeps the
+	// bar moving forward whether the caller drops us in at 25 or at 70.
+	span := to - from
+	step := span / 3
+	emit(from, "Adding to board")
 	out, err := gh([]string{
 		"api", "graphql", "-f",
 		"query=mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}",
@@ -1941,6 +2013,7 @@ func pushToProject(issueURL, contentID string, items []projectItem,
 	}
 	targetItem := addResp.Data.Add.Item.ID
 
+	emit(from+step, "Setting fields")
 	done, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
 	if len(done) == 0 {
 		problems = append(problems, "No Worklog fields matched on this project board.")
@@ -1948,11 +2021,13 @@ func pushToProject(issueURL, contentID string, items []projectItem,
 	problems = append(problems, failed...)
 
 	// Status is set last: a failure here should not cost the field values.
+	emit(from+2*step, "Setting status")
 	if name, err := setStatusDone(proj.ID, targetItem, proj.Fields.Nodes); err != nil {
 		problems = append(problems, "Could not set Status to Done: "+err.Error())
 	} else if name != "" {
 		done = append(done, name+" = Done")
 	}
+	emit(to, "Done")
 	return PushResult{
 		URL: issueURL, ItemID: targetItem,
 		FieldsSet: done, Notes: notes, Problems: problems,
@@ -2001,11 +2076,25 @@ func lastLine(s string) string {
 // row's issue_url. Empty means there is nothing to pick back up and a new
 // sub-issue is created — including when another entry has already filed one
 // under the same title for the same day.
-func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, resume string) (PushResult, error) {
+//
+// The variadic progress callbacks receive fetchProgress events at each named
+// step, so a push spinner can render "Creating sub-issue — 40%" instead of
+// a bare wheel. done is out of 100 in every emit — the caller need not scale.
+func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, resume string, progress ...func(fetchProgress)) (PushResult, error) {
+	emit := func(done int, stage string) {
+		p := fetchProgress{Done: done, Total: 100, Stage: stage}
+		for _, f := range progress {
+			if f != nil {
+				f(p)
+			}
+		}
+	}
+	emit(5, "Reading issue")
 	o, r, _, issue, err := getIssueContext(ref)
 	if err != nil {
 		return PushResult{}, err
 	}
+	emit(15, "Reading issue")
 	items := issue.ProjectItems.Nodes
 	var notes, problems []string
 	var targetItem string
@@ -2034,7 +2123,8 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 		if existing := findSubIssueByURL(issue, resume); existing != nil {
 			notes = append(notes, fmt.Sprintf(
 				"Reused sub-issue #%d from an earlier attempt on this entry.", existing.Number))
-			return pushToProject(existing.URL, existing.ID, items, wdate, owner, mins, remarks, notes, problems)
+			emit(25, "Reusing sub-issue")
+			return pushToProject(existing.URL, existing.ID, items, wdate, owner, mins, remarks, notes, problems, emit, 25, 100)
 		}
 
 		// Numbered only if the day already has one on this issue, so a normal
@@ -2047,6 +2137,7 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 				wdate, part))
 		}
 
+		emit(25, "Creating sub-issue")
 		// The parent link and the issue type go through GraphQL rather than
 		// `gh issue create` flags: gh 2.93 has neither --parent nor --type, so
 		// passing them made every create fail into a fallback that silently
@@ -2059,7 +2150,7 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 			return PushResult{}, err
 		}
 		createdURL = lastLine(out)
-
+		emit(40, "Reading new sub-issue")
 		newID, e := viewID(createdURL)
 		if e != nil {
 			// The sub-issue exists whatever happened next, so its URL goes back
@@ -2070,6 +2161,7 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 			return PushResult{URL: createdURL, Notes: notes, Problems: append(problems,
 				"Created the sub-issue but could not read its id: "+e.Error())}, nil
 		}
+		emit(50, "Linking sub-issue")
 		if _, e := gh([]string{
 			"api", "graphql", "-f",
 			"query=mutation($p:ID!,$c:ID!){addSubIssue(input:{issueId:$p,subIssueId:$c}){issue{number}}}",
@@ -2077,6 +2169,7 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 		}, "GraphQL-Features: sub_issues"); e != nil {
 			problems = append(problems, "Could not link as sub-issue: "+e.Error())
 		}
+		emit(60, "Setting issue type")
 		typeID, typeErr := issueTypeID(o, "Worklog")
 		switch {
 		case errors.Is(typeErr, errNoIssueType):
@@ -2088,7 +2181,7 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 				problems = append(problems, "Could not set the Worklog issue type: "+e.Error())
 			}
 		}
-		return pushToProject(createdURL, newID, items, wdate, owner, mins, remarks, notes, problems)
+		return pushToProject(createdURL, newID, items, wdate, owner, mins, remarks, notes, problems, emit, 70, 100)
 	} else {
 		chosen := pickProject(items)
 		if chosen == nil {
@@ -2099,16 +2192,19 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 	}
 
 	// "issue" mode: the ref itself is the board item, so only fields are set.
+	emit(30, "Setting fields")
 	done, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
 	if len(done) == 0 {
 		problems = append(problems, "No Worklog fields matched on this project board.")
 	}
 	problems = append(problems, failed...)
+	emit(80, "Setting status")
 	if name, err := setStatusDone(proj.ID, targetItem, proj.Fields.Nodes); err != nil {
 		problems = append(problems, "Could not set Status to Done: "+err.Error())
 	} else if name != "" {
 		done = append(done, name+" = Done")
 	}
+	emit(100, "Done")
 	return PushResult{
 		URL: resultURL, ItemID: targetItem,
 		FieldsSet: done, Notes: notes, Problems: problems,

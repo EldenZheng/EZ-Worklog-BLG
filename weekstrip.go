@@ -323,7 +323,7 @@ func (ui *UI) drawWeekStrip() {
 		ui.drawWeekStrip()
 	}
 
-	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), support, mail,
+	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), goldChoice(support), mail,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
 
 	// Any column about to be thrown away stops breathing first: an animation left
@@ -769,7 +769,7 @@ func (ui *UI) dayRowCard(r Row, refresh func()) fyne.CanvasObject {
 
 	push, edit, del := ui.rowActions(r, refresh)
 	body := container.NewVBox(title, mins, where,
-		container.NewBorder(nil, nil, withPointerCursor(push), container.NewHBox(withPointerCursor(edit), withPointerCursor(del))))
+		container.NewBorder(nil, nil, compactPush(push), container.NewHBox(withPointerCursor(edit), withPointerCursor(del))))
 
 	bg := canvas.NewRectangle(blendColor(
 		theme.Color(theme.ColorNameInputBackground), accent, 0.10))
@@ -987,7 +987,7 @@ func (t *dragTile) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(t.content)
 }
 
-func (t *dragTile) Cursor() desktop.Cursor { return desktop.PointerCursor }
+func (t *dragTile) Cursor() desktop.Cursor { return grabCursor{} }
 
 func (t *dragTile) Dragged(e *fyne.DragEvent) {
 	if !t.lifted {

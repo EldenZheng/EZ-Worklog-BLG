@@ -43,6 +43,8 @@ func labels(o fyne.CanvasObject) []string {
 		}
 	case *container.Scroll:
 		out = append(out, labels(v.Content)...)
+	case *container.ThemeOverride:
+		out = append(out, labels(v.Content)...)
 	}
 	return out
 }

@@ -85,11 +85,12 @@ func (ui *UI) buildLogListTab() fyne.CanvasObject {
 	// Support sits on the left, before the spacer: on a smaller window the
 	// trailing buttons can push the right-hand end out to where the scroll
 	// clipped it, taking the checkbox with them if it stood over there.
-	head := container.NewHBox(prev, ui.listTitle, next, here, support,
+	head := container.NewHBox(prev, ui.listTitle, next, here, goldChoice(support),
 		layout.NewSpacer(), refresh, mail)
 
 	ui.listBox = container.NewVBox()
-	ui.listBody = container.NewVBox(head, ui.listBox)
+	ui.listProgress = newLoadingIndicator()
+	ui.listBody = container.NewVBox(head, ui.listProgress.view, ui.listBox)
 	return container.NewVScroll(widget.NewCard("", "", ui.listBody))
 }
 

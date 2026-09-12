@@ -47,6 +47,17 @@ func (c *$($control.Type)) Cursor() desktop.Cursor {
             }
             $code += "`n" + $method + "`n"
         }
+        if ($control.Type -eq 'Button') {
+            # Standard gold buttons need dark labels and icons; primary blue
+            # actions and low-importance icon controls keep their own colours.
+            $original = "default:`n`t`t`tbackground = theme.ColorNameButton"
+            $replacement = "default:`n`t`t`tforeground = theme.ColorNameForegroundOnWarning`n`t`t`tbackground = theme.ColorNameButton"
+            if (-not $code.Contains($original)) { throw 'Review the standard button foreground policy for this Fyne version.' }
+            $code = $code.Replace($original, $replacement)
+            $original = 'r.button.Importance != MediumImportance && r.button.Importance != LowImportance'
+            if (-not $code.Contains($original)) { throw 'Review the button icon foreground policy for this Fyne version.' }
+            $code = $code.Replace($original, 'r.button.Importance != LowImportance')
+        }
         $patched = Join-Path $dependency $control.File
         (Get-Item -LiteralPath $patched).IsReadOnly = $false
         [System.IO.File]::WriteAllText($patched, $code, $utf8)

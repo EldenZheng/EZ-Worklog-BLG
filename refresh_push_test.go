@@ -263,7 +263,7 @@ func TestPushSpinnerCoversTheWindowUntilStopped(t *testing.T) {
 	w.SetContent(widget.NewLabel("behind"))
 	ui := &UI{store: newStore(t.TempDir()), win: w}
 
-	stop := ui.pushSpinner("Pushing to GitHub…")
+	_, stop := ui.pushSpinner("Pushing to GitHub…")
 	if w.Canvas().Overlays().Top() == nil {
 		t.Fatal("the spinner should be in front of the window while the push runs")
 	}

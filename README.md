@@ -61,9 +61,10 @@ On Windows, use the application build script (and optionally run the offline tes
 
 This hides the console window and applies the application's hand-cursor policy
 to Fyne buttons, checkboxes, radio options, dropdowns, popup menu items and tabs.
+It also gives standard gold buttons contrasting dark labels and icons.
 The script builds a private copy of the pinned Fyne version under `.build`;
 it does not modify the shared module cache or the project's dependencies.
-A plain `go build` uses Fyne's default cursors.
+A plain `go build` uses Fyne's default cursors and button foreground colours.
 
 > **Use `go build`, not `go run .`** — the app keeps its data in the directory
 > the binary sits in, and `go run` builds into a temporary directory that is

@@ -136,7 +136,7 @@ func TestProgressDoesNotAnimateHiddenTabs(t *testing.T) {
 	defer a.Quit()
 	a.NewWindow("test")
 	ui := &UI{cfg: Config{Repos: []string{"bigledger"}}}
-	ui.tabs = container.NewAppTabs(container.NewTabItem(statusTabName, canvas.NewRectangle(nil)))
+	ui.tabs = newPillTabs(container.NewTabItem(statusTabName, canvas.NewRectangle(nil)))
 	ui.progressBar("strip/Mon", "2026-09-07", nil, nil, target, 8)
 	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"bigledger": 240}, nil, target, 8)
 	m := ui.meters["strip/Mon"]

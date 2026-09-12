@@ -79,7 +79,7 @@ type UI struct {
 	repBox     *fyne.Container
 	listBox    *fyne.Container // the Log List tab: boards, the week by issue, what is pending
 	commitBox  *fyne.Container // the Commit List tab: this week's commits by day and parent issue
-	tabs       *container.AppTabs
+	tabs       *pillTabs
 
 	// The column each tab's panels stand in. Held so a panel that changed height
 	// can have its column re-measure it — see relayout.
@@ -153,8 +153,14 @@ type UI struct {
 	// whole app rather than one per tab: hiding an employer is a decision about
 	// what you are looking at, and it would have to be made three times over if
 	// switching tabs quietly brought the other one back.
-	orgOff map[string]bool
-	meters map[string]*meterMotion
+	orgOff                                                      map[string]bool
+	meters                                                      map[string]*meterMotion
+	commitProgress                                              *loadingIndicator
+	reportProgress                                              *loadingIndicator
+	logProgress, listProgress, statusProgress, settingsProgress *loadingIndicator
+	fetchJobs                                                   map[*fetchJob]bool
+	profileBox                                                  *fyne.Container
+	profileLoaded, profileLoading                               bool
 }
 
 // relayout re-measures the column a panel stands in, after the panel's contents
@@ -336,6 +342,7 @@ func (ui *UI) loadPending(force bool) {
 		}
 	}
 	ui.pendingLoading = true
+	progress, finish := ui.beginFetch("pending", "Discovering repositories and branches")
 	// A stale list is left on screen while the new one is fetched; only a first
 	// load or a button press has nothing worth looking at behind the wait.
 	if force || !ui.pendingLoaded {
@@ -344,16 +351,24 @@ func (ui *UI) loadPending(force bool) {
 		relayout(ui.logBody)
 	}
 
+	// One combined bar for commits + issue titles. Weights are wall-clock
+	// approximations: the commit sweep dominates, so it takes 80 of 100 slots
+	// and the title lookup fills the last 20. That way the bar climbs to 100%
+	// exactly once, at the end of the title lookup — never overshoots halfway
+	// then falls back.
+	composer := newProgressComposer(progress)
+	const pendingWeight, titlesWeight = 80.0, 20.0
+
 	var res PendingResult
 	var ferr error
 	ui.async(func() error {
-		// Errors are carried out rather than returned so the loading flag is
-		// always cleared; a stuck flag would block every later fetch.
-		res, ferr = ui.store.FetchPending(ui.cfg)
+		res, ferr = ui.store.FetchPending(ui.cfg, composer.phase(pendingWeight))
 		return nil
 	}, func() {
 		ui.pendingLoading = false
+		composer.advance(pendingWeight)
 		if ferr != nil {
+			finish()
 			ui.pendingBox.Objects = []fyne.CanvasObject{colorLabel(ferr.Error(), theme.ColorNameError)}
 			ui.pendingBox.Refresh()
 			relayout(ui.logBody)
@@ -363,7 +378,7 @@ func (ui *UI) loadPending(force bool) {
 		ui.pendingAt = time.Now()
 		ui.pending = res
 		ui.renderPending()
-		ui.loadIssueInfos()
+		ui.loadIssueInfos(composer, titlesWeight, finish)
 	})
 }
 
@@ -394,7 +409,11 @@ func (ui *UI) loadWeekCommits(force bool) {
 		return // buildCommitListTab shows the same nudge Log Work does
 	}
 	ui.weekCommitLoad[weekStart] = true
+	progress, finish := ui.beginFetch("commits:"+weekStart, "Discovering repositories and branches")
 	ui.drawCommitList() // repaint so the header can say "fetching…"
+
+	composer := newProgressComposer(progress)
+	const commitsWeight, titlesWeight = 80.0, 20.0
 
 	var (
 		commits []Commit
@@ -402,11 +421,13 @@ func (ui *UI) loadWeekCommits(force bool) {
 		ferr    error
 	)
 	ui.async(func() error {
-		commits, errs, ferr = ui.store.FetchWeekCommits(ui.cfg, from, to)
+		commits, errs, ferr = ui.store.FetchWeekCommits(ui.cfg, from, to, composer.phase(commitsWeight))
 		return nil
 	}, func() {
 		ui.weekCommitLoad[weekStart] = false
+		composer.advance(commitsWeight)
 		if ferr != nil {
+			finish()
 			ui.weekCommitErrs[weekStart] = []string{ferr.Error()}
 			ui.drawCommitList()
 			return
@@ -415,8 +436,9 @@ func (ui *UI) loadWeekCommits(force bool) {
 		ui.weekCommitErrs[weekStart] = errs
 		ui.weekCommitAt[weekStart] = time.Now()
 		// Seed issue titles for the commits' parent issues so bubbles show a
-		// title rather than a bare owner/repo#123. Reuses loadPending's cache.
-		ui.loadCommitIssueInfos(commits)
+		// title rather than a bare owner/repo#123. Reuses loadPending's cache
+		// and rides on the same progress job so the strip carries through.
+		ui.loadCommitIssueInfos(commits, weekStart, composer, titlesWeight, finish)
 		ui.drawCommitList()
 	})
 }
@@ -433,8 +455,8 @@ func (ui *UI) ensureWeekCommitCache() {
 // loadCommitIssueInfos resolves the parent-issue titles behind the fetched
 // commits, so a bubble labelled "bigledger/blg-intranet#42" gains its title.
 // Piggybacks the same issueInfo cache pendings use, so an issue seen on both
-// tabs only fetches once.
-func (ui *UI) loadCommitIssueInfos(commits []Commit) {
+// tabs only fetches once. Rides on the caller's composer as its final phase.
+func (ui *UI) loadCommitIssueInfos(commits []Commit, week string, composer *progressComposer, weight float64, finish func()) {
 	if ui.issueInfo == nil {
 		ui.issueInfo = map[string]IssueInfo{}
 	}
@@ -450,13 +472,17 @@ func (ui *UI) loadCommitIssueInfos(commits []Commit) {
 		}
 	}
 	if len(refs) == 0 {
+		composer.advance(weight)
+		finish()
 		return
 	}
 	var infos map[string]IssueInfo
 	ui.async(func() error {
-		infos, _ = FetchIssueInfos(refs)
+		infos, _ = FetchIssueInfos(refs, composer.phase(weight))
 		return nil
 	}, func() {
+		composer.advance(weight)
+		defer finish()
 		for ref, info := range infos {
 			ui.issueInfo[ref] = info
 		}
@@ -466,7 +492,11 @@ func (ui *UI) loadCommitIssueInfos(commits []Commit) {
 
 // loadIssueInfos fills in the issue titles behind the pending refs, then
 // re-renders. Bubbles appear immediately and gain their title a moment later.
-func (ui *UI) loadIssueInfos() {
+//
+// Runs inside the pending fetch's own progress job as a final phase in the
+// caller's composer — the bar reads as one continuous 0-to-100 climb rather
+// than restarting at zero for the title lookup.
+func (ui *UI) loadIssueInfos(composer *progressComposer, weight float64, finish func()) {
 	if ui.issueInfo == nil {
 		ui.issueInfo = map[string]IssueInfo{}
 	}
@@ -480,13 +510,17 @@ func (ui *UI) loadIssueInfos() {
 		}
 	}
 	if len(refs) == 0 {
+		composer.advance(weight)
+		finish()
 		return
 	}
 	var infos map[string]IssueInfo
 	ui.async(func() error {
-		infos, _ = FetchIssueInfos(refs)
+		infos, _ = FetchIssueInfos(refs, composer.phase(weight))
 		return nil
 	}, func() {
+		composer.advance(weight)
+		defer finish()
 		for ref, info := range infos {
 			ui.issueInfo[ref] = info
 		}
@@ -559,10 +593,12 @@ func (ui *UI) loadProject(key, fromDate, toDate string, force bool) {
 	}
 	ui.projLoading[key] = true
 	ui.projErr[key] = nil
+	progress, finish := ui.beginFetch(key, "Loading project boards")
 	go func() {
 		defer ui.recoverToDialog("load project")
-		items, err := FetchProjectWorklogs(ui.cfg, ui.cfg.WorklogOwner, fromDate, toDate)
+		items, err := FetchProjectWorklogs(ui.cfg, ui.cfg.WorklogOwner, fromDate, toDate, progress)
 		fyne.Do(func() {
+			defer finish()
 			ui.projLoading[key] = false
 			ui.projErr[key] = err
 			if err == nil {
@@ -789,6 +825,7 @@ const windowTitle = "Worklog"
 
 func main() {
 	a := app.NewWithID("com.eldenz.worklog")
+	a.Settings().SetTheme(goldTheme{Theme: theme.DefaultTheme()})
 	a.SetIcon(fyne.NewStaticResource("icon.png", appIconPNG))
 	w := a.NewWindow(windowTitle)
 	// The size to come back to if the window is un-maximised.
@@ -812,6 +849,7 @@ func main() {
 	// refreshing when its tab was opened, because nothing matched any more.
 	ui.tabs.OnSelected = func(ti *container.TabItem) {
 		ui.finishProgress()
+		ui.syncLoading()
 		switch ti.Text {
 		case logWorkTabName:
 			ui.loadPending(false)
@@ -828,6 +866,8 @@ func main() {
 			ui.refreshRate(false)
 			ui.drawReport()
 			ui.loadReport(false)
+		case settingsTabName:
+			ui.loadGitHubProfile(false)
 		}
 	}
 	w.SetContent(ui.tabs)
@@ -879,6 +919,7 @@ func (ui *UI) refreshRate(force bool) {
 		base = "MYR"
 	}
 	ui.rateLoading = true
+	_, finish := ui.beginFetch("rate", "Fetching exchange rate")
 	var r float64
 	ui.async(func() error {
 		v, _ := fetchRate(base, disp)
@@ -886,6 +927,7 @@ func (ui *UI) refreshRate(force bool) {
 		return nil // a rate that will not load must not pop a dialog over the tab
 	}, func() {
 		ui.rateLoading = false
+		defer finish()
 		if r <= 0 {
 			return // keep yesterday's rate rather than zeroing the conversion
 		}
@@ -900,13 +942,13 @@ func (ui *UI) refreshRate(force bool) {
 // between tabs — a bar on the report opening a day on the calendar — can be
 // exercised without a window manager.
 func (ui *UI) buildAllTabs() {
-	ui.tabs = container.NewAppTabs(
+	ui.tabs = newPillTabs(
 		container.NewTabItem(logWorkTabName, ui.buildLogTab()),
 		container.NewTabItem(logListTabName, ui.buildLogListTab()),
 		container.NewTabItem(commitListTabName, ui.buildCommitListTab()),
 		container.NewTabItem(statusTabName, ui.buildStatusTab()),
 		container.NewTabItem(reportTabName, ui.buildReportTab()),
-		container.NewTabItem(settingsTabName, ui.buildSettingsTab()),
+		container.NewTabItemWithIcon(settingsTabName, theme.SettingsIcon(), ui.buildSettingsTab()),
 	)
 }
 
@@ -933,32 +975,48 @@ func (ui *UI) async(work func() error, done func()) {
 	}()
 }
 
-// pushSpinner puts a turning wheel in front of the window while a push runs.
+// pushSpinner puts a thin progress bar with a caption and percentage in front
+// of the window while a push runs. Callers get back two funcs: a progress
+// callback the push emits to as each step lands, and a stop that closes the
+// modal.
 //
 // A push is several round trips — the sub-issue, then a board write per field —
 // and the only sign it was running was a line of text in the popup. The window
 // looked hung, and the button looked ready for a second click. The modal says
-// wait and takes the clicks in the meantime.
+// wait, shows what step is running, and takes the clicks in the meantime.
 //
-// The returned func stops the wheel and takes the modal down. It is safe to
-// call twice, and must be called on the UI thread — which is where async runs
-// its done func.
-func (ui *UI) pushSpinner(label string) func() {
-	wheel := widget.NewActivity()
-	wheel.Start()
+// The returned stop is safe to call twice, and must be called on the UI thread
+// — which is where async runs its done func. The progress callback is safe to
+// call from a background goroutine; it hops onto the UI thread on its own.
+func (ui *UI) pushSpinner(label string) (func(fetchProgress), func()) {
+	ind := newLoadingIndicator()
+	ind.setActive(true)
+	// A fixed narrow width keeps the modal compact — the bar is a signal that
+	// something is running, not a canvas to be filled. GridWrap enforces the
+	// min size on the strip while letting its height come from the indicator.
+	sized := container.New(layout.NewGridWrapLayout(fyne.NewSize(320, ind.view.MinSize().Height)), ind.view)
 	d := dialog.NewCustomWithoutButtons(label,
-		container.NewPadded(container.NewCenter(wheel)), ui.win)
+		container.NewPadded(sized), ui.win)
 	d.Show()
 
 	stopped := false
-	return func() {
+	progress := func(p fetchProgress) {
+		fyne.Do(func() {
+			if stopped {
+				return
+			}
+			ind.showProgress(true, p)
+		})
+	}
+	stop := func() {
 		if stopped {
 			return
 		}
 		stopped = true
-		wheel.Stop()
+		ind.setActive(false)
 		d.Hide()
 	}
+	return progress, stop
 }
 
 // recoverToDialog turns a panic into a logged crash.log entry + error dialog,
@@ -1167,7 +1225,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		}
 
 		mMsg.SetText("Pushing…")
-		stop := ui.pushSpinner("Pushing to GitHub…")
+		pushProgress, stop := ui.pushSpinner("Pushing to GitHub…")
 		var res PushResult
 		var perr error
 		ui.async(func() error {
@@ -1178,7 +1236,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			}
 			saved = resolved
 			res, perr = PushEntry(ui.cfg, saved["issue"], saved["date"], saved["owner"],
-				mins, body, orDefault(saved["mode"], "issue"), saved["issue_url"])
+				mins, body, orDefault(saved["mode"], "issue"), saved["issue_url"], pushProgress)
 			return nil
 		}, func() {
 			stop()
@@ -1201,7 +1259,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// Push-as sits at the left, actions at the right — the mode is the last
 	// choice made before the button that acts on it, so they sit together on
 	// one line rather than the mode stacked above.
-	actionRow := container.NewBorder(nil, nil, mPushAs, container.NewHBox(saveBtn, pushBtn))
+	actionRow := container.NewBorder(nil, nil, mPushAs, container.NewHBox(saveBtn, ovalPush(pushBtn)))
 
 	// Date on its own row so the picker's month can drop under it without
 	// fighting Minutes for width; Minutes rides alongside as a narrower field.
@@ -1267,7 +1325,8 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	ui.showPushed = widget.NewCheck("Also show entries already pushed this month", func(bool) {
 		ui.drawRecent()
 	})
-	logCard := widget.NewCard("", "", container.NewVBox(withPointerCursor(seg), commitPane, manualPane))
+	choices := container.NewThemeOverride(withPointerCursor(seg), radioTheme{Theme: theme.Current()})
+	logCard := widget.NewCard("", "", container.NewVBox(choices, commitPane, manualPane))
 	// The key sits at the foot of the tab, where the Status tab keeps its own:
 	// it governs everything above it — the commits, the saved entries and the
 	// week — so it belongs under the lot rather than over one of them.
@@ -1280,7 +1339,8 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// being carried has to pass over everything, and inside the scroll it would
 	// be painted over by whatever the tab drew after it.
 	ui.dragLayer = container.NewWithoutLayout()
-	ui.logBody = container.NewVBox(logCard, recentCard)
+	ui.logProgress = newLoadingIndicator()
+	ui.logBody = container.NewVBox(ui.logProgress.view, logCard, recentCard)
 	return container.NewStack(container.NewVScroll(ui.logBody), ui.dragLayer)
 }
 
@@ -2028,7 +2088,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			return
 		}
 		msg.SetText("Pushing…")
-		stop := ui.pushSpinner("Pushing to GitHub…")
+		pushProgress, stop := ui.pushSpinner("Pushing to GitHub…")
 		var res PushResult
 		var perr error
 		ui.async(func() error {
@@ -2039,7 +2099,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			}
 			r = resolved
 			res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-				mins, body, orDefault(r["mode"], "issue"), r["issue_url"])
+				mins, body, orDefault(r["mode"], "issue"), r["issue_url"], pushProgress)
 			return nil // handle the push error inline so the edit is not lost
 		}, func() {
 			stop()
@@ -2101,7 +2161,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	// Caption beside the dropdown rather than stacked over it: the bar shares a
 	// line with Back, and a two-row label would drag that whole line taller.
 	actions := container.NewHBox(
-		widget.NewLabel("Push as"), wideSelect(modeSel), aiBtn, saveBtn, pushBtn,
+		widget.NewLabel("Push as"), wideSelect(modeSel), aiBtn, saveBtn, ovalPush(pushBtn),
 	)
 	return editorForm{
 		body: container.NewVBox(append(notes,
@@ -2235,12 +2295,12 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 			return
 		}
 		msg.SetText("Pushing…")
-		stop := ui.pushSpinner("Pushing to GitHub…")
+		pushProgress, stop := ui.pushSpinner("Pushing to GitHub…")
 		var res PushResult
 		var perr error
 		ui.async(func() error {
 			res, perr = PushEntry(ui.cfg, row["issue"], row["date"], row["owner"], mins,
-				row["remarks"], row["mode"], row["issue_url"])
+				row["remarks"], row["mode"], row["issue_url"], pushProgress)
 			return nil // handle push error inline so the saved row is not lost
 		}, func() {
 			stop()
@@ -2300,7 +2360,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 		ui.dayFillReadout(dateE, minE, ""),
 	)
 	actions := container.NewHBox(
-		widget.NewLabel("Push as"), wideSelect(modeSel), aiBtn, saveBtn, pushBtn,
+		widget.NewLabel("Push as"), wideSelect(modeSel), aiBtn, saveBtn, ovalPush(pushBtn),
 	)
 	return editorForm{
 		body: container.NewVBox(
@@ -2672,7 +2732,7 @@ func (ui *UI) rowTile(r Row, refresh func()) fyne.CanvasObject {
 		caption(state)))
 
 	push, edit, del := ui.rowActions(r, refresh)
-	actions := container.NewHBox(withPointerCursor(push), layout.NewSpacer(), withPointerCursor(edit), withPointerCursor(del))
+	actions := container.NewHBox(compactPush(push), layout.NewSpacer(), withPointerCursor(edit), withPointerCursor(del))
 
 	body := container.NewBorder(nil, container.NewVBox(foot, actions), nil, nil, title)
 	bg := canvas.NewRectangle(blendColor(
@@ -2731,7 +2791,7 @@ func (ui *UI) pushRow(r Row, refresh func()) {
 	if remarks == "" {
 		remarks = strings.TrimSpace(r["description"])
 	}
-	stop := ui.pushSpinner("Pushing to GitHub…")
+	pushProgress, stop := ui.pushSpinner("Pushing to GitHub…")
 	var res PushResult
 	var perr error
 	ui.async(func() error {
@@ -2742,7 +2802,7 @@ func (ui *UI) pushRow(r Row, refresh func()) {
 		}
 		r = resolved
 		res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-			r.Minutes(), remarks, orDefault(r["mode"], "issue"), r["issue_url"])
+			r.Minutes(), remarks, orDefault(r["mode"], "issue"), r["issue_url"], pushProgress)
 		// Reported here rather than handed to async: a failure has to take the
 		// spinner down with it, and async skips its done func on an error.
 		return nil
@@ -2809,7 +2869,8 @@ func (ui *UI) buildStatusTab() fyne.CanvasObject {
 	// No scroll around the calendar: a scroll sizes its content to the content's
 	// minimum, which is what kept the month to half the window. Border hands the
 	// grid every pixel the header and legend do not use.
-	ui.calBody = container.NewBorder(head, ui.calLegend, nil, nil, ui.calBox)
+	ui.statusProgress = newLoadingIndicator()
+	ui.calBody = container.NewBorder(container.NewVBox(head, ui.statusProgress.view), ui.calLegend, nil, nil, ui.calBox)
 	calCard := widget.NewCard("", "", ui.calBody)
 	return container.NewBorder(nil, nil, nil, ui.daySide, calCard)
 }
@@ -3180,11 +3241,13 @@ func (ui *UI) buildReportTab() fyne.CanvasObject {
 	head := container.New(newFlowGrid(360, 0, 40), navigation, actions)
 
 	ui.repBox = container.NewVBox()
-	ui.repBody = container.NewVBox(head, ui.repBox)
+	ui.reportProgress = newLoadingIndicator()
+	ui.repBody = container.NewVBox(head, ui.reportProgress.view, ui.repBox)
 	return container.NewVScroll(widget.NewCard("", "", ui.repBody))
 }
 
 func (ui *UI) drawReport() {
+	defer ui.syncLoading()
 	if ui.repBox == nil {
 		return
 	}
@@ -3591,17 +3654,25 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 			return
 		}
 		msg.SetText("Fetching rate…")
+		_, finish := ui.beginFetch("settings-rate", "Fetching exchange rate")
 		base := strings.ToUpper(strings.TrimSpace(ui.cfg.Currency))
 		if base == "RM" {
 			base = "MYR"
 		}
 		disp := orDefault(ui.cfg.DisplayCurrency, "USD")
 		var r float64
+		var fetchErr error
 		ui.async(func() error {
 			v, err := fetchRate(base, disp)
 			r = v
-			return err
+			fetchErr = err
+			return nil
 		}, func() {
+			defer finish()
+			if fetchErr != nil {
+				ui.errf(fetchErr)
+				return
+			}
 			ui.cfg.FxRate = r
 			ui.cfg.FxUpdated = today()
 			_ = ui.store.SaveConfig(ui.cfg)
@@ -3609,8 +3680,10 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		})
 	})
 
+	ui.settingsProgress = newLoadingIndicator()
+	ui.profileBox = container.NewVBox(widget.NewLabel("GitHub profile loads when Settings opens."))
 	form := container.NewVBox(
-		widget.NewLabelWithStyle("Settings", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		settingsHeading(), ui.settingsProgress.view, ui.profileBox,
 		container.NewGridWithColumns(3,
 			labeled("GitHub username (optional — auto from gh)", user),
 			labeled("Worklog owner", owner),
@@ -3623,7 +3696,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		container.NewGridWithColumns(2,
 			labeled("Default push mode", wideSelect(mode)),
 			labeled("Anthropic API key (optional)", key)),
-		container.NewHBox(save, rate),
+		container.NewHBox(ovalPush(save), rate),
 		msg,
 	)
 	return container.NewVScroll(widget.NewCard("", "", form))

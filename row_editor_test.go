@@ -27,6 +27,8 @@ func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 		}
 	case *container.Scroll:
 		walk(v.Content, fn)
+	case *container.ThemeOverride:
+		walk(v.Content, fn)
 	case *dayChart:
 		// A widget's children live in its renderer, which is where the bars are.
 		for _, o := range v.CreateRenderer().Objects() {

@@ -52,11 +52,13 @@ func (ui *UI) buildCommitListTab() fyne.CanvasObject {
 	// Without Border the VBox around commitBox let each child claim only its
 	// natural height and the grid never stretched.
 	ui.commitBox = container.NewStack()
-	ui.commitBody = container.NewBorder(head, nil, nil, nil, ui.commitBox)
+	ui.commitProgress = newLoadingIndicator()
+	ui.commitBody = container.NewBorder(container.NewVBox(head, ui.commitProgress.view), nil, nil, nil, ui.commitBox)
 	return ui.commitBody
 }
 
 func (ui *UI) drawCommitList() {
+	defer ui.syncLoading()
 	if ui.commitBox == nil {
 		return
 	}
@@ -261,4 +263,3 @@ func groupCommitsByIssue(commits []Commit) []commitIssueGroup {
 	}
 	return out
 }
-
