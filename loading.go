@@ -145,7 +145,7 @@ func (p *loadingIndicator) showProgress(active bool, state fetchProgress) bool {
 		p.bar.Hide()
 		p.percent.Show()
 		p.animateTo(frac)
-		p.caption.SetText(fmt.Sprintf("%s (%d/%d)", state.Stage, state.Done, state.Total))
+		p.caption.SetText(state.Stage)
 		p.percentText.SetText(fmt.Sprintf("%d%%", int(frac*100+0.5)))
 	} else {
 		p.percent.Hide()

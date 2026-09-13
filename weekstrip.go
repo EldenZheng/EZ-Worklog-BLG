@@ -303,6 +303,17 @@ func (ui *UI) drawWeekStrip() {
 	case "error":
 		note = "could not read the GitHub project."
 	}
+	// A slim loading strip attached to the week head — the tab-level bar sits
+	// on Log Work's top edge and is easy to miss when the eye is already down
+	// on the calendar. Reuses the tab strip's look so it reads as one system.
+	if ui.weekStripProgress == nil {
+		ui.weekStripProgress = newLoadingIndicator()
+	}
+	if state == "loading" {
+		ui.weekStripProgress.showProgress(true, fetchProgress{Stage: "Reading calendar from GitHub"})
+	} else {
+		ui.weekStripProgress.setActive(false)
+	}
 	// The same export as Log List, on the tab the week is actually worked from:
 	// having to change tabs to send the week you are looking at is a step for
 	// nothing. Both buttons run the same code on the same shared week.
@@ -339,7 +350,7 @@ func (ui *UI) drawWeekStrip() {
 		grid.Add(col)
 	}
 
-	objs := []fyne.CanvasObject{head, grid}
+	objs := []fyne.CanvasObject{head, ui.weekStripProgress.view, grid}
 	if waiting > 0 {
 		objs = append(objs, widget.NewLabelWithStyle(
 			"Drag a card onto another day to move it — the date it is pushed with follows the drop.",

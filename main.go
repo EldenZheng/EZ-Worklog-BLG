@@ -158,6 +158,7 @@ type UI struct {
 	commitProgress                                              *loadingIndicator
 	reportProgress                                              *loadingIndicator
 	logProgress, listProgress, statusProgress, settingsProgress *loadingIndicator
+	weekStripProgress                                           *loadingIndicator
 	fetchJobs                                                   map[*fetchJob]bool
 	profileBox                                                  *fyne.Container
 	profileLoaded, profileLoading                               bool
@@ -2812,15 +2813,37 @@ func (ui *UI) pushRow(r Row, refresh func()) {
 			ui.errf(perr)
 			return
 		}
-		summary, complete := ui.applyPushResult(r["id"], res)
+		_, complete := ui.applyPushResult(r["id"], res)
 		refresh()
 		ui.refreshAfterPush(r["date"])
 		title := "Push incomplete"
 		if complete {
 			title = "Push complete"
 		}
-		dialog.ShowInformation(title, summary, ui.win)
+		ui.showPushResultDialog(title, res)
 	})
+}
+
+// showPushResultDialog puts up a compact popup with "Pushed:" and a clickable
+// link to the worklog on GitHub. Incomplete pushes carry their problem lines
+// beneath the link so nothing is silently swallowed.
+func (ui *UI) showPushResultDialog(title string, res PushResult) {
+	rows := []fyne.CanvasObject{}
+	if res.URL != "" {
+		if u, err := url.Parse(res.URL); err == nil {
+			rows = append(rows, container.NewHBox(
+				widget.NewLabelWithStyle("Pushed:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+				widget.NewHyperlink(res.URL, u),
+			))
+		} else {
+			rows = append(rows, widget.NewLabel("Pushed: "+res.URL))
+		}
+	}
+	if !res.Complete() {
+		rows = append(rows, widget.NewLabel(strings.Join(res.Problems, "\n")))
+		rows = append(rows, widget.NewLabel("The row keeps its push button so you can retry."))
+	}
+	dialog.ShowCustom(title, "OK", container.NewVBox(rows...), ui.win)
 }
 
 // ============================ Status (calendar) ============================
