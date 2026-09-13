@@ -113,6 +113,20 @@ type UI struct {
 	weekCommitLoad map[string]bool
 	weekCommitAt   map[string]time.Time
 
+	// Meeting tab: same commit fetch as Commit List, but on a Friday-through-
+	// Thursday window (the weekly update on Thursday). Kept separate from the
+	// weekCommits maps so walking one tab does not throw off the other.
+	meetingBox        *fyne.Container
+	meetingBody       *fyne.Container
+	meetingTitle      *widget.Label
+	meetingHere       *widget.Button
+	meetingStart      string // Friday, YYYY-MM-DD
+	meetingCommits    map[string][]Commit
+	meetingCommitErrs map[string][]string
+	meetingCommitLoad map[string]bool
+	meetingCommitAt   map[string]time.Time
+	meetingProgress   *loadingIndicator
+
 	// One rate fetch in flight at a time: opening the Report tab twice in a row
 	// should not queue two.
 	rateLoading bool
@@ -860,6 +874,9 @@ func main() {
 		case commitListTabName:
 			ui.loadWeekCommits(false)
 			ui.drawCommitList()
+		case meetingTabName:
+			ui.loadMeetingCommits(false)
+			ui.drawMeeting()
 		case statusTabName:
 			ui.drawCalendar()
 			ui.loadStatus(false)
@@ -947,6 +964,7 @@ func (ui *UI) buildAllTabs() {
 		container.NewTabItem(logWorkTabName, ui.buildLogTab()),
 		container.NewTabItem(logListTabName, ui.buildLogListTab()),
 		container.NewTabItem(commitListTabName, ui.buildCommitListTab()),
+		container.NewTabItem(meetingTabName, ui.buildMeetingTab()),
 		container.NewTabItem(statusTabName, ui.buildStatusTab()),
 		container.NewTabItem(reportTabName, ui.buildReportTab()),
 		container.NewTabItemWithIcon(settingsTabName, theme.SettingsIcon(), ui.buildSettingsTab()),
@@ -1375,6 +1393,17 @@ func isoDate(e *widget.DateEntry) string {
 func labeled(label string, obj fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewVBox(widget.NewLabelWithStyle(label, fyne.TextAlignLeading,
 		fyne.TextStyle{}), obj)
+}
+
+// labeledHint is labeled plus a small italic caption underneath the bold
+// label — the label stays one line even in a narrow column, and the
+// explanation rides below it in a lighter voice instead of wrapping the label.
+func labeledHint(label, hint string, obj fyne.CanvasObject) fyne.CanvasObject {
+	head := widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	head.Truncation = fyne.TextTruncateEllipsis
+	sub := widget.NewLabelWithStyle(hint, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+	sub.Wrapping = fyne.TextWrapWord
+	return container.NewVBox(head, sub, obj)
 }
 
 func (ui *UI) renderPending() {
@@ -3370,7 +3399,7 @@ func (ui *UI) drawReport() {
 		reportText(supportNote),
 		widget.NewSeparator(),
 		reportFact("Payable days × "+money(rep.DailyRate), fmt.Sprintf("%.2f", rep.PayableDays)),
-		reportFact("Converted receivable", conv))
+		reportFactColored("Converted receivable", conv, logoGold))
 	activity := reportSection("Period at a glance",
 		reportFact("Calendar days gone", fmt.Sprintf("%d/%d", daysGone, daysTotal)),
 		reportText(fmt.Sprintf("%d calendar days left · includes weekends; today is remaining", daysTotal-daysGone)),
@@ -3549,8 +3578,9 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	// The name a meeting issue is titled with. Left blank it comes off the
 	// worklog owner, which is right for a handle that is a name.
 	dispName := widget.NewEntry()
-	repos := widget.NewEntry()
-	repos.SetPlaceHolder("bigledger  (whole org)  or  bigledger/blg-intranet")
+	repos := widget.NewMultiLineEntry()
+	repos.SetMinRowsVisible(3)
+	repos.SetPlaceHolder("bigledger  (whole org)\nbigledger/blg-intranet\none per line, or comma-separated")
 	sal := widget.NewEntry()
 	cur := widget.NewEntry()
 	cur.SetPlaceHolder("RM")
@@ -3590,7 +3620,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	owner.SetText(c.WorklogOwner)
 	dispName.SetText(c.DisplayName)
 	dispName.SetPlaceHolder(orDefault(displayName(c), "Elden") + "  — from your worklog owner")
-	repos.SetText(strings.Join(c.Repos, ", "))
+	repos.SetText(strings.Join(c.Repos, "\n"))
 	// Left blank when unset rather than pre-filled with a number: a figure
 	// already in the box is a figure that gets saved without being read, and
 	// nobody else's salary is a sensible starting guess for yours.
@@ -3615,6 +3645,25 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		msg.SetText("Fill this in once to get started.")
 	}
 
+	// Live readout of the last fetched rate — sits next to the buttons so the
+	// answer to "did the fetch land" is visible without hunting for the msg
+	// label at the bottom. Rendered in gold so it reads as the same accent as
+	// the Converted receivable figure on the Report tab.
+	rateReadout := canvas.NewText("", logoGold)
+	rateReadout.TextSize = theme.TextSize()
+	rateReadout.TextStyle = fyne.TextStyle{Bold: true}
+	refreshRateReadout := func() {
+		if ui.cfg.FxRate > 0 {
+			rateReadout.Text = fmt.Sprintf("1 %s = %s %s (%s)",
+				orDefault(ui.cfg.Currency, "RM"), commaAmount(ui.cfg.FxRate),
+				orDefault(ui.cfg.DisplayCurrency, "USD"), ui.cfg.FxUpdated)
+		} else {
+			rateReadout.Text = "Exchange rate not set — press Fetch exchange rate."
+		}
+		rateReadout.Refresh()
+	}
+	refreshRateReadout()
+
 	save := widget.NewButton("Save settings", func() {
 		salF, _ := strconv.ParseFloat(strings.TrimSpace(sal.Text), 64)
 		backN, _ := strconv.Atoi(strings.TrimSpace(back.Text))
@@ -3626,7 +3675,9 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 			m = "issue"
 		}
 		var repoList []string
-		for _, x := range strings.Split(repos.Text, ",") {
+		for _, x := range strings.FieldsFunc(repos.Text, func(r rune) bool {
+			return r == '\n' || r == '\r' || r == ','
+		}) {
 			if s := strings.TrimSpace(x); s != "" {
 				repoList = append(repoList, s)
 			}
@@ -3667,6 +3718,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		ui.hasCfg = true
 		ui.projItems = nil // reload against the saved project and owner
 		ui.ensureProjectCache()
+		refreshRateReadout()
 		msg.SetText("Saved.")
 	})
 	save.Importance = widget.HighImportance
@@ -3699,30 +3751,226 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 			ui.cfg.FxRate = r
 			ui.cfg.FxUpdated = today()
 			_ = ui.store.SaveConfig(ui.cfg)
-			msg.SetText(fmt.Sprintf("1 %s = %g %s (%s)", ui.cfg.Currency, r, disp, ui.cfg.FxUpdated))
+			refreshRateReadout()
+			msg.SetText(fmt.Sprintf("1 %s = %s %s (%s)", ui.cfg.Currency, commaAmount(r), disp, ui.cfg.FxUpdated))
 		})
 	})
 
 	ui.settingsProgress = newLoadingIndicator()
 	ui.profileBox = container.NewVBox(widget.NewLabel("GitHub profile loads when Settings opens."))
-	form := container.NewVBox(
-		settingsHeading(), ui.settingsProgress.view, ui.profileBox,
+
+	// Header row: Worklog / Settings on the left, action buttons on the right
+	// stacked over the exchange rate readout. Border pins the buttons to the
+	// top-right so they render at their own natural height rather than
+	// stretching to match the tall logo block.
+	actions := container.NewVBox(
+		container.NewHBox(layout.NewSpacer(), rate, ovalPush(save)),
+		container.NewHBox(layout.NewSpacer(), rateReadout),
+	)
+	header := container.NewBorder(nil, nil, nil, actions, settingsHeading())
+
+	// Only the GitHub profile card carries a bubble in the sidebar, and it is
+	// tinted gold to match the primary accent. The identity text fields sit
+	// beneath the bubble on plain background — the profile card is what needs
+	// visual weight, the fields do not.
+	sidebarContent := container.NewVBox(
+		bold("Identity"),
+		goldPanel(ui.profileBox),
+		labeled("GitHub username (optional — auto from gh)", user),
+		labeled("Worklog owner", owner),
+		labeled("Name on meeting issues (optional)", dispName),
+	)
+
+	// Org bubbles panel: one coloured chip per configured org, click to cycle
+	// the palette so a colour clash between two employers is fixable without
+	// hand-editing a hex code. Repos parsed live from the textarea so the
+	// chips update as soon as an org is added or removed. Vertical list —
+	// the panel sits alongside the Repos + Project-board textareas as a
+	// legend for whichever org each line belongs to.
+	bubbleBox := container.NewVBox()
+	var redrawBubbles func()
+	redrawBubbles = func() {
+		bubbleBox.Objects = nil
+		var entries []string
+		for _, x := range strings.FieldsFunc(repos.Text, func(r rune) bool {
+			return r == '\n' || r == '\r' || r == ','
+		}) {
+			if s := strings.TrimSpace(x); s != "" {
+				entries = append(entries, s)
+			}
+		}
+		tmp := ui.cfg
+		tmp.Repos = entries
+		orgs := orgOrder(tmp)
+		if len(orgs) == 0 {
+			bubbleBox.Add(widget.NewLabelWithStyle(
+				"Add a repo or org above; each one will show a colour chip here.",
+				fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
+		}
+		for _, org := range orgs {
+			org := org
+			bubbleBox.Add(settingsOrgChip(org, orgColor(tmp, org), func() {
+				cur := orgColor(ui.cfg, org)
+				next := nextOrgPaletteColor(cur)
+				if ui.cfg.OrgColors == nil {
+					ui.cfg.OrgColors = map[string]string{}
+				}
+				ui.cfg.OrgColors[strings.ToLower(org)] = hexColor(next)
+				_ = ui.store.SaveConfig(ui.cfg)
+				redrawBubbles()
+			}))
+		}
+		bubbleBox.Refresh()
+	}
+	repos.OnChanged = func(string) { redrawBubbles() }
+	redrawBubbles()
+
+	// Section-based layout: each section has a gold heading, a divider under
+	// it, and its fields below. Spacers between sections distribute vertical
+	// slack so the panel fills the full column height rather than stacking at
+	// the top with a lot of dead space underneath.
+	//
+	// Sources merges the repo/org list with the project board URLs. Both are
+	// read from the same set of orgs, so one bubble legend on the left names
+	// each colour once. The two textareas stack on the right: repos on top,
+	// project boards on the bottom.
+	fieldsCol := container.NewVBox(
+		labeledHint("Repos and orgs", "One per line, or comma-separated. A bare org name scans every repo it owns.", repos),
+		labeledHint("Project board URLs", "One per line. Status and Report read every board on the list, filtered to the worklog owner above.", projURL),
+	)
+	legendCol := container.NewVBox(
+		widget.NewLabelWithStyle("Orgs", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		bubbleBox,
+	)
+	sourcesSection := container.NewVBox(
+		sectionTitle("Sources"),
+		container.New(newRatioRow(0.72, 0.28), fieldsCol, legendCol),
+	)
+	salarySection := container.NewVBox(
+		sectionTitle("Salary"),
 		container.NewGridWithColumns(3,
-			labeled("GitHub username (optional — auto from gh)", user),
-			labeled("Worklog owner", owner),
-			labeled("Name on meeting issues (optional)", dispName)),
-		labeled("Repos or orgs to scan (comma-separated; a bare org name scans all its repos)", repos),
-		labeled("Worklog project URLs — one per line (Status + Report read all of them, filtered to the owner above)", projURL),
-		container.NewGridWithColumns(4,
-			labeled("Base salary per 21 days", sal), labeled("Currency", cur),
-			labeled("Also show in", disp), labeled("Look back (days)", back)),
-		container.NewGridWithColumns(2,
-			labeled("Default push mode", wideSelect(mode)),
-			labeled("Anthropic API key (optional)", key)),
-		container.NewHBox(ovalPush(save), rate),
+			labeledHint("Base salary", "Paid per 21 working days.", sal),
+			labeledHint("Currency", "Currency the salary is paid in.", cur),
+			labeledHint("Display in", "Also show pay in this currency.", disp),
+		),
+	)
+	worklogSection := container.NewVBox(
+		sectionTitle("Worklog"),
+		container.NewGridWithColumns(3,
+			labeledHint("Look back", "Days back the commit sweep scans for unlogged work.", back),
+			labeledHint("Default push mode", "Sub-issue creates a linked child. Issue writes on the parent itself.", outlinedSelect(mode)),
+			labeledHint("Anthropic API key", "Enables the AI Compact-remarks button. Leave blank to disable.", key),
+		),
 		msg,
 	)
-	return container.NewVScroll(widget.NewCard("", "", form))
+
+	mainInner := container.NewVBox(
+		sourcesSection,
+		layout.NewSpacer(),
+		salarySection,
+		worklogSection,
+	)
+	// Chunky theme bumps input padding so entries and the dropdown read as
+	// larger controls — filling more of the panel — without needing a per-widget
+	// wrapper on each one.
+	mainBubble := roundedPanel(container.NewThemeOverride(mainInner,
+		chunkySettingsTheme{Theme: theme.Current()}))
+
+	// Both columns are wrapped in Stack so their contents render at natural
+	// height while the column itself stretches to whatever height ratioRow
+	// hands it. The padding around each column adds a real gap between the
+	// two cards on top of ratioRow's own inter-column spacing.
+	body := container.New(newRatioRow(0.2, 0.8),
+		container.NewPadded(sidebarContent),
+		container.NewPadded(mainBubble),
+	)
+	top := container.NewVBox(header, ui.settingsProgress.view)
+	// Border pins the header on top and hands every remaining pixel to the
+	// body — the Settings tab now fills to the bottom of the window instead
+	// of hugging its natural content height.
+	return container.NewBorder(top, nil, nil, nil, container.NewVScroll(body))
+}
+
+// roundedPanel draws content inside a rounded rectangle so a group of fields
+// reads as its own card. The bg is a subtle blend toward foreground so it
+// reads as a distinct surface from the text fields and dropdowns inside — a
+// panel painted with ColorNameInputBackground would swallow them.
+func roundedPanel(content fyne.CanvasObject) fyne.CanvasObject {
+	bg := canvas.NewRectangle(blendColor(
+		theme.Color(theme.ColorNameBackground),
+		theme.Color(theme.ColorNameForeground),
+		0.08,
+	))
+	bg.CornerRadius = cellCornerRadius
+	return container.NewStack(bg, container.NewPadded(content))
+}
+
+// outlinedSelect wraps a Select in a bordered rectangle so it reads as a form
+// control alongside Entries. Fyne's default Select renderer paints no visible
+// outline on the app's gold theme, which made the "Default push mode" box
+// blend into the panel background beside the neighbouring Entry.
+func outlinedSelect(sel *widget.Select) fyne.CanvasObject {
+	border := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
+	border.StrokeColor = theme.Color(theme.ColorNameInputBorder)
+	border.StrokeWidth = 1
+	border.CornerRadius = theme.InputRadiusSize()
+	return container.NewStack(border, wideSelect(sel))
+}
+
+// goldPanel is roundedPanel with a low-alpha gold background, for content
+// that should read as accented rather than as another neutral card.
+func goldPanel(content fyne.CanvasObject) fyne.CanvasObject {
+	bg := canvas.NewRectangle(color.NRGBA{R: logoGold.R, G: logoGold.G, B: logoGold.B, A: 48})
+	bg.CornerRadius = cellCornerRadius
+	return container.NewStack(bg, container.NewPadded(content))
+}
+
+// sectionTitle is a gold heading with a separator under it, used to split the
+// Settings main pane into named groups (Repos and Orgs, Project boards,
+// Salary, Worklog).
+func sectionTitle(title string) fyne.CanvasObject {
+	t := canvas.NewText(title, logoGold)
+	t.TextSize = theme.TextSize() + 4
+	t.TextStyle = fyne.TextStyle{Bold: true}
+	return container.NewVBox(t, widget.NewSeparator())
+}
+
+// chunkySettingsTheme grows inner padding so text fields and the dropdown
+// render taller — filling more of the Settings main panel without needing
+// a per-widget size wrapper on each one.
+type chunkySettingsTheme struct{ fyne.Theme }
+
+func (t chunkySettingsTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameInnerPadding {
+		return 10
+	}
+	return t.Theme.Size(name)
+}
+
+// settingsOrgChip is one org's colour chip on the Settings tab: a rounded
+// filled rectangle with the org name inside. Tapping it cycles the fill
+// through orgPalette so the two orgs sitting next to each other on a report
+// can be told apart without editing a hex value by hand.
+func settingsOrgChip(name string, fill color.NRGBA, onTap func()) fyne.CanvasObject {
+	bg := canvas.NewRectangle(fill)
+	bg.CornerRadius = 12
+	label := canvas.NewText(name, color.White)
+	label.TextSize = theme.TextSize()
+	label.TextStyle = fyne.TextStyle{Bold: true}
+	body := container.NewStack(bg, container.NewPadded(container.NewCenter(label)))
+	return newTappable(body, onTap)
+}
+
+// nextOrgPaletteColor advances the current colour to the next slot in the
+// palette. An unrecognised colour resets to the first palette entry so the
+// cycle stays predictable — clicking a chip always changes it to something.
+func nextOrgPaletteColor(current color.NRGBA) color.NRGBA {
+	for i, p := range orgPalette {
+		if p == current {
+			return orgPalette[(i+1)%len(orgPalette)]
+		}
+	}
+	return orgPalette[0]
 }
 
 // ============================ helpers ============================

@@ -274,6 +274,7 @@ func (ui *UI) syncLoading() {
 		{logWorkTabName, ui.logProgress, ui.logBody, logKeys, logLoading},
 		{logListTabName, ui.listProgress, ui.listBody, logKeys, logLoading},
 		{commitListTabName, ui.commitProgress, ui.commitBody, []string{"commits:" + week}, ui.weekCommitLoad[week]},
+		{meetingTabName, ui.meetingProgress, ui.meetingBody, []string{"meeting:" + orDefault(ui.meetingStart, meetingWeekStartOf(today()))}, ui.meetingCommitLoad[orDefault(ui.meetingStart, meetingWeekStartOf(today()))]},
 		{statusTabName, ui.statusProgress, ui.calBody, []string{statusCacheKey(ui.calMonth)}, ui.projLoading[statusCacheKey(ui.calMonth)]},
 		{reportTabName, ui.reportProgress, ui.repBody, []string{reportCacheKey(ui.repMonth), "rate"}, ui.projLoading[reportCacheKey(ui.repMonth)] || ui.rateLoading},
 		{settingsTabName, ui.settingsProgress, nil, []string{"profile", "settings-rate"}, ui.profileLoading},

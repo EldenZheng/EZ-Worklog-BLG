@@ -21,7 +21,7 @@ import (
 )
 
 func settingsHeading() fyne.CanvasObject {
-	name := canvas.NewText("Worklog", theme.Color(theme.ColorNameForeground))
+	name := canvas.NewText("Worklog", logoGold)
 	name.TextSize = 26
 	name.TextStyle.Bold = true
 	settings := canvas.NewText("Settings", logoGold)

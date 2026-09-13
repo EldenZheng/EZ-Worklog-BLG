@@ -51,6 +51,10 @@ type Config struct {
 	// "Elden Meeting & ad hocs: 2026-08-25". Blank means derive it from the
 	// worklog owner; see displayName.
 	DisplayName string `json:"display_name"`
+	// OrgColors overrides the default palette colour for named organisations,
+	// as "#RRGGBB" hex. Anything absent falls back to orgPalette in the order
+	// the org appears under Repos.
+	OrgColors map[string]string `json:"org_colors,omitempty"`
 }
 
 func defaultConfig() Config {

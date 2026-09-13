@@ -166,7 +166,7 @@ func TestTabNamesAndIndicesMatchTheBarThatIsBuilt(t *testing.T) {
 	ui.buildAllTabs()
 
 	want := []string{
-		logWorkTabName, logListTabName, commitListTabName, statusTabName, reportTabName, settingsTabName,
+		logWorkTabName, logListTabName, commitListTabName, meetingTabName, statusTabName, reportTabName, settingsTabName,
 	}
 	if len(ui.tabs.Items) != len(want) {
 		t.Fatalf("expected %d tabs, got %d", len(want), len(ui.tabs.Items))

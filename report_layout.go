@@ -39,6 +39,17 @@ func reportFact(label, value string) fyne.CanvasObject {
 	return container.NewBorder(nil, nil, nil, amount, reportText(label))
 }
 
+// reportFactColored is reportFact with the value drawn in a specific colour —
+// used to highlight the converted receivable in gold, so a glance at the panel
+// picks up the display-currency total without reading each row.
+func reportFactColored(label, value string, c color.Color) fyne.CanvasObject {
+	text := canvas.NewText(value, c)
+	text.TextSize = theme.TextSize()
+	text.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
+	text.Alignment = fyne.TextAlignTrailing
+	return container.NewBorder(nil, nil, nil, container.NewHBox(layout.NewSpacer(), text), reportText(label))
+}
+
 func reportSection(title string, content ...fyne.CanvasObject) fyne.CanvasObject {
 	return reportPanel(title, container.NewVBox(content...))
 }

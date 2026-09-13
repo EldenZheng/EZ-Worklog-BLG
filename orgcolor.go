@@ -61,11 +61,16 @@ func orgOrder(cfg Config) []string {
 	return out
 }
 
-// orgColor is the colour for an organisation, matched case-insensitively.
+// orgColor is the colour for an organisation, matched case-insensitively. An
+// override recorded in cfg.OrgColors wins over the palette default so a user
+// can retint an org whose colour clashes with its sibling.
 func orgColor(cfg Config, org string) color.NRGBA {
 	org = strings.ToLower(strings.TrimSpace(org))
 	if org == "" {
 		return orgUnknown
+	}
+	if c, ok := parseHexColor(cfg.OrgColors[org]); ok {
+		return c
 	}
 	for i, known := range orgOrder(cfg) {
 		if known == org {
@@ -73,6 +78,27 @@ func orgColor(cfg Config, org string) color.NRGBA {
 		}
 	}
 	return orgUnknown
+}
+
+// parseHexColor reads a "#RRGGBB" (or "RRGGBB") string into an NRGBA. Returns
+// ok=false for anything unreadable, so a corrupt override falls back to the
+// palette default rather than painting the org black.
+func parseHexColor(s string) (color.NRGBA, bool) {
+	s = strings.TrimPrefix(strings.TrimSpace(s), "#")
+	if len(s) != 6 {
+		return color.NRGBA{}, false
+	}
+	var v uint32
+	if _, err := fmt.Sscanf(s, "%06x", &v); err != nil {
+		return color.NRGBA{}, false
+	}
+	return color.NRGBA{R: uint8(v >> 16), G: uint8(v >> 8), B: uint8(v), A: 0xff}, true
+}
+
+// hexColor is the "#RRGGBB" spelling of an NRGBA, for round-tripping into the
+// config.
+func hexColor(c color.NRGBA) string {
+	return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B)
 }
 
 // orgOf pulls the organisation out of anything that names one: a github URL, an

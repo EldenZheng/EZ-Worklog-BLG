@@ -411,10 +411,11 @@ const (
 	logWorkTabName    = "Log Work"
 	logListTabName    = "Log List"
 	commitListTabName = "Commit List"
+	meetingTabName    = "Meeting update"
 	statusTabName     = "Status"
 	reportTabName     = "Report"
 	settingsTabName   = "Settings"
 
-	statusTabIndex   = 3
-	settingsTabIndex = 5
+	statusTabIndex   = 4
+	settingsTabIndex = 6
 )
