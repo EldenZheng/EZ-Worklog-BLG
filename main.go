@@ -120,12 +120,17 @@ type UI struct {
 	meetingBody       *fyne.Container
 	meetingTitle      *widget.Label
 	meetingHere       *widget.Button
-	meetingStart      string // Friday, YYYY-MM-DD
+	meetingStart      string // Thursday, YYYY-MM-DD
 	meetingCommits    map[string][]Commit
 	meetingCommitErrs map[string][]string
 	meetingCommitLoad map[string]bool
 	meetingCommitAt   map[string]time.Time
 	meetingProgress   *loadingIndicator
+
+	// Shas of commits already stitched into a saved worklog row. Refreshed
+	// before each Commit List / Meeting redraw so a fresh save shows up as
+	// a "saved" tag on the bubble the next time the calendar renders.
+	loggedShas map[string]bool
 
 	// One rate fetch in flight at a time: opening the Report tab twice in a row
 	// should not queue two.
@@ -541,6 +546,34 @@ func (ui *UI) loadIssueInfos(composer *progressComposer, weight float64, finish 
 		}
 		ui.renderPending()
 	})
+}
+
+// refreshLoggedShas rereads the local rows' saved commit shas so the calendar
+// can mark rows whose issue still carries other unlogged commits. A cheap file
+// read; called on each Log Work redraw.
+func (ui *UI) refreshLoggedShas() {
+	set, err := ui.store.LoggedShas()
+	if err != nil || set == nil {
+		set = map[string]bool{}
+	}
+	ui.loggedShas = set
+}
+
+// issueHasPending reports whether the given issue still has non-ignored
+// commits waiting on the pending list. Used to hang a "partly saved" tag on a
+// saved row's calendar card, so an issue with more work standing behind it
+// reads as such without opening the pending pane above.
+func (ui *UI) issueHasPending(issue string) bool {
+	issue = strings.TrimSpace(issue)
+	if issue == "" {
+		return false
+	}
+	for _, g := range ui.pending.Groups {
+		if g.Issue == issue && !g.Ignored && len(g.Commits) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (ui *UI) ensureProjectCache() {
@@ -1097,6 +1130,14 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	mRemarks := widget.NewMultiLineEntry()
 	mRemarks.SetMinRowsVisible(4)
 	mRemarks.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
+	// Live character counter — same "%d / %d" reading the row editor's popup
+	// uses, so a manual entry never surprises anyone with a silent trim on push.
+	mRemarksCount := widget.NewLabel("")
+	mRemarksCountUpdate := func() {
+		mRemarksCount.SetText(fmt.Sprintf("%d / %d", len(mRemarks.Text), remarkCap))
+	}
+	mRemarks.OnChanged = func(string) { mRemarksCountUpdate() }
+	mRemarksCountUpdate()
 	mMsg := widget.NewLabel("")
 
 	// Mode selector — the same one the row editor grows. Shown for Other and
@@ -1154,10 +1195,15 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	descRow := labeled("Description", mDesc)
 	descRow.Hide()
 
-	// autoDescFor is the auto-title Other and Independent entries wear. Matches
-	// the pushed sub-issue's title on GitHub, so the CSV line and the board
-	// carry the same string.
-	autoDescFor := func(iso string) string { return "Worklog: " + iso }
+	// autoDescFor is the auto-title Other, Code Review and Independent entries
+	// wear. Matches the pushed sub-issue's title on GitHub, so the CSV line and
+	// the board carry the same string.
+	autoDescFor := func(k, iso string) string {
+		if k == kindCodeReview {
+			return codeReviewTitle(iso)
+		}
+		return "Worklog: " + iso
+	}
 
 	// Both buttons share this closure. push=false saves a draft (like the popup
 	// editor's "Save"); push=true saves and immediately pushes to GitHub via
@@ -1175,16 +1221,27 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			mMsg.SetText("Pick a date.")
 			return
 		}
-		// Description is the visible textarea for a meeting; for Other and
-		// Independent the field is hidden and the auto-title is written in.
+		// Description is the visible textarea for a meeting; for Other, Code
+		// Review and Independent the field is hidden and the auto-title is
+		// written in.
 		desc := strings.TrimSpace(mDesc.Text)
-		if kind == kindOther || kind == kindIndependent {
-			desc = autoDescFor(date)
+		if kind == kindOther || kind == kindCodeReview || kind == kindIndependent {
+			desc = autoDescFor(kind, date)
+		}
+		remarksText := strings.TrimSpace(mRemarks.Text)
+		if len(remarksText) > remarkCap {
+			mMsg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarksText), remarkCap))
+			return
 		}
 		row := Row{
 			"date": date, "minutes": strconv.Itoa(mins),
 			"type": kind, "description": desc,
-			"remarks": strings.TrimSpace(mRemarks.Text),
+			"remarks": remarksText,
+			// Every push reads Row["owner"] into the project's Worklog Owner
+			// field; a row saved with an empty owner leaves that column blank.
+			// The Settings value is the same one the row editor seeds its own
+			// Owner input from.
+			"owner": strings.TrimSpace(ui.cfg.WorklogOwner),
 		}
 		switch kind {
 		case kindMeeting:
@@ -1192,7 +1249,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			// created at push time, so logging two meetings on one day lands
 			// both on the same issue instead of opening a second.
 			row["mode"] = "issue"
-		case kindOther:
+		case kindOther, kindCodeReview:
 			ref, err := issueRefFromAny(mIssue.Text)
 			if err != nil {
 				mMsg.SetText(err.Error())
@@ -1255,7 +1312,8 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			}
 			saved = resolved
 			res, perr = PushEntry(ui.cfg, saved["issue"], saved["date"], saved["owner"],
-				mins, body, orDefault(saved["mode"], "issue"), saved["issue_url"], pushProgress)
+				mins, body, orDefault(saved["mode"], "issue"), saved["issue_url"],
+				subTitleBaseFor(saved), pushProgress)
 			return nil
 		}, func() {
 			stop()
@@ -1286,21 +1344,28 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		labelledPicker("Date", mDate),
 		labeled("Minutes", mMin),
 	)
+	// Remarks with its counter on a right-aligned row underneath, so a wall of
+	// text never surprises the pusher with a silent trim to remarkCap.
+	remarksRow := container.NewVBox(
+		labeled("Remarks", mRemarks),
+		container.NewBorder(nil, nil, nil, mRemarksCount),
+	)
 	manualPane := container.NewVBox(
 		dateRow,
 		descRow,
 		otherRow, indepRow,
-		labeled("Remarks", mRemarks),
+		remarksRow,
 		actionRow, mMsg,
 	)
 	manualPane.Hide()
 
 	// -- kind selector --
 	seg := widget.NewRadioGroup(
-		[]string{"Commits", "Meeting", "Other", "Independent"}, func(s string) {
+		[]string{"Commits", "Meeting", "Code Review", "Other", "Independent"}, func(s string) {
 			kind = map[string]string{
 				"Commits": kindCommit, "Meeting": kindMeeting,
-				"Other": kindOther, "Independent": kindIndependent,
+				"Code Review": kindCodeReview,
+				"Other":       kindOther, "Independent": kindIndependent,
 			}[s]
 			if kind == kindCommit {
 				commitPane.Show()
@@ -1312,27 +1377,32 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			// Only the fields each kind needs, so the form never asks for an
 			// issue link and a new issue's title at the same time.
 			showIf(descRow, kind == kindMeeting)
-			showIf(otherRow, kind == kindOther)
+			showIf(otherRow, kind == kindOther || kind == kindCodeReview)
 			showIf(indepRow, kind == kindIndependent)
-			showIf(mPushAs, kind == kindOther || kind == kindIndependent)
+			showIf(mPushAs, kind == kindOther || kind == kindCodeReview || kind == kindIndependent)
 			switch kind {
 			case kindMeeting:
 				mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(mDate.ISO(), today())) + ".")
+			case kindCodeReview, kindOther, kindIndependent:
+				mMsg.SetText("Sub-issue title: " + autoDescFor(kind, orDefault(mDate.ISO(), today())) + ".")
 			default:
 				mMsg.SetText("")
 			}
 		})
 	seg.Horizontal = true
 	seg.SetSelected("Commits")
-	// Meeting's hint line names the day's issue; picking a new date should retitle
-	// the hint so it matches what the push will file under.
+	// The hint line names what the push will file under; picking a new date
+	// should retitle it so it stays honest.
 	prevDateChange := mDate.OnChanged
 	mDate.OnChanged = func(iso string) {
 		if prevDateChange != nil {
 			prevDateChange(iso)
 		}
-		if kind == kindMeeting {
+		switch kind {
+		case kindMeeting:
 			mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(iso, today())) + ".")
+		case kindCodeReview, kindOther, kindIndependent:
+			mMsg.SetText("Sub-issue title: " + autoDescFor(kind, orDefault(iso, today())) + ".")
 		}
 	}
 
@@ -1964,6 +2034,19 @@ func (ui *UI) resolveForPush(r Row) (Row, error) {
 	if err != nil {
 		return r, err
 	}
+	if patch == nil {
+		patch = Row{}
+	}
+	// A blank owner on the row makes setFields skip the project's Worklog Owner
+	// field, so pushed entries turn up unassigned on the board. Legacy rows
+	// saved before the manual pane stamped an owner still fall through here;
+	// the Settings value is the correct default, and it is what the row editor
+	// would have written in.
+	if strings.TrimSpace(r["owner"]) == "" {
+		if owner := strings.TrimSpace(ui.cfg.WorklogOwner); owner != "" {
+			patch["owner"] = owner
+		}
+	}
 	if len(patch) == 0 {
 		return r, nil
 	}
@@ -2129,7 +2212,8 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			}
 			r = resolved
 			res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-				mins, body, orDefault(r["mode"], "issue"), r["issue_url"], pushProgress)
+				mins, body, orDefault(r["mode"], "issue"), r["issue_url"],
+				subTitleBaseFor(r), pushProgress)
 			return nil // handle the push error inline so the edit is not lost
 		}, func() {
 			stop()
@@ -2330,7 +2414,8 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 		var perr error
 		ui.async(func() error {
 			res, perr = PushEntry(ui.cfg, row["issue"], row["date"], row["owner"], mins,
-				row["remarks"], row["mode"], row["issue_url"], pushProgress)
+				row["remarks"], row["mode"], row["issue_url"],
+				subTitleBaseFor(row), pushProgress)
 			return nil // handle push error inline so the saved row is not lost
 		}, func() {
 			stop()
@@ -2444,6 +2529,7 @@ func issueHyperlink(issue string) fyne.CanvasObject {
 func (ui *UI) drawRecent() {
 	// The strip is part of this list, not a separate view: whatever changes the
 	// saved entries — a drop, a push, an edit — changes what the week shows.
+	ui.refreshLoggedShas()
 	ui.drawWeekStrip()
 	if ui.recentBox == nil {
 		return
@@ -2798,21 +2884,40 @@ func (ui *UI) rowActions(r Row, refresh func()) (push, edit, del *widget.Button)
 	})
 	edit.Importance = widget.LowImportance
 	del = widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
-		dialog.ShowConfirm("Delete entry",
-			"Delete this entry? Its commits become pending again. (Anything already pushed to GitHub stays there.)",
-			func(ok bool) {
-				if !ok {
-					return
-				}
-				if err := ui.store.DeleteRow(r["id"]); err != nil {
-					ui.errf(err)
-					return
-				}
-				refresh()
-			}, ui.win)
+		ui.confirmDelete(r, refresh)
 	})
 	del.Importance = widget.LowImportance
 	return push, edit, del
+}
+
+// confirmDelete puts up the two-button "really delete this?" popup for a saved
+// row. Its own dialog rather than dialog.ShowConfirm so the confirm button
+// wears the app's gold rather than the default primary blue.
+func (ui *UI) confirmDelete(r Row, refresh func()) {
+	body := widget.NewLabel(
+		"Delete this entry? Its commits become pending again. (Anything already pushed to GitHub stays there.)")
+	body.Wrapping = fyne.TextWrapWord
+
+	var pop *widget.PopUp
+	cancel := widget.NewButton("Cancel", func() { pop.Hide() })
+	confirm := widget.NewButton("Delete", func() {
+		pop.Hide()
+		if err := ui.store.DeleteRow(r["id"]); err != nil {
+			ui.errf(err)
+			return
+		}
+		refresh()
+	})
+	confirm.Importance = widget.HighImportance
+
+	buttons := container.NewHBox(layout.NewSpacer(), cancel, container.NewThemeOverride(
+		withPointerCursor(confirm), pillTheme{Theme: theme.Current()}))
+	content := container.NewVBox(
+		widget.NewLabelWithStyle("Delete entry", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		body, buttons,
+	)
+	pop = widget.NewModalPopUp(container.NewPadded(content), ui.win.Canvas())
+	pop.Show()
 }
 
 // pushRow sends one saved row to GitHub and reports what landed.
@@ -2832,7 +2937,8 @@ func (ui *UI) pushRow(r Row, refresh func()) {
 		}
 		r = resolved
 		res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-			r.Minutes(), remarks, orDefault(r["mode"], "issue"), r["issue_url"], pushProgress)
+			r.Minutes(), remarks, orDefault(r["mode"], "issue"), r["issue_url"],
+			subTitleBaseFor(r), pushProgress)
 		// Reported here rather than handed to async: a failure has to take the
 		// spinner down with it, and async skips its done func on an error.
 		return nil

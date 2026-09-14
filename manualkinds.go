@@ -8,16 +8,20 @@ import (
 	"unicode"
 )
 
-// Not every hour is a commit. Three kinds of entry are logged by hand, and they
+// Not every hour is a commit. Four kinds of entry are logged by hand, and they
 // differ in where the work is filed, not in how it is counted:
 //
 //   - meeting     — the day's own "<Name> Meeting & ad hocs: <date>" issue,
 //     which carries the Worklog fields itself.
 //   - other       — an issue that already exists; you paste its link.
+//   - codereview  — the same shape as "other": an existing issue's link. Only
+//     the auto-title on the pushed sub-issue changes, from "Worklog: <date>"
+//     to "Code Review: <date>", so a review filed against a normal repo issue
+//     reads as such on the board.
 //   - independent — an issue that does not exist yet; the app creates it in a
 //     repo you pick, then logs under it the way a commit entry does.
 //
-// All three save locally first and touch GitHub only on push, which is the same
+// All four save locally first and touch GitHub only on push, which is the same
 // bargain the commit entries make: nothing is created for an entry that ends up
 // being deleted or re-dated.
 
@@ -37,6 +41,7 @@ const (
 	kindCommit      = "commit"
 	kindMeeting     = "meeting"
 	kindOther       = "other"
+	kindCodeReview  = "codereview"
 	kindIndependent = "independent"
 )
 
@@ -66,6 +71,24 @@ func displayName(cfg Config) string {
 // board are named.
 func meetingTitle(cfg Config, date string) string {
 	return fmt.Sprintf("%s Meeting & ad hocs: %s", displayName(cfg), date)
+}
+
+// codeReviewTitle is the auto-title a code-review sub-issue takes on push,
+// mirroring the "Worklog: <date>" default that other and independent entries
+// wear. A review filed under someone else's issue reads on the board as
+// "Code Review: <date>" rather than as another Worklog stub.
+func codeReviewTitle(date string) string {
+	return fmt.Sprintf("Code Review: %s", date)
+}
+
+// subTitleBaseFor is what PushEntry should title a row's sub-issue with. Empty
+// means "use the default 'Worklog: <date>'" — the vast majority; only a code-
+// review row overrides it so its sub-issue is named as such on the board.
+func subTitleBaseFor(r Row) string {
+	if r["type"] == kindCodeReview {
+		return codeReviewTitle(r["date"])
+	}
+	return ""
 }
 
 // findIssueByTitle looks for an exact title in a repo, open or closed.

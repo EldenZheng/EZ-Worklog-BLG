@@ -39,7 +39,7 @@ func TestWorklogTitleNumbersTheSecondEntryOfADay(t *testing.T) {
 		{"a longer date is a different day",
 			[]string{"Worklog: 2026-08-300"}, "Worklog: 2026-08-30"},
 	} {
-		if got := worklogTitle(sub(c.titles...), "2026-08-30"); got != c.want {
+		if got := worklogTitle(sub(c.titles...), "Worklog: 2026-08-30"); got != c.want {
 			t.Fatalf("%s: got %q, want %q", c.name, got, c.want)
 		}
 	}

@@ -14,22 +14,57 @@ import (
 	"fyne.io/fyne/v2/widget"
 )
 
-// The Meeting tab is the same commit sweep as Commit List, but on a Friday-
-// through-Thursday window — the reporting week for the Thursday weekly update.
-// Left 70% is the calendar of commits; right 30% is the local worklog entries
-// filed against those same seven days, so the meeting prep reads together as
-// "what shipped" alongside "what got logged".
+// The Meeting tab is the same commit sweep as Commit List, but on a Thursday-
+// through-Thursday window — the reporting span for the Thursday weekly update,
+// with the previous meeting's own Thursday included so the report reads as
+// "everything since we last met, through today". Left 90% is the calendar of
+// commits; right 10% is the local worklog entries filed against those same
+// eight days.
 
-// meetingWeekStartOf returns the Friday on or before date — the first day of
-// the meeting week whose Thursday is next (or today, if today is a Thursday
-// through the following Thursday inclusive is the natural window).
+// meetingWeekStartOf returns the Thursday on or before date — the first day of
+// the meeting window. When date itself falls on a Thursday, that Thursday is
+// the start: it is where the previous meeting sat, so the update naturally
+// begins there.
 func meetingWeekStartOf(date string) string {
 	t, err := time.Parse("2006-01-02", strings.TrimSpace(date))
 	if err != nil {
 		t = time.Now()
 	}
-	off := (int(t.Weekday()) - int(time.Friday) + 7) % 7
+	off := (int(t.Weekday()) - int(time.Thursday) + 7) % 7
 	return t.AddDate(0, 0, -off).Format("2006-01-02")
+}
+
+// meetingWeekDates lists the eight days of a meeting window, previous Thursday
+// through this Thursday inclusive. weekDates is Monday-first and returns seven
+// days, so the meeting tab has its own helper rather than reusing the strip's.
+func meetingWeekDates(start string) []string {
+	t, err := time.Parse("2006-01-02", strings.TrimSpace(start))
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 8)
+	for i := range out {
+		out[i] = t.AddDate(0, 0, i).Format("2006-01-02")
+	}
+	return out
+}
+
+// meetingWeekRangeLabel is weekRangeLabel for an eight-day window (start + 7
+// days), so a Thu→Thu span reads correctly rather than one day short.
+func meetingWeekRangeLabel(start string) string {
+	a, err := time.Parse("2006-01-02", strings.TrimSpace(start))
+	if err != nil {
+		return start
+	}
+	b := a.AddDate(0, 0, 7)
+	switch {
+	case a.Year() != b.Year():
+		return fmt.Sprintf("%s – %s", a.Format("2 Jan 2006"), b.Format("2 Jan 2006"))
+	case a.Month() != b.Month():
+		return fmt.Sprintf("%d %s – %d %s %d", a.Day(), a.Format("Jan"), b.Day(), b.Format("Jan"), b.Year())
+	default:
+		return fmt.Sprintf("%d – %d %s %d", a.Day(), b.Day(), b.Format("Jan"), b.Year())
+	}
 }
 
 func (ui *UI) buildMeetingTab() fyne.CanvasObject {
@@ -64,10 +99,11 @@ func (ui *UI) drawMeeting() {
 	if ui.meetingBox == nil {
 		return
 	}
+	ui.refreshLoggedShas()
 	weekStart := orDefault(ui.meetingStart, meetingWeekStartOf(today()))
-	days := weekDates(weekStart)
+	days := meetingWeekDates(weekStart)
 
-	ui.meetingTitle.SetText(weekRangeLabel(weekStart))
+	ui.meetingTitle.SetText(meetingWeekRangeLabel(weekStart))
 	if ui.meetingHere != nil {
 		if weekStart == meetingWeekStartOf(today()) {
 			ui.meetingHere.Disable()
@@ -119,7 +155,7 @@ func (ui *UI) drawMeeting() {
 	relayout(ui.meetingBody)
 }
 
-// meetingRowsPanel is the right column: the seven days of logged work rolled
+// meetingRowsPanel is the right column: the eight days of logged work rolled
 // up to one line per issue, showing total minutes and a link to the issue.
 // Same pattern Log List's pendingIssuesPanel uses — the meeting update reads
 // as "here is where the week went, per issue" without repeating a row for
@@ -295,7 +331,7 @@ func (ui *UI) loadMeetingCommits(force bool) {
 	}
 	ui.ensureMeetingCommitCache()
 	weekStart := orDefault(ui.meetingStart, meetingWeekStartOf(today()))
-	days := weekDates(weekStart)
+	days := meetingWeekDates(weekStart)
 	from, to := days[0], days[len(days)-1]
 
 	if ui.meetingCommitLoad[weekStart] {
@@ -359,12 +395,12 @@ func (ui *UI) loadMeetingIssueInfos(commits []Commit, week string, composer *pro
 	for _, c := range commits {
 		add(c.Issue)
 	}
-	// Local rows on the same seven days: their issue titles feed the right
+	// Local rows on the same eight days: their issue titles feed the right
 	// column, so fetching them here means the panel opens with real names
 	// rather than bare "owner/repo#123" refs.
 	if rows, err := ui.store.ReadRows(); err == nil {
 		inDays := map[string]bool{}
-		for _, d := range weekDates(week) {
+		for _, d := range meetingWeekDates(week) {
 			inDays[d] = true
 		}
 		for _, r := range rows {

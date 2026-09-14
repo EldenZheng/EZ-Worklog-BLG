@@ -144,6 +144,18 @@ func (t pillTheme) Size(name fyne.ThemeSizeName) float32 {
 	return t.Theme.Size(name)
 }
 
+// savedTag is a small pill-shaped label. Used on saved-row cards to mark that
+// the row's issue still carries other unlogged commits — one glance says
+// "there is more work here" without opening the pending list above.
+func savedTag(text string) fyne.CanvasObject {
+	bg := canvas.NewRectangle(color.NRGBA{R: 0x28, G: 0x80, B: 0x48, A: 0xff})
+	bg.CornerRadius = 8
+	lbl := canvas.NewText(text, color.White)
+	lbl.TextSize = theme.CaptionTextSize()
+	lbl.TextStyle = fyne.TextStyle{Bold: true}
+	return container.NewStack(bg, container.NewPadded(container.NewCenter(lbl)))
+}
+
 func appLogo(size float32) fyne.CanvasObject {
 	logo := canvas.NewImageFromResource(fyne.NewStaticResource("icon.png", appIconPNG))
 	logo.FillMode = canvas.ImageFillContain

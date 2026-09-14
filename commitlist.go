@@ -62,6 +62,7 @@ func (ui *UI) drawCommitList() {
 	if ui.commitBox == nil {
 		return
 	}
+	ui.refreshLoggedShas()
 	weekStart := orDefault(ui.weekStart, weekStartOf(today()))
 	days := weekDates(weekStart)
 
@@ -194,7 +195,8 @@ func (ui *UI) commitIssueBubble(issue string, commits []Commit) fyne.CanvasObjec
 		sha := commitHyperlink(c)
 		// Sha on its own line under the subject: with the sha as a Border-right
 		// element the wrapped subject fought it for width and truncated.
-		rows = append(rows, subject, container.NewHBox(layout.NewSpacer(), sha))
+		shaLine := container.NewHBox(layout.NewSpacer(), sha)
+		rows = append(rows, subject, shaLine)
 	}
 
 	frame := canvas.NewRectangle(ui.bubbleBackground(issue))

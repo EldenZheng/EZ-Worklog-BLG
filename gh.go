@@ -1702,16 +1702,17 @@ type issueNode struct {
 // skipping closed matches would make every re-push create a duplicate. An open
 // match still wins when both exist.
 // worklogTitle names the sub-issue for one entry. The first worklog of a day is
-// "Worklog: 2026-08-30"; a second entry against the same issue on the same day
-// is "Worklog: 2026-08-30 Part 2", then Part 3, and so on.
+// "<base>"; a second entry under the same title on the same day is "<base>
+// Part 2", then Part 3, and so on. base is normally "Worklog: <date>", but a
+// code-review entry passes "Code Review: <date>" so the board reads it as such
+// instead of as another Worklog stub.
 //
 // Two sub-issues may share a title as far as GitHub is concerned, but not as far
 // as anyone reading the list is concerned: a day with three identical rows says
 // nothing about which is which, and the board shows the title beside the
 // minutes. The number is taken from the highest part already filed rather than
 // from a count, so a deleted Part 2 does not hand its name to the next entry.
-func worklogTitle(node issueNode, wdate string) string {
-	base := "Worklog: " + wdate
+func worklogTitle(node issueNode, base string) string {
 	highest := 0
 	for i := range node.SubIssues.Nodes {
 		if n := worklogPartOf(node.SubIssues.Nodes[i].Title, base); n > highest {
@@ -1996,8 +1997,15 @@ func pushToProject(issueURL, contentID string, items []projectItem,
 		"query=mutation($p:ID!,$c:ID!){addProjectV2ItemById(input:{projectId:$p,contentId:$c}){item{id}}}",
 		"-F", "p=" + proj.ID, "-F", "c=" + contentID,
 	})
+	// Failing here after the sub-issue was created is exactly the case that
+	// used to lose the URL and, on retry, spawn a duplicate sub-issue with the
+	// next "Part N" title. The URL is folded into the result so applyPushResult
+	// stores it on the row, and the retry resumes on that same sub-issue.
 	if err != nil {
-		return PushResult{}, err
+		return PushResult{
+			URL: issueURL, ItemID: "", Notes: notes,
+			Problems: append(problems, "Could not add to project board: "+err.Error()),
+		}, nil
 	}
 	var addResp struct {
 		Data struct {
@@ -2009,7 +2017,10 @@ func pushToProject(issueURL, contentID string, items []projectItem,
 		} `json:"data"`
 	}
 	if e := json.Unmarshal([]byte(out), &addResp); e != nil {
-		return PushResult{}, ghErr("could not read project item id: %v", e)
+		return PushResult{
+			URL: issueURL, ItemID: "", Notes: notes,
+			Problems: append(problems, fmt.Sprintf("Could not read project item id: %v", e)),
+		}, nil
 	}
 	targetItem := addResp.Data.Add.Item.ID
 
@@ -2077,10 +2088,14 @@ func lastLine(s string) string {
 // sub-issue is created — including when another entry has already filed one
 // under the same title for the same day.
 //
+// subTitleBase overrides the sub-issue's base title. Empty falls back to the
+// standard "Worklog: <date>"; code-review entries pass "Code Review: <date>"
+// so the sub-issue is named for what it is on the board.
+//
 // The variadic progress callbacks receive fetchProgress events at each named
 // step, so a push spinner can render "Creating sub-issue — 40%" instead of
 // a bare wheel. done is out of 100 in every emit — the caller need not scale.
-func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, resume string, progress ...func(fetchProgress)) (PushResult, error) {
+func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, resume, subTitleBase string, progress ...func(fetchProgress)) (PushResult, error) {
 	emit := func(done int, stage string) {
 		p := fetchProgress{Done: done, Total: 100, Stage: stage}
 		for _, f := range progress {
@@ -2130,11 +2145,15 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 		// Numbered only if the day already has one on this issue, so a normal
 		// day's worklog keeps its plain title and a second entry is named for
 		// what it is rather than turning up as a twin of the first.
-		title := worklogTitle(issue, wdate)
-		if part := worklogPartOf(title, "Worklog: "+wdate); part > 1 {
+		base := subTitleBase
+		if strings.TrimSpace(base) == "" {
+			base = "Worklog: " + wdate
+		}
+		title := worklogTitle(issue, base)
+		if part := worklogPartOf(title, base); part > 1 {
 			notes = append(notes, fmt.Sprintf(
-				"This issue already had a worklog for %s, so this one was filed as part %d.",
-				wdate, part))
+				"This issue already had a %q sub-issue for %s, so this one was filed as part %d.",
+				base, wdate, part))
 		}
 
 		emit(25, "Creating sub-issue")

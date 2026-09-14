@@ -321,6 +321,15 @@ func (ui *UI) drawWeekStrip() {
 		ui.exportWeekForEmail(days, byDay, state)
 	})
 
+	// Refresh sits beside the strip so it is reachable from any manual kind, not
+	// only the Commits pane. Reloads both the pending commit sweep and the
+	// project data behind the calendar — otherwise pushing from one machine and
+	// walking back on another leaves the week strip showing yesterday's boards.
+	refresh := widget.NewButtonWithIcon("Refresh from GitHub", theme.ViewRefreshIcon(), func() {
+		ui.loadPending(true)
+		ui.refreshTodayScore()
+	})
+
 	// Display only, and it says so: nothing is written, nothing is pushed, and
 	// it is off again the moment the week changes.
 	support := widget.NewCheck(
@@ -334,7 +343,7 @@ func (ui *UI) drawWeekStrip() {
 		ui.drawWeekStrip()
 	}
 
-	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), goldChoice(support), mail,
+	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), goldChoice(support), mail, refresh,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
 
 	// Any column about to be thrown away stops breathing first: an animation left
@@ -779,8 +788,12 @@ func (ui *UI) dayRowCard(r Row, refresh func()) fyne.CanvasObject {
 	where.Wrapping = fyne.TextWrapBreak
 
 	push, edit, del := ui.rowActions(r, refresh)
+	leading := fyne.CanvasObject(compactPush(push))
+	if ui.issueHasPending(r["issue"]) {
+		leading = container.NewHBox(compactPush(push), savedTag("partly saved"))
+	}
 	body := container.NewVBox(title, mins, where,
-		container.NewBorder(nil, nil, compactPush(push), container.NewHBox(withPointerCursor(edit), withPointerCursor(del))))
+		container.NewBorder(nil, nil, leading, container.NewHBox(withPointerCursor(edit), withPointerCursor(del))))
 
 	bg := canvas.NewRectangle(blendColor(
 		theme.Color(theme.ColorNameInputBackground), accent, 0.10))
