@@ -83,6 +83,16 @@ func (ui *UI) buildMeetingTab() fyne.CanvasObject {
 	refresh := widget.NewButtonWithIcon("Refresh from GitHub", theme.ViewRefreshIcon(), func() {
 		ui.loadMeetingCommits(true)
 	})
+	// The drawer arrow — a floating button that lives in the middle of the tab
+	// vertically, on the seam between the calendar and the rows pane. Hidden
+	// state hugs the right edge and opens the drawer when tapped; open state
+	// sits on the split and closes it. Built once and kept, since the icon
+	// swap and OnTapped state need to survive a redraw.
+	ui.meetingArrow = widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
+		ui.meetingRowsVisible = !ui.meetingRowsVisible
+		ui.drawMeeting()
+	})
+	ui.meetingArrow.Importance = widget.LowImportance
 
 	ui.meetingTitle = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	ui.meetingHere = here
@@ -138,21 +148,85 @@ func (ui *UI) drawMeeting() {
 	for _, c := range commits {
 		byDay[c.Date] = append(byDay[c.Date], c)
 	}
-	// A fixed 90/10 split so a wide bubble on the left cannot push the divide
-	// around: fixedSplitLayout ignores child MinSize widths and hands each
-	// pane exactly its share of the available width. The calendar pane is
-	// wrapped in a Scroll so its content is clipped to that share — wide
-	// days scroll inside their own column instead of painting across the
-	// rows list on the right.
+	// The rows pane is a drawer: hidden by default so the calendar owns the
+	// whole tab, opened by tapping the arrow that floats on the divider
+	// vertically centered. Once open the divider is draggable — the initial
+	// position is 80/20 so the rows pane has room to read.
 	calendarBody := container.NewBorder(top, nil, nil, nil,
 		ui.commitDaysPanel(days, byDay))
-	rowsPanel := ui.meetingRowsPanel(days)
+	calendarPane := container.NewScroll(calendarBody)
+	rowsPane := container.NewScroll(ui.meetingRowsPanel(days))
 
-	split := container.New(&fixedSplitLayout{weights: [2]float32{0.9, 0.1}},
-		container.NewScroll(calendarBody), rowsPanel)
-	ui.meetingBox.Objects = []fyne.CanvasObject{split}
+	var content fyne.CanvasObject
+	if ui.meetingRowsVisible {
+		if ui.meetingSplit == nil {
+			ui.meetingSplit = container.NewHSplit(calendarPane, rowsPane)
+			ui.meetingSplit.SetOffset(openMeetingOffset)
+		} else {
+			ui.meetingSplit.Leading = calendarPane
+			ui.meetingSplit.Trailing = rowsPane
+			ui.meetingSplit.Refresh()
+		}
+		content = ui.meetingSplit
+		ui.meetingArrow.SetIcon(theme.NavigateNextIcon())
+	} else {
+		content = calendarPane
+		ui.meetingArrow.SetIcon(theme.NavigateBackIcon())
+	}
+
+	// Stack the drawer arrow over the content with a custom layout so it lands
+	// on the split's seam vertically centered — content underneath, arrow on
+	// top, positioned at whatever offset the HSplit is currently at.
+	ui.meetingBox.Objects = []fyne.CanvasObject{
+		container.New(&meetingArrowLayout{ui: ui}, content, withPointerCursor(ui.meetingArrow)),
+	}
 	ui.meetingBox.Refresh()
 	relayout(ui.meetingBody)
+}
+
+// openMeetingOffset is where the HSplit's divider lands when the drawer opens.
+// 0.80 (rows pane at 20%) leaves the calendar dominant while giving a busy
+// week's rows enough room to read; drag from here in either direction.
+const openMeetingOffset = 0.80
+
+// meetingArrowLayout stacks the drawer arrow over the tab content. objs[0] is
+// the content (calendar alone, or the split), objs[1] is the arrow button.
+// The arrow's centre lands on the divider line — at the right edge of the tab
+// when the drawer is closed, or on the split's own seam when it is open — and
+// it is vertically centred against the tab's height.
+type meetingArrowLayout struct{ ui *UI }
+
+func (l *meetingArrowLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	if len(objs) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	return objs[0].MinSize()
+}
+
+func (l *meetingArrowLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+	if len(objs) < 2 {
+		return
+	}
+	content, arrow := objs[0], objs[1]
+	content.Resize(size)
+	content.Move(fyne.NewPos(0, 0))
+	// Divider position: right edge of the tab when the drawer is closed,
+	// otherwise the split's own Offset — following the pointer if the user is
+	// dragging the divide themselves.
+	divider := size.Width
+	if l.ui != nil && l.ui.meetingRowsVisible && l.ui.meetingSplit != nil {
+		divider = size.Width * float32(l.ui.meetingSplit.Offset)
+	}
+	m := arrow.MinSize()
+	x := divider - m.Width/2
+	if x < 0 {
+		x = 0
+	}
+	if maxX := size.Width - m.Width; x > maxX {
+		x = maxX
+	}
+	arrow.Resize(m)
+	arrow.Move(fyne.NewPos(x, (size.Height-m.Height)/2))
 }
 
 // meetingRowsPanel is the right column: the eight days of logged work rolled
@@ -275,39 +349,6 @@ func (ui *UI) meetingRowLine(issue, title string, mins int) fyne.CanvasObject {
 func compactVBox(objects ...fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewThemeOverride(container.NewVBox(objects...),
 		tightListTheme{Theme: theme.Current()})
-}
-
-// fixedSplitLayout splits two children by weight regardless of what their
-// MinSize would otherwise ask for. That is what stops a wide bubble on the
-// left from dragging the divide across — no matter how big the calendar's
-// content grows, this layout gives it exactly its share of the available
-// width and hands the rest to the rows column beside it. Children should be
-// wrapped in a Scroll so their overflow is clipped inside their own pane.
-type fixedSplitLayout struct{ weights [2]float32 }
-
-func (l *fixedSplitLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
-	h := float32(0)
-	for _, o := range objs {
-		if !o.Visible() {
-			continue
-		}
-		if m := o.MinSize(); m.Height > h {
-			h = m.Height
-		}
-	}
-	return fyne.NewSize(0, h)
-}
-
-func (l *fixedSplitLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
-	if len(objs) < 2 {
-		return
-	}
-	w0 := size.Width * l.weights[0]
-	w1 := size.Width - w0
-	objs[0].Resize(fyne.NewSize(w0, size.Height))
-	objs[0].Move(fyne.NewPos(0, 0))
-	objs[1].Resize(fyne.NewSize(w1, size.Height))
-	objs[1].Move(fyne.NewPos(w0, 0))
 }
 
 // tightListTheme shrinks VBox spacing and label inner padding so the

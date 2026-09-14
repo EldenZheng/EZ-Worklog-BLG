@@ -126,6 +126,19 @@ type UI struct {
 	meetingCommitLoad map[string]bool
 	meetingCommitAt   map[string]time.Time
 	meetingProgress   *loadingIndicator
+	// The horizontal split between the calendar (left) and the rows list
+	// (right). Kept across redraws so a drag persists; only the two children
+	// are swapped when the tab redraws.
+	meetingSplit       *container.Split
+	// meetingRowsVisible is the drawer state: false hides the "Logged this
+	// week" pane entirely and hands the whole tab to the calendar; true opens
+	// it as an HSplit with the divider draggable and one of two preset widths.
+	// Default false — the pane is a summary you reach for, not a fixture.
+	meetingRowsVisible bool
+	// The arrow button that lives on the divider line (middle of the screen
+	// vertically). Its icon flips with the drawer state — < to open, > to
+	// close — so it always says which way it is about to go.
+	meetingArrow *widget.Button
 
 	// Shas of commits already stitched into a saved worklog row. Refreshed
 	// before each Commit List / Meeting redraw so a fresh save shows up as
