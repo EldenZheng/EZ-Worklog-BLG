@@ -257,12 +257,23 @@ func (ui *UI) syncLoading() {
 		selected = ui.tabs.Selected().Text
 	}
 	week := orDefault(ui.weekStart, weekStartOf(today()))
-	logKeys := []string{"pending"}
-	logLoading := ui.pendingLoading
+	// Log Work's top bar only tracks the pending commit sweep — the calendar
+	// below it has its own weekStripProgress that lights up while boards load,
+	// and reporting the same fetch on both bars had users chasing the top one
+	// when the answer was under their eyes on the strip. Log List has no
+	// strip of its own, so its top bar still covers the board load.
+	logWorkKeys := []string{"pending"}
+	logWorkLoading := ui.pendingLoading
+	logListKeys := []string{"pending"}
+	logListLoading := ui.pendingLoading
+	var calendarKeys []string
+	calendarLoading := false
 	for _, month := range ui.logTabMonths() {
 		key := statusCacheKey(month)
-		logKeys = append(logKeys, key)
-		logLoading = logLoading || ui.projLoading[key]
+		logListKeys = append(logListKeys, key)
+		logListLoading = logListLoading || ui.projLoading[key]
+		calendarKeys = append(calendarKeys, key)
+		calendarLoading = calendarLoading || ui.projLoading[key]
 	}
 	pages := []struct {
 		name      string
@@ -271,8 +282,13 @@ func (ui *UI) syncLoading() {
 		keys      []string
 		fallback  bool
 	}{
-		{logWorkTabName, ui.logProgress, ui.logBody, logKeys, logLoading},
-		{logListTabName, ui.listProgress, ui.listBody, logKeys, logLoading},
+		{logWorkTabName, ui.logProgress, ui.logBody, logWorkKeys, logWorkLoading},
+		// Second entry for the same tab: the strip's own indicator, driven by
+		// the calendar keys only. Both bars can light up together — one at the
+		// top for the pending sweep, one over the strip for the boards — but
+		// each shows only what its own fetch is doing.
+		{logWorkTabName, ui.weekStripProgress, ui.weekBox, calendarKeys, calendarLoading},
+		{logListTabName, ui.listProgress, ui.listBody, logListKeys, logListLoading},
 		{commitListTabName, ui.commitProgress, ui.commitBody, []string{"commits:" + week}, ui.weekCommitLoad[week]},
 		{meetingTabName, ui.meetingProgress, ui.meetingBody, []string{"meeting:" + orDefault(ui.meetingStart, meetingWeekStartOf(today()))}, ui.meetingCommitLoad[orDefault(ui.meetingStart, meetingWeekStartOf(today()))]},
 		{statusTabName, ui.statusProgress, ui.calBody, []string{statusCacheKey(ui.calMonth)}, ui.projLoading[statusCacheKey(ui.calMonth)]},

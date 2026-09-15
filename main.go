@@ -1442,6 +1442,13 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// be painted over by whatever the tab drew after it.
 	ui.dragLayer = container.NewWithoutLayout()
 	ui.logProgress = newLoadingIndicator()
+	// weekStripProgress lives with the strip below rather than at the top so
+	// the calendar loading reads where the eye already is. Built here so
+	// syncLoading can drive it from the moment the tab exists — drawWeekStrip
+	// only needs to place the widget's view.
+	if ui.weekStripProgress == nil {
+		ui.weekStripProgress = newLoadingIndicator()
+	}
 	ui.logBody = container.NewVBox(ui.logProgress.view, logCard, recentCard)
 	return container.NewStack(container.NewVScroll(ui.logBody), ui.dragLayer)
 }
@@ -3414,7 +3421,10 @@ func (ui *UI) buildReportTab() fyne.CanvasObject {
 	ui.repBox = container.NewVBox()
 	ui.reportProgress = newLoadingIndicator()
 	ui.repBody = container.NewVBox(head, ui.reportProgress.view, ui.repBox)
-	return container.NewVScroll(widget.NewCard("", "", ui.repBody))
+	// Two-way scroll: content that will not shrink further (a metric card at
+	// its minimum, a table's date column) scrolls sideways rather than being
+	// clipped by the window's right edge. Vertical scroll stays as before.
+	return container.NewScroll(widget.NewCard("", "", ui.repBody))
 }
 
 func (ui *UI) drawReport() {
@@ -3464,10 +3474,10 @@ func (ui *UI) drawReport() {
 	}
 	totals := totalsFromItems(items, "")
 	rep := reportFromTotals(ui.cfg, totals)
-	// Drafts are shown, never counted. Every figure below this line — payable
-	// days, receivable, complete/logged — is what the board holds, because that
-	// is what will actually be paid; work still sitting on this machine has not
-	// been claimed yet and must not read as if it had.
+	// Drafts are shown, never counted in the settled figures. Every figure
+	// below this line — payable days, receivable, complete/logged — is what
+	// the board holds, because that is what will actually be paid. Work still
+	// sitting on this machine gets a projection of its own further down.
 	draftByDay := ui.draftMinutesByDay(fromDate, toDate)
 	draftTotal := 0
 	for _, m := range draftByDay {
@@ -3480,11 +3490,33 @@ func (ui *UI) drawReport() {
 	supportSets, supportBonus := weekendSupportBonus(carried, supportIssues)
 	totalReceivable := rep.Receivable + supportBonus
 
-	money := func(v float64) string { return rep.Currency + " " + commaAmount(v) }
-	conv := "Not configured"
-	if rep.FxRate != 0 && rep.DisplayCurrency != "" {
-		conv = rep.DisplayCurrency + " " + commaAmount(totalReceivable*rep.FxRate)
+	// Projected receivable is what the period would pay once every draft on
+	// this machine is pushed. The pay math is the same, run on totals merged
+	// with the drafts by day so a draft that finishes an under-target day
+	// lifts payable days accordingly. Weekend support is kept as-is — a
+	// draft's contribution to a support set is only known once it is pushed
+	// with its issue attached, and inflating the projection would read as a
+	// promise this figure cannot keep.
+	projectedTotals := map[string]int{}
+	for d, m := range totals {
+		projectedTotals[d] = m
 	}
+	for d, m := range draftByDay {
+		projectedTotals[d] += m
+	}
+	projected := reportFromTotals(ui.cfg, projectedTotals)
+	projectedTotalReceivable := projected.Receivable + supportBonus
+
+	money := func(v float64) string { return rep.Currency + " " + commaAmount(v) }
+	converted := func(v float64) string {
+		if rep.FxRate == 0 || rep.DisplayCurrency == "" {
+			return "Not configured"
+		}
+		return rep.DisplayCurrency + " " + commaAmount(v*rep.FxRate)
+	}
+	conv := converted(totalReceivable)
+	projectedConv := converted(projectedTotalReceivable)
+	supportConv := converted(supportBonus)
 
 	// Working days are read off the calendar, so the tile is right even for a
 	// period nobody has logged a minute into yet.
@@ -3498,19 +3530,39 @@ func (ui *UI) drawReport() {
 		wdNote += fmt.Sprintf(" (pay divides by %d)", divisor)
 	}
 
-	supportNote := fmt.Sprintf("%d issues, %d set(s)", supportIssues, supportSets)
+	supportDetail := fmt.Sprintf("%d issues, %d set(s)", supportIssues, supportSets)
 	if carried > 0 {
-		supportNote = fmt.Sprintf("%d carried in + %s", carried, supportNote)
+		supportDetail = fmt.Sprintf("%d carried in + %s", carried, supportDetail)
 	}
 	if left := (carried + supportIssues) % supportSetSize; left > 0 {
-		supportNote += fmt.Sprintf(", %d carry to next", left)
+		supportDetail += fmt.Sprintf(", %d carry to next", left)
 	}
-	supportNote = "Weekend support bonus (" + supportNote + ")"
+	supportNote := "Weekend support bonus (" + supportDetail + ")"
 
-	stats := container.New(newFlowGrid(260, 0, 126),
-		reportMetric(money(totalReceivable), "Receivable including support", "Converted receivable: "+conv),
-		reportMetric(fmt.Sprintf("%.1fh", float64(rep.TotalMin)/60), "Time logged", fmt.Sprintf("%d complete / %d logged days", rep.DaysComplete, rep.DaysLogged)),
-		reportMetric(hoursMins(draftTotal), "Saved here, not pushed", "Not included in receivable"),
+	// The yellow "projected" tile sits beside the settled one so the two
+	// figures read as a pair — this-is-yours-now next to this-is-yours-once-
+	// pushed. Its note carries the delta so a glance says how much depends on
+	// the drafts.
+	draftSurface, draftHeader, draftBorder := draftPanelTones()
+	payableNote := fmt.Sprintf("%.2f days × %s", rep.PayableDays, money(rep.DailyRate))
+	projectedNote := fmt.Sprintf("%.2f days × %s", projected.PayableDays, money(projected.DailyRate))
+	if projected.Receivable > rep.Receivable {
+		projectedNote = fmt.Sprintf("+%s once %s of drafts pushes · %s",
+			money(projected.Receivable-rep.Receivable), hoursMins(draftTotal), projectedNote)
+	}
+	payableBeforeSupport := "(" + money(rep.Receivable) + " before support)"
+	projectedBeforeSupport := "(" + money(projected.Receivable) + " before support)"
+	stats := container.New(newFlowGrid(220, 0, 126),
+		reportMetricWithAside(money(totalReceivable), "Payable", payableNote, payableBeforeSupport, "Converted: "+conv),
+		reportMetricTintedWithAside(money(projectedTotalReceivable), "Payable after drafts", projectedNote, projectedBeforeSupport, "Converted: "+projectedConv, draftSurface, draftHeader, draftBorder),
+		reportMetricDarkBlue(money(supportBonus), "Support bonus", supportDetail, "Converted: "+supportConv),
+	)
+	timeStats := container.New(newFlowGrid(220, 0, 126),
+		reportMetric(fmt.Sprintf("%.1fh", float64(rep.TotalMin)/60), "Time logged",
+			fmt.Sprintf("÷ 8h = %.2f days · %d complete / %d logged days",
+				float64(rep.TotalMin)/target, rep.DaysComplete, rep.DaysLogged)),
+		reportMetric(hoursMins(draftTotal), "Saved here, not pushed",
+			fmt.Sprintf("÷ 8h = %.2f days · Not included in settled figures", float64(draftTotal)/target)),
 	)
 	payment := reportSection("Payment breakdown",
 		reportFact("Worklog receivable", money(rep.Receivable)),
@@ -3607,15 +3659,8 @@ func (ui *UI) drawReport() {
 		}
 		dayDetails = append(dayDetails, reportSection("Days under 480", rows...))
 	}
-	if len(rep.Over) > 0 {
-		rows := []fyne.CanvasObject{container.NewGridWithColumns(3, bold("Date"), bold("Logged (min)"), bold("Excess (min)"))}
-		for _, x := range rep.Over {
-			rows = append(rows, container.NewGridWithColumns(3,
-				widget.NewLabel(x.Date), widget.NewLabel(strconv.Itoa(x.Minutes)),
-				widget.NewLabel("+"+strconv.Itoa(x.Minutes-target))))
-		}
-		dayDetails = append(dayDetails, reportSection("Days over 480", rows...))
-	}
+	// Days over 480 are intentionally not listed. Their full time still counts
+	// in Time logged while payable time remains capped by the existing pay math.
 	// With no salary set every figure on the tab is a real zero, which reads as
 	// a month that earned nothing rather than as a setting nobody has filled in.
 	summary := "Set your base salary in Settings to see what this period is worth."
@@ -3643,10 +3688,11 @@ func (ui *UI) drawReport() {
 		stats,
 		container.NewVBox(chart),
 		container.NewVBox(split...),
-		container.New(newFlowGrid(360, 0, 0), payment, activity),
+		timeStats,
+		container.New(newFlowGrid(300, 0, 0), payment, activity),
 	}
 	if len(dayDetails) > 0 {
-		ui.repBox.Objects = append(ui.repBox.Objects, container.New(newFlowGrid(360, 0, 0), dayDetails...))
+		ui.repBox.Objects = append(ui.repBox.Objects, container.New(newFlowGrid(300, 0, 0), dayDetails...))
 	}
 	ui.repBox.Objects = append(ui.repBox.Objects, reportSection("How this is calculated", notes...))
 	ui.repBox.Refresh()

@@ -306,13 +306,11 @@ func (ui *UI) drawWeekStrip() {
 	// A slim loading strip attached to the week head — the tab-level bar sits
 	// on Log Work's top edge and is easy to miss when the eye is already down
 	// on the calendar. Reuses the tab strip's look so it reads as one system.
+	// State (visible / percent / caption) is driven by syncLoading against the
+	// same fetch keys the boards load under; drawWeekStrip just places the
+	// widget's view.
 	if ui.weekStripProgress == nil {
 		ui.weekStripProgress = newLoadingIndicator()
-	}
-	if state == "loading" {
-		ui.weekStripProgress.showProgress(true, fetchProgress{Stage: "Reading calendar from GitHub"})
-	} else {
-		ui.weekStripProgress.setActive(false)
 	}
 	// The same export as Log List, on the tab the week is actually worked from:
 	// having to change tabs to send the week you are looking at is a step for
@@ -321,12 +319,11 @@ func (ui *UI) drawWeekStrip() {
 		ui.exportWeekForEmail(days, byDay, state)
 	})
 
-	// Refresh sits beside the strip so it is reachable from any manual kind, not
-	// only the Commits pane. Reloads both the pending commit sweep and the
-	// project data behind the calendar — otherwise pushing from one machine and
-	// walking back on another leaves the week strip showing yesterday's boards.
-	refresh := widget.NewButtonWithIcon("Refresh from GitHub", theme.ViewRefreshIcon(), func() {
-		ui.loadPending(true)
+	// Refresh reloads the project data behind the week strip — the boards, the
+	// day fills, the score line — and only that. The commit sweep has its own
+	// refresh in the pane above, and a second machine's push shows up on the
+	// board without waiting for the commit list to be rescanned.
+	refresh := widget.NewButtonWithIcon("Refresh calendar", theme.ViewRefreshIcon(), func() {
 		ui.refreshTodayScore()
 	})
 
