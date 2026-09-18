@@ -30,6 +30,9 @@ func TestMeetingTitleAndDisplayName(t *testing.T) {
 	if got := meetingTitle(cfg, "2026-08-25"); got != "Elden Meeting & ad hocs: 2026-08-25" {
 		t.Fatalf("meeting title = %q", got)
 	}
+	if got := dailyCodeReviewTitle(cfg, "2026-09-15"); got != "Elden Code Review: 2026-09-15" {
+		t.Fatalf("code review title = %q", got)
+	}
 }
 
 // An issue is pasted as often as it is typed, and both are readable.
@@ -88,6 +91,10 @@ func TestPushableWithoutIssue(t *testing.T) {
 		want bool
 	}{
 		{"meeting", Row{"type": kindMeeting}, true},
+		{"bulk review with PRs", Row{"type": kindBulkReview, "remarks": "https://github.com/o/r/pull/1 (10m)"}, true},
+		{"bulk review without PRs", Row{"type": kindBulkReview}, false},
+		{"interim bulk draft", Row{"type": kindCodeReview, "remarks": "https://github.com/o/r/pull/1 (10m)"}, true},
+		{"single code review without issue", Row{"type": kindCodeReview, "remarks": "reviewed fixes"}, false},
 		{"independent with a parent named",
 			Row{"type": kindIndependent, "parent_repo": "o/r", "parent_title": "Tidy up"}, true},
 		{"independent with no title", Row{"type": kindIndependent, "parent_repo": "o/r"}, false},

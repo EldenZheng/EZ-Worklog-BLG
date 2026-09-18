@@ -16,7 +16,7 @@ Built with [Fyne](https://fyne.io). All GitHub access goes through the
 
 | Tab | What it does |
 | --- | --- |
-| **Log work** | Commits you have pushed but not logged, as tiles. Tap one to log it. Also takes manual meeting/other entries. |
+| **Log work** | Commits plus manual entries. **Code Review** accepts one PR URL, resolves its `Refs` issue and files the worklog there (a direct issue link also works). **Bulk Review** is a growing two-column PR-link/minutes sheet and creates one daily `<Name> Code Review: <date>` issue. |
 | **Status** | A month calendar; each day fills towards the daily target, coloured by organisation. |
 | **Report** | A payroll period — the 21st to the 20th — as stat tiles, a per-day bar chart, and the split by organisation. |
 | **Settings** | Everything below. |

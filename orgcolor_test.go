@@ -41,6 +41,26 @@ func TestOrgColoursFollowConfigOrder(t *testing.T) {
 	}
 }
 
+func TestIndependentWorkRowsKeepTheirPurpleAccent(t *testing.T) {
+	cfg := Config{Repos: []string{"bigledger", "BigLedger-Support"}}
+	for name, row := range map[string]Row{
+		"independent draft":  {"type": kindIndependent},
+		"pushed independent": {"type": kindIndependent, "issue": "bigledger/repo#7"},
+		"meeting":            {"type": kindMeeting},
+		"bulk review":        {"type": kindBulkReview, "description": "Elden Code Review: 2026-09-23"},
+	} {
+		if got := rowAccentColor(cfg, row); got != independentWorkAccent {
+			t.Fatalf("%s accent = %v, want purple %v", name, got, independentWorkAccent)
+		}
+	}
+	if got := rowAccentColor(cfg, Row{"type": kindCodeReview, "issue": "bigledger/repo#7"}); got != orgPalette[0] {
+		t.Fatalf("issue-backed code review should keep its org colour, got %v", got)
+	}
+	if got := rowAccentColor(cfg, Row{"type": kindOther, "issue": "bigledger/repo#8"}); got != orgPalette[0] {
+		t.Fatalf("parent-backed Worklog should keep its org colour, got %v", got)
+	}
+}
+
 func TestOrgOf(t *testing.T) {
 	cases := map[string]string{
 		"https://github.com/bigledger/blg-intranet/issues/42":  "bigledger",

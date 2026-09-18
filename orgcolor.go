@@ -31,6 +31,18 @@ var orgPalette = []color.NRGBA{
 // of the ones you told me about" rather than as a seventh employer.
 var orgUnknown = color.NRGBA{R: 0x8A, G: 0x8A, B: 0x8A, A: 0xff}
 
+// independentWorkAccent distinguishes work whose issue the app creates from
+// commits, individual Code Reviews and regular parent-backed Worklogs. It is
+// type-owned, so it stays purple before and after GitHub assigns an issue ref.
+var independentWorkAccent = color.NRGBA{R: 0x8A, G: 0x4F, B: 0xC4, A: 0xff}
+
+func rowAccentColor(cfg Config, r Row) color.NRGBA {
+	if rowUsesIndependentStyle(r) {
+		return independentWorkAccent
+	}
+	return orgColor(cfg, orgOf(r["issue"]))
+}
+
 // orgOrder lists the configured organisations, lowercased, in the order they
 // take colours. Repos comes first because that is the list the user types in
 // the order they think of them; a board-only org is appended after.

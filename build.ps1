@@ -1,6 +1,6 @@
 param(
     [switch]$Test,
-    [string]$Output = 'Worklog.exe'
+    [string]$Output = '..\Worklog.exe'
 )
 $ErrorActionPreference = 'Stop'
 Push-Location $PSScriptRoot

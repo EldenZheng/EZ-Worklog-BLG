@@ -93,6 +93,7 @@ type UI struct {
 	// to reach GitHub. This ticks over to the full month when the pushed ones
 	// are wanted back.
 	showPushed *widget.Check
+	draftSort  string // Duration or Created (earliest first)
 
 	calTitle    *widget.Label
 	calSummary  *widget.Label
@@ -128,8 +129,13 @@ type UI struct {
 	meetingProgress   *loadingIndicator
 	// The horizontal split between the calendar (left) and the rows list
 	// (right). Kept across redraws so a drag persists; only the two children
-	// are swapped when the tab redraws.
-	meetingSplit       *container.Split
+	// are swapped when the tab redraws. The two holders keep the split's own
+	// leading and trailing refs stable — a rebuilt calendarPane on every
+	// redraw only replaces the holder's inner Objects, so the split has one
+	// fixed pair of children and Refresh reliably re-lays it out.
+	meetingSplit          *container.Split
+	meetingCalendarHolder *fyne.Container
+	meetingRowsHolder     *fyne.Container
 	// meetingRowsVisible is the drawer state: false hides the "Logged this
 	// week" pane entirely and hands the whole tab to the calendar; true opens
 	// it as an HSplit with the divider draggable and one of two preset widths.
@@ -211,6 +217,14 @@ func relayout(column *fyne.Container) {
 	if column != nil {
 		column.Refresh()
 	}
+}
+
+func (ui *UI) showDraftSavedInfo() {
+	if ui.win == nil {
+		return
+	}
+	dialog.ShowInformation("Draft saved locally",
+		"This worklog is saved on this computer and has not been pushed to GitHub yet.", ui.win)
 }
 
 // orgShown reports whether an organisation's work belongs in the current view.
@@ -573,9 +587,8 @@ func (ui *UI) refreshLoggedShas() {
 }
 
 // issueHasPending reports whether the given issue still has non-ignored
-// commits waiting on the pending list. Used to hang a "partly saved" tag on a
-// saved row's calendar card, so an issue with more work standing behind it
-// reads as such without opening the pending pane above.
+// commits waiting on the pending list. This is separate from a partially
+// completed push: it means more source commits remain, not that saving failed.
 func (ui *UI) issueHasPending(issue string) bool {
 	issue = strings.TrimSpace(issue)
 	if issue == "" {
@@ -587,6 +600,15 @@ func (ui *UI) issueHasPending(issue string) bool {
 		}
 	}
 	return false
+}
+
+// rowPartlySaved reports that a push reached GitHub far enough to leave an
+// issue/project item behind, but did not complete every required field/status
+// update. A plain local draft has neither remote identifier and stays simply
+// "waiting to push".
+func rowPartlySaved(r Row) bool {
+	return strings.TrimSpace(r["pushed_at"]) == "" &&
+		(strings.TrimSpace(r["issue_url"]) != "" || strings.TrimSpace(r["item_id"]) != "")
 }
 
 func (ui *UI) ensureProjectCache() {
@@ -1122,19 +1144,16 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	}
 
 	// -- manual panes --
-	// The three hand-logged kinds differ only in where the work gets filed, so
-	// they share one form and add the one field each of them needs: nothing for
-	// a meeting, an issue link for "other", a repo and a title for one that has
-	// no issue yet.
+	// Hand-logged work shares one form and reveals only the fields its kind
+	// needs: meeting notes, a bulk code-review list, an existing issue link, or
+	// the repo and title for an issue that does not exist yet.
 	// Same date picker the row-editor popup uses, so the tab and the popup ask
 	// the "which day" question the same way — with the month grid painted by
 	// how full each day already is.
 	mDate := newWorklogDatePicker(ui, today())
 	// Description is a textarea now — meeting write-ups run to several lines
 	// and the old single-line field truncated visibly at the caret. Only shown
-	// for meetings; for Other and Independent it is auto-titled "Worklog: <date>"
-	// and kept off screen entirely, since asking the reader to name each day's
-	// worklog was the field's only job.
+	// for meetings; the other kinds title themselves and keep it off screen.
 	mDesc := widget.NewMultiLineEntry()
 	mDesc.SetMinRowsVisible(3)
 	mDesc.SetPlaceHolder("What was it? (meeting notes)")
@@ -1153,10 +1172,10 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	mRemarksCountUpdate()
 	mMsg := widget.NewLabel("")
 
-	// Mode selector — the same one the row editor grows. Shown for Other and
-	// Independent since those two produce a written entry that can either take
-	// a Worklog sub-issue or land on the issue itself; Meeting is always the
-	// day's meeting issue and Commits carries its own mode per group.
+	// Mode selector — the same one the row editor grows. Shown for Worklog and a
+	// single Code Review, where the user is filing against an existing issue.
+	// Independent has a fixed creation flow; Meeting and Bulk Review always use
+	// their daily issue, and Commits carries its own mode per group.
 	mMode := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
 	if strings.EqualFold(ui.cfg.DefaultMode, "issue") {
 		mMode.SetSelected("The issue itself")
@@ -1182,11 +1201,198 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	)
 	mPushAs.Hide()
 
-	// "Other": an issue that already exists.
+	// "Worklog": an issue that already exists.
 	mIssue := widget.NewEntry()
 	mIssue.SetPlaceHolder("https://github.com/bigledger/repo/issues/123  or  bigledger/repo#123")
 	otherRow := labeled("Issue link", mIssue)
 	otherRow.Hide()
+
+	// A single code review starts from the thing actually in hand: its PR URL.
+	// The linked issue is resolved from GitHub's metadata or the PR's Refs text;
+	// a direct issue link remains accepted when a PR names none or several.
+	mReviewPR := widget.NewEntry()
+	mReviewPR.SetPlaceHolder("https://github.com/bigledger/repo/pull/123  (or paste the issue link directly)")
+	mReviewTarget := widget.NewLabel("")
+	mReviewTarget.Wrapping = fyne.TextWrapWord
+	reviewLookupVersion := 0
+	startReviewLookup := func(source string, version int) {
+		if version != reviewLookupVersion || mReviewPR.Text != source {
+			return
+		}
+		mReviewTarget.SetText("Finding the referenced issue on GitHub…")
+		var ref string
+		var err error
+		ui.async(func() error {
+			ref, _, err = resolveSingleCodeReviewTarget(source)
+			return nil
+		}, func() {
+			if version != reviewLookupVersion || mReviewPR.Text != source {
+				return
+			}
+			if err != nil {
+				mReviewTarget.SetText(err.Error())
+				return
+			}
+			mReviewTarget.SetText("Worklog issue: " + ref)
+		})
+	}
+	singleReviewRow := container.NewVBox(
+		labeled("PR or issue link", mReviewPR),
+		mReviewTarget,
+	)
+	singleReviewRow.Hide()
+	mReviewPR.OnChanged = func(source string) {
+		reviewLookupVersion++
+		version := reviewLookupVersion
+		mReviewTarget.SetText("")
+		if _, ok := canonicalPullRequestURL(source); ok {
+			// Wait for a paste/typing burst to settle. Without the debounce,
+			// typing PR 123 would request PR 1, then 12, then 123.
+			mReviewTarget.SetText("Finding the referenced issue on GitHub…")
+			time.AfterFunc(350*time.Millisecond, func() {
+				defer func() { _ = recover() }() // the app may close meanwhile
+				fyne.Do(func() { startReviewLookup(source, version) })
+			})
+			return
+		}
+		// Direct issue links/refs need no network lookup and can show at once.
+		if ref, err := issueRefFromAny(source); err == nil {
+			mReviewTarget.SetText("Worklog issue: " + ref)
+		}
+	}
+
+	// "Bulk Review" is a two-column growing sheet. Completing the current
+	// PR + Minutes pair appends the next blank row automatically. The resulting
+	// items still feed the same issue body and Worklog remarks as before.
+	type bulkReviewInput struct {
+		pr, mins      *widget.Entry
+		issue         *widget.Label
+		lookupVersion int
+	}
+	var bulkInputs []*bulkReviewInput
+	bulkRows := container.NewVBox()
+	bulkTotal := widget.NewLabelWithStyle("Total: 0 min", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true})
+	bulkHeader := container.New(newRatioRow(0.82, 0.18),
+		widget.NewLabelWithStyle("PR link", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Minutes", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+	)
+	codeReviewRow := container.NewVBox(bulkHeader, bulkRows, bulkTotal)
+	codeReviewRow.Hide()
+
+	bulkReviewItems := func() ([]CodeReviewItem, error) {
+		var items []CodeReviewItem
+		for i, input := range bulkInputs {
+			pr := strings.TrimSpace(input.pr.Text)
+			minuteText := strings.TrimSpace(input.mins.Text)
+			if pr == "" && minuteText == "" {
+				continue
+			}
+			if pr == "" || minuteText == "" {
+				return nil, fmt.Errorf("row %d needs both a PR link and minutes", i+1)
+			}
+			url, ok := canonicalPullRequestURL(pr)
+			if !ok {
+				return nil, fmt.Errorf("row %d is not a GitHub pull-request link", i+1)
+			}
+			mins, err := strconv.Atoi(minuteText)
+			if err != nil || mins <= 0 {
+				return nil, fmt.Errorf("row %d needs minutes greater than zero", i+1)
+			}
+			items = append(items, CodeReviewItem{URL: url, Minutes: mins})
+		}
+		if len(items) == 0 {
+			return nil, fmt.Errorf("enter at least one PR link and its minutes")
+		}
+		return items, nil
+	}
+
+	var addBulkReviewRow func()
+	updateBulkReviewTotal := func() {
+		total := 0
+		for _, input := range bulkInputs {
+			if _, ok := canonicalPullRequestURL(input.pr.Text); !ok {
+				continue
+			}
+			if mins, err := strconv.Atoi(strings.TrimSpace(input.mins.Text)); err == nil && mins > 0 {
+				total += mins
+			}
+		}
+		if total == 0 {
+			mMin.SetText("")
+		} else {
+			mMin.SetText(strconv.Itoa(total))
+		}
+		bulkTotal.SetText(fmt.Sprintf("Total: %d min", total))
+		if len(bulkInputs) == 0 {
+			return
+		}
+		last := bulkInputs[len(bulkInputs)-1]
+		if _, ok := canonicalPullRequestURL(last.pr.Text); !ok {
+			return
+		}
+		mins, err := strconv.Atoi(strings.TrimSpace(last.mins.Text))
+		if err == nil && mins > 0 {
+			addBulkReviewRow()
+		}
+	}
+
+	addBulkReviewRow = func() {
+		input := &bulkReviewInput{
+			pr: widget.NewEntry(), mins: widget.NewEntry(), issue: widget.NewLabel(""),
+		}
+		input.pr.SetPlaceHolder("https://github.com/bigledger/repo/pull/123")
+		input.mins.SetPlaceHolder("10")
+		input.issue.Wrapping = fyne.TextWrapWord
+		input.pr.OnChanged = func(source string) {
+			input.lookupVersion++
+			version := input.lookupVersion
+			input.issue.SetText("")
+			if prURL, ok := canonicalPullRequestURL(source); ok {
+				input.issue.SetText("Finding referenced issue…")
+				time.AfterFunc(350*time.Millisecond, func() {
+					defer func() { _ = recover() }()
+					fyne.Do(func() {
+						if version != input.lookupVersion || input.pr.Text != source {
+							return
+						}
+						var lookup codeReviewLookup
+						var lookupErr error
+						ui.async(func() error {
+							lookup, lookupErr = fetchCodeReviewLookup(prURL)
+							return nil
+						}, func() {
+							if version != input.lookupVersion || input.pr.Text != source {
+								return
+							}
+							switch {
+							case lookupErr != nil:
+								input.issue.SetText(lookupErr.Error())
+							case len(lookup.IssueRefs) == 0:
+								input.issue.SetText("No referenced issue found")
+							default:
+								input.issue.SetText("Issue: " + strings.Join(lookup.IssueRefs, ", "))
+							}
+						})
+					})
+				})
+			}
+			updateBulkReviewTotal()
+		}
+		input.mins.OnChanged = func(string) { updateBulkReviewTotal() }
+		bulkInputs = append(bulkInputs, input)
+		bulkRows.Add(container.New(newRatioRow(0.82, 0.18),
+			container.NewVBox(input.pr, input.issue),
+			container.NewVBox(input.mins, layout.NewSpacer())))
+		relayout(ui.logBody)
+	}
+	resetBulkReviewRows := func() {
+		bulkInputs = nil
+		bulkRows.Objects = nil
+		bulkTotal.SetText("Total: 0 min")
+		addBulkReviewRow()
+		bulkRows.Refresh()
+	}
+	addBulkReviewRow()
 
 	// "Independent": an issue that does not exist yet.
 	repoPick := ui.newRepoPicker()
@@ -1208,14 +1414,20 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	descRow := labeled("Description", mDesc)
 	descRow.Hide()
 
-	// autoDescFor is the auto-title Other, Code Review and Independent entries
-	// wear. Matches the pushed sub-issue's title on GitHub, so the CSV line and
-	// the board carry the same string.
+	// autoDescFor is the generated title non-meeting entries wear. Code Review
+	// names its daily issue; Worklog and Independent keep the normal worklog title.
 	autoDescFor := func(k, iso string) string {
+		if k == kindBulkReview {
+			return dailyCodeReviewTitle(ui.cfg, iso)
+		}
 		if k == kindCodeReview {
 			return codeReviewTitle(iso)
 		}
 		return "Worklog: " + iso
+	}
+	bulkReviewFilingHint := func(iso string) string {
+		return fmt.Sprintf("Creates/reuses its own issue in %s: %s.",
+			bulkCodeReviewRepo, dailyCodeReviewTitle(ui.cfg, iso))
 	}
 
 	// Both buttons share this closure. push=false saves a draft (like the popup
@@ -1223,8 +1435,18 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// resolveForPush + PushEntry, the same path the row editor uses. Reset the
 	// form only after a successful save so a failure keeps the fields for a
 	// second attempt.
-	mSave := func(push bool) {
+	mSaveResolved := func(push bool, codeReviewIssue string) {
+		var reviewItems []CodeReviewItem
 		mins, _ := strconv.Atoi(strings.TrimSpace(mMin.Text))
+		if kind == kindBulkReview {
+			var err error
+			reviewItems, err = bulkReviewItems()
+			if err != nil {
+				mMsg.SetText(err.Error())
+				return
+			}
+			mins = codeReviewMinutes(reviewItems)
+		}
 		if mins <= 0 {
 			mMsg.SetText("Minutes must be more than zero.")
 			return
@@ -1234,14 +1456,17 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			mMsg.SetText("Pick a date.")
 			return
 		}
-		// Description is the visible textarea for a meeting; for Other, Code
+		// Description is the visible textarea for a meeting; for Worklog, Code
 		// Review and Independent the field is hidden and the auto-title is
 		// written in.
 		desc := strings.TrimSpace(mDesc.Text)
-		if kind == kindOther || kind == kindCodeReview || kind == kindIndependent {
+		if kind == kindOther || kind == kindCodeReview || kind == kindBulkReview || kind == kindIndependent {
 			desc = autoDescFor(kind, date)
 		}
 		remarksText := strings.TrimSpace(mRemarks.Text)
+		if kind == kindBulkReview {
+			remarksText = codeReviewBody(reviewItems)
+		}
 		if len(remarksText) > remarkCap {
 			mMsg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarksText), remarkCap))
 			return
@@ -1262,7 +1487,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			// created at push time, so logging two meetings on one day lands
 			// both on the same issue instead of opening a second.
 			row["mode"] = "issue"
-		case kindOther, kindCodeReview:
+		case kindOther:
 			ref, err := issueRefFromAny(mIssue.Text)
 			if err != nil {
 				mMsg.SetText(err.Error())
@@ -1270,6 +1495,17 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			}
 			row["issue"] = ref
 			row["mode"] = mModeVal()
+		case kindCodeReview:
+			if strings.TrimSpace(codeReviewIssue) == "" {
+				mMsg.SetText("Paste a PR or issue link for this review.")
+				return
+			}
+			row["issue"] = codeReviewIssue
+			row["mode"] = mModeVal()
+		case kindBulkReview:
+			// The daily issue is found or created on the first push, matching
+			// the meeting flow and keeping GitHub untouched for drafts.
+			row["mode"] = "issue"
 		case kindIndependent:
 			repo := repoPick.value()
 			title := strings.TrimSpace(mTitle.Text)
@@ -1293,6 +1529,9 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			mRemarks.SetText("")
 			mTitle.SetText("")
 			mIssue.SetText("")
+			mReviewPR.SetText("")
+			mReviewTarget.SetText("")
+			resetBulkReviewRows()
 			ui.drawRecent()
 			ui.drawWeekStrip()
 		}
@@ -1300,6 +1539,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		if !push {
 			mMsg.SetText("Saved as draft — push it from the entry below when you are ready.")
 			resetForm()
+			ui.showDraftSavedInfo()
 			return
 		}
 
@@ -1343,6 +1583,39 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		})
 	}
 
+	// Single reviews resolve their PR to its referenced issue before the normal
+	// save path runs. Save draft does the same lookup so the draft itself is
+	// already attached to the correct issue and can be pushed later unchanged.
+	mSave := func(push bool) {
+		if kind != kindCodeReview {
+			mSaveResolved(push, "")
+			return
+		}
+		source := mReviewPR.Text
+		if strings.TrimSpace(source) == "" {
+			mMsg.SetText("Paste the PR link (or the issue link directly).")
+			return
+		}
+		mMsg.SetText("Finding the issue referenced by this PR…")
+		var ref string
+		var err error
+		ui.async(func() error {
+			ref, _, err = resolveSingleCodeReviewTarget(source)
+			return nil
+		}, func() {
+			if kind != kindCodeReview || mReviewPR.Text != source {
+				return
+			}
+			if err != nil {
+				mReviewTarget.SetText(err.Error())
+				mMsg.SetText(err.Error())
+				return
+			}
+			mReviewTarget.SetText("Worklog issue: " + ref)
+			mSaveResolved(push, ref)
+		})
+	}
+
 	saveBtn := widget.NewButton("Save draft", func() { mSave(false) })
 	pushBtn := widget.NewButton("Save & push", func() { mSave(true) })
 	pushBtn.Importance = widget.HighImportance
@@ -1353,10 +1626,14 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 
 	// Date on its own row so the picker's month can drop under it without
 	// fighting Minutes for width; Minutes rides alongside as a narrower field.
-	dateRow := container.New(newRatioRow(0.72, 0.28),
-		labelledPicker("Date", mDate),
-		labeled("Minutes", mMin),
-	)
+	dateField := labelledPicker("Date", mDate)
+	minutesField := labeled("Minutes", mMin)
+	dateRow := container.New(newRatioRow(0.72, 0.28), dateField, minutesField)
+	// Use the same day calculation shown in the commit popup. For Bulk Review,
+	// mMin is the hidden sum of the individual spreadsheet rows, so the readout
+	// reports GitHub minutes, pending drafts, and this review's live total without
+	// asking for a second minutes value.
+	dayReadout := ui.dayFillReadout(mDate, mMin, "")
 	// Remarks with its counter on a right-aligned row underneath, so a wall of
 	// text never surprises the pusher with a silent trim to remarkCap.
 	remarksRow := container.NewVBox(
@@ -1365,8 +1642,9 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	)
 	manualPane := container.NewVBox(
 		dateRow,
+		dayReadout,
 		descRow,
-		otherRow, indepRow,
+		otherRow, singleReviewRow, codeReviewRow, indepRow,
 		remarksRow,
 		actionRow, mMsg,
 	)
@@ -1374,11 +1652,13 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 
 	// -- kind selector --
 	seg := widget.NewRadioGroup(
-		[]string{"Commits", "Meeting", "Code Review", "Other", "Independent"}, func(s string) {
+		[]string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent"}, func(s string) {
+			wasBulkReview := kind == kindBulkReview
 			kind = map[string]string{
 				"Commits": kindCommit, "Meeting": kindMeeting,
 				"Code Review": kindCodeReview,
-				"Other":       kindOther, "Independent": kindIndependent,
+				"Bulk Review": kindBulkReview,
+				"Worklog":     kindOther, "Independent": kindIndependent,
 			}[s]
 			if kind == kindCommit {
 				commitPane.Show()
@@ -1390,12 +1670,32 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			// Only the fields each kind needs, so the form never asks for an
 			// issue link and a new issue's title at the same time.
 			showIf(descRow, kind == kindMeeting)
-			showIf(otherRow, kind == kindOther || kind == kindCodeReview)
+			// The ratio layout hands the hidden Minutes share back to Date.
+			showIf(minutesField, kind != kindBulkReview)
+			showIf(otherRow, kind == kindOther)
+			showIf(singleReviewRow, kind == kindCodeReview)
+			showIf(codeReviewRow, kind == kindBulkReview)
 			showIf(indepRow, kind == kindIndependent)
-			showIf(mPushAs, kind == kindOther || kind == kindCodeReview || kind == kindIndependent)
+			showIf(remarksRow, kind != kindBulkReview)
+			showIf(mPushAs, kind == kindOther || kind == kindCodeReview)
+			if kind == kindBulkReview {
+				mMin.Disable()
+				if items, err := bulkReviewItems(); err == nil {
+					mMin.SetText(strconv.Itoa(codeReviewMinutes(items)))
+				} else {
+					mMin.SetText("")
+				}
+			} else {
+				mMin.Enable()
+				if wasBulkReview {
+					mMin.SetText("")
+				}
+			}
 			switch kind {
 			case kindMeeting:
 				mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(mDate.ISO(), today())) + ".")
+			case kindBulkReview:
+				mMsg.SetText(bulkReviewFilingHint(orDefault(mDate.ISO(), today())))
 			case kindCodeReview, kindOther, kindIndependent:
 				mMsg.SetText("Sub-issue title: " + autoDescFor(kind, orDefault(mDate.ISO(), today())) + ".")
 			default:
@@ -1414,6 +1714,8 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		switch kind {
 		case kindMeeting:
 			mMsg.SetText("Files under " + meetingTitle(ui.cfg, orDefault(iso, today())) + ".")
+		case kindBulkReview:
+			mMsg.SetText(bulkReviewFilingHint(orDefault(iso, today())))
 		case kindCodeReview, kindOther, kindIndependent:
 			mMsg.SetText("Sub-issue title: " + autoDescFor(kind, orDefault(iso, today())) + ".")
 		}
@@ -1427,6 +1729,18 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	ui.showPushed = widget.NewCheck("Also show entries already pushed this month", func(bool) {
 		ui.drawRecent()
 	})
+	if ui.draftSort == "" {
+		ui.draftSort = draftSortDuration
+	}
+	draftSortPick := widget.NewSelect([]string{draftSortDuration, draftSortCreated}, nil)
+	draftSortPick.SetSelected(ui.draftSort)
+	draftSortPick.OnChanged = func(selected string) {
+		ui.draftSort = selected
+		ui.drawRecent()
+	}
+	draftSortControl := container.NewBorder(nil, nil, ui.showPushed,
+		container.NewHBox(widget.NewLabel("Sort bubbles"),
+			container.New(layout.NewGridWrapLayout(fyne.NewSize(190, draftSortPick.MinSize().Height)), draftSortPick)))
 	choices := container.NewThemeOverride(withPointerCursor(seg), radioTheme{Theme: theme.Current()})
 	logCard := widget.NewCard("", "", container.NewVBox(choices, commitPane, manualPane))
 	// The key sits at the foot of the tab, where the Status tab keeps its own:
@@ -1434,7 +1748,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// week — so it belongs under the lot rather than over one of them.
 	ui.logLegend = container.NewVBox()
 	recentCard := widget.NewCard("Saved locally, not pushed yet", "",
-		container.NewVBox(ui.showPushed, ui.recentBox, widget.NewSeparator(),
+		container.NewVBox(draftSortControl, ui.recentBox, widget.NewSeparator(),
 			ui.weekBox, ui.logLegend))
 
 	// The dragging layer sits above the scroll rather than inside it: the card
@@ -1888,6 +2202,17 @@ func (ui *UI) popupSize() fyne.Size {
 	return fyne.NewSize(w, h)
 }
 
+// compactPopupSize uses the editor popup's responsive width without borrowing
+// its tall form height. Confirmations need room for a sentence and two buttons,
+// but should still read as a compact decision rather than a second workspace.
+func (ui *UI) compactPopupSize(content fyne.CanvasObject) fyne.Size {
+	h := content.MinSize().Height
+	if h < 180 {
+		h = 180
+	}
+	return fyne.NewSize(ui.popupSize().Width, h)
+}
+
 // openGroupEditor shows the full logging form for one group in a popup.
 func (ui *UI) openGroupEditor(g Group) {
 	var d dialog.Dialog
@@ -2119,7 +2444,9 @@ func (ui *UI) openRowEditor(r Row, refresh func()) {
 		}
 	})
 	heading := r["date"]
-	if r["issue"] != "" {
+	if r["type"] == kindIndependent && strings.TrimSpace(r["parent_title"]) != "" {
+		heading = "Standalone task  ·  " + strings.TrimSpace(r["parent_title"])
+	} else if r["issue"] != "" {
 		heading += "  ·  " + r["issue"]
 	}
 	back := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
@@ -2138,6 +2465,8 @@ func (ui *UI) openRowEditor(r Row, refresh func()) {
 // worklog itself. Saving rewrites the row in place — no second entry is made,
 // and the commits stay accounted for.
 func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
+	isIndependent := r["type"] == kindIndependent
+	createsOwnIssue := rowCreatesOwnIssue(r)
 	dateE := newWorklogDatePicker(ui, r["date"])
 	ownE := widget.NewEntry()
 	ownE.SetText(orDefault(r["owner"], ui.cfg.WorklogOwner))
@@ -2147,6 +2476,12 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	issE := widget.NewEntry()
 	issE.SetText(r["issue"])
 	issE.SetPlaceHolder("owner/repo#123")
+	parentRepoE := widget.NewEntry()
+	parentRepoE.SetText(r["parent_repo"])
+	parentRepoE.SetPlaceHolder("bigledger/repository")
+	parentTitleE := widget.NewEntry()
+	parentTitleE.SetText(r["parent_title"])
+	parentTitleE.SetPlaceHolder("Title for the standalone task")
 	descE := widget.NewEntry()
 	descE.SetText(r["description"])
 
@@ -2162,6 +2497,12 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 		modeSel.SetSelected("Worklog sub-issue")
 	}
 	modeVal := func() string {
+		if createsOwnIssue {
+			if isIndependent {
+				return "subissue"
+			}
+			return "issue"
+		}
 		if modeSel.Selected == "The issue itself" {
 			return "issue"
 		}
@@ -2191,6 +2532,10 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			"owner":       strings.TrimSpace(ownE.Text),
 			"remarks":     remarks, "mode": modeVal(),
 		}
+		if isIndependent {
+			patch["parent_repo"] = strings.TrimSpace(parentRepoE.Text)
+			patch["parent_title"] = strings.TrimSpace(parentTitleE.Text)
+		}
 		if err := ui.store.UpdateRow(r["id"], patch); err != nil {
 			ui.errf(err)
 			return
@@ -2206,9 +2551,10 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			if onFinished != nil {
 				onFinished()
 			}
+			ui.showDraftSavedInfo()
 			return
 		}
-		if r["issue"] == "" {
+		if r["issue"] == "" && !createsOwnIssue {
 			msg.SetText("Saved — no issue ref to push to.")
 			return
 		}
@@ -2257,9 +2603,21 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	pushBtn.Importance = widget.HighImportance
 
 	header := container.NewHBox(
-		widget.NewLabelWithStyle(r["date"], fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		issueHyperlink(r["issue"]),
-	)
+		widget.NewLabelWithStyle(r["date"], fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+	if createsOwnIssue {
+		label := "Standalone issue"
+		switch r["type"] {
+		case kindMeeting:
+			label = "Meeting issue"
+		case kindBulkReview:
+			label = "Bulk review issue"
+		case kindIndependent:
+			label = "Standalone task"
+		}
+		header.Add(widget.NewLabel(label))
+	} else {
+		header.Add(issueHyperlink(r["issue"]))
+	}
 	// Each sha carries the repo it is in, so it links to the commit itself. Rows
 	// written before that was stored have the sha alone; for those the issue's
 	// repo is the only guess available, which is what the link used to be built
@@ -2268,9 +2626,11 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	if owner, name, _, err := splitIssue(r["issue"]); err == nil {
 		fallback = owner + "/" + name
 	}
-	for _, ref := range parseCommitRefs(r["refs"]) {
-		header.Add(commitHyperlink(Commit{
-			Repo: orDefault(ref.Repo, fallback), Sha: ref.Sha}))
+	if !createsOwnIssue {
+		for _, ref := range parseCommitRefs(r["refs"]) {
+			header.Add(commitHyperlink(Commit{
+				Repo: orDefault(ref.Repo, fallback), Sha: ref.Sha}))
+		}
 	}
 
 	var notes []fyne.CanvasObject
@@ -2281,22 +2641,39 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			theme.ColorNameWarning))
 	}
 
-	// Weighted, not quartered: an owner/repo#1234 ref needs the room a minutes
-	// box does not, and the split holds as the popup follows the window.
-	fields := container.NewVBox(
-		container.New(newRatioRow(0.22, 0.22, 0.14, 0.42),
+	var fieldRow fyne.CanvasObject
+	if isIndependent {
+		fieldRow = container.NewVBox(
+			container.New(newRatioRow(0.34, 0.33, 0.33),
+				labelledPicker("Worklog date", dateE),
+				labeled("Worklog owner", ownE),
+				labeled("Worklog mins", minE)),
+			container.New(newRatioRow(0.38, 0.62),
+				labeled("Repository", parentRepoE),
+				labeled("Standalone issue title", parentTitleE)))
+	} else if createsOwnIssue {
+		fieldRow = container.New(newRatioRow(0.34, 0.33, 0.33),
+			labelledPicker("Worklog date", dateE),
+			labeled("Worklog owner", ownE),
+			labeled("Worklog mins", minE))
+	} else {
+		// Weighted, not quartered: an owner/repo#1234 ref needs the room a
+		// minutes box does not, and the split follows the window.
+		fieldRow = container.New(newRatioRow(0.22, 0.22, 0.14, 0.42),
 			labelledPicker("Worklog date", dateE),
 			labeled("Worklog owner", ownE),
 			labeled("Worklog mins", minE),
-			labeled("Issue", issE),
-		),
-		ui.dayFillReadout(dateE, minE, r["id"]),
-	)
+			labeled("Issue", issE))
+	}
+	fields := container.NewVBox(fieldRow, ui.dayFillReadout(dateE, minE, r["id"]))
 	// Caption beside the dropdown rather than stacked over it: the bar shares a
 	// line with Back, and a two-row label would drag that whole line taller.
-	actions := container.NewHBox(
-		widget.NewLabel("Push as"), wideSelect(modeSel), aiBtn, saveBtn, ovalPush(pushBtn),
-	)
+	actionItems := []fyne.CanvasObject{aiBtn, saveBtn, ovalPush(pushBtn)}
+	if !createsOwnIssue {
+		actionItems = append([]fyne.CanvasObject{
+			widget.NewLabel("Push as"), wideSelect(modeSel)}, actionItems...)
+	}
+	actions := container.NewHBox(actionItems...)
 	return editorForm{
 		body: container.NewVBox(append(notes,
 			header,
@@ -2417,6 +2794,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 			if onFinished != nil {
 				onFinished()
 			}
+			ui.showDraftSavedInfo()
 			return
 		}
 		if row["issue"] == "" {
@@ -2610,9 +2988,7 @@ func (ui *UI) drawRecent() {
 			shown = append(shown, r)
 		}
 	}
-	sort.Slice(shown, func(i, j int) bool {
-		return shown[i]["date"]+shown[i]["logged_at"] > shown[j]["date"]+shown[j]["logged_at"]
-	})
+	sortDraftRows(shown, ui.draftSort)
 	const maxShown = 25
 	hidden := 0
 	if len(shown) > maxShown {
@@ -2813,10 +3189,55 @@ func (ui *UI) rowLabel(issue string, commits []Commit) string {
 	return issue
 }
 
+// rowTitle derives a manual row's current display name instead of trusting the
+// description captured when it was first saved. That matters when a waiting
+// row is dragged to another day: its Meeting/Review title must follow the new
+// date. Issue-backed rows read like the issue list, using the loaded title and
+// falling back to the ref while that title is unavailable.
+func (ui *UI) rowTitle(r Row) string {
+	if info, ok := ui.issueInfo[r["issue"]]; ok && strings.TrimSpace(info.Title) != "" {
+		return strings.TrimSpace(info.Title)
+	}
+	switch r["type"] {
+	case kindMeeting:
+		return meetingTitle(ui.cfg, r["date"])
+	case kindBulkReview:
+		return dailyCodeReviewTitle(ui.cfg, r["date"])
+	case kindCodeReview:
+		// Interim bulk drafts used kindCodeReview with no issue ref. Keep their
+		// daily title dynamic while preserving normal single-review rows.
+		if r["issue"] == "" {
+			if _, err := parseCodeReviewItems(r["remarks"]); err == nil {
+				return dailyCodeReviewTitle(ui.cfg, r["date"])
+			}
+		}
+		if r["issue"] != "" {
+			return r["issue"]
+		}
+		return codeReviewTitle(r["date"])
+	case kindOther:
+		if r["issue"] != "" {
+			return r["issue"]
+		}
+		return "Worklog: " + r["date"]
+	case kindIndependent:
+		if title := strings.TrimSpace(r["parent_title"]); title != "" {
+			return title
+		}
+	}
+	if what := strings.TrimSpace(r["description"]); what != "" {
+		return what
+	}
+	if what := strings.TrimSpace(r["remarks"]); what != "" {
+		return what
+	}
+	return "(no description)"
+}
+
 // rowTile is one locally saved entry: what it is, when, how long, and what can
 // still be done to it.
 func (ui *UI) rowTile(r Row, refresh func()) fyne.CanvasObject {
-	accent := orgColor(ui.cfg, orgOf(r["issue"]))
+	accent := rowAccentColor(ui.cfg, r)
 	muted := theme.Color(theme.ColorNamePlaceHolder)
 	caption := func(s string) *canvas.Text {
 		t := canvas.NewText(truncate(s, 56), muted)
@@ -2824,21 +3245,7 @@ func (ui *UI) rowTile(r Row, refresh func()) fyne.CanvasObject {
 		return t
 	}
 
-	// The issue title wins when it is known, so a row saved before the title
-	// loaded still reads as the issue rather than as whatever was to hand.
-	what := ""
-	if info, ok := ui.issueInfo[r["issue"]]; ok {
-		what = strings.TrimSpace(info.Title)
-	}
-	if what == "" {
-		what = strings.TrimSpace(r["description"])
-	}
-	if what == "" {
-		what = strings.TrimSpace(r["remarks"])
-	}
-	if what == "" {
-		what = "(no description)"
-	}
+	what := ui.rowTitle(r)
 	title := widget.NewLabelWithStyle(truncate(what, bubbleTitleChars),
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapWord
@@ -2851,13 +3258,23 @@ func (ui *UI) rowTile(r Row, refresh func()) fyne.CanvasObject {
 		// Ref-less on disk but not unfiled: it goes to the day's meeting issue,
 		// which is found or created when it is pushed.
 		issue = "meeting — " + meetingTitle(ui.cfg, r["date"])
+	case r["type"] == kindBulkReview:
+		issue = "bulk review — " + dailyCodeReviewTitle(ui.cfg, r["date"])
+	case r["type"] == kindCodeReview:
+		if _, err := parseCodeReviewItems(r["remarks"]); err == nil {
+			issue = "bulk review — " + dailyCodeReviewTitle(ui.cfg, r["date"])
+		} else {
+			issue = "code review — no issue ref"
+		}
 	case r["type"] == kindIndependent && r["parent_repo"] != "":
 		issue = "new issue in " + r["parent_repo"]
 	default:
 		issue = orDash(r["type"]) + " — no issue ref"
 	}
 	state := "waiting to push"
-	if r["pushed_at"] != "" {
+	if rowPartlySaved(r) {
+		state = "partly saved on GitHub — retry push"
+	} else if r["pushed_at"] != "" {
 		state = "pushed " + strings.Replace(r["pushed_at"], "T", " ", 1)
 	}
 	// Minutes, not hours and minutes: this is the number that goes in the
@@ -2936,8 +3353,17 @@ func (ui *UI) confirmDelete(r Row, refresh func()) {
 		widget.NewLabelWithStyle("Delete entry", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		body, buttons,
 	)
-	pop = widget.NewModalPopUp(container.NewPadded(content), ui.win.Canvas())
+	padded := container.NewPadded(content)
+	pop = widget.NewModalPopUp(padded, ui.win.Canvas())
+	sz := ui.compactPopupSize(padded)
+	pop.Resize(sz)
 	pop.Show()
+	// Resizing a popup keeps its old top-left position. Re-centre it so the wider
+	// confirmation expands evenly instead of running toward one window edge.
+	canvasSize := ui.win.Canvas().Size()
+	pop.Move(fyne.NewPos(
+		(canvasSize.Width-sz.Width)/2,
+		(canvasSize.Height-sz.Height)/2))
 }
 
 // pushRow sends one saved row to GitHub and reports what landed.

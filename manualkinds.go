@@ -14,10 +14,10 @@ import (
 //   - meeting     — the day's own "<Name> Meeting & ad hocs: <date>" issue,
 //     which carries the Worklog fields itself.
 //   - other       — an issue that already exists; you paste its link.
-//   - codereview  — the same shape as "other": an existing issue's link. Only
-//     the auto-title on the pushed sub-issue changes, from "Worklog: <date>"
-//     to "Code Review: <date>", so a review filed against a normal repo issue
-//     reads as such on the board.
+//   - codereview  — one review filed under the development issue pasted into
+//     the form, retaining the original single-review workflow.
+//   - codereview_bulk — the day's own "<Name> Code Review: <date>" issue, with
+//     all reviewed PR links and their minutes in its body.
 //   - independent — an issue that does not exist yet; the app creates it in a
 //     repo you pick, then logs under it the way a commit entry does.
 //
@@ -31,19 +31,56 @@ const (
 	// far is in this repo, and one filed anywhere else would fall out of the
 	// views the weekly mail links to.
 	meetingRepo = "bigledger/blg-int-general-task"
+	// Bulk reviews are standalone daily Task issues in the general-task repo.
+	// Keep this separate from meetingRepo even though both currently point to
+	// the same place: neither workflow should silently follow the other if its
+	// destination changes later.
+	bulkCodeReviewRepo = "bigledger/blg-int-general-task"
 
-	// The issue types the two created kinds take. A meeting is not a piece of
-	// development work and the board types it apart; an independent entry is
-	// ordinary work that simply had no issue yet.
+	// The issue types the created kinds take. A meeting is not a piece of
+	// development work and the board types it apart; code review and independent
+	// entries are ordinary tasks.
 	meetingIssueType     = "Meeting / Training"
 	independentIssueType = "Task"
+	codeReviewIssueType  = "Task"
 
 	kindCommit      = "commit"
 	kindMeeting     = "meeting"
 	kindOther       = "other"
 	kindCodeReview  = "codereview"
+	kindBulkReview  = "codereview_bulk"
 	kindIndependent = "independent"
 )
+
+// rowCreatesOwnIssue identifies manual work whose GitHub issue is determined
+// by the app rather than pasted from an existing development issue. These rows
+// share the standalone bubble/editor treatment; a single Code Review and Other
+// remain issue-backed.
+func rowCreatesOwnIssue(r Row) bool {
+	switch r["type"] {
+	case kindMeeting, kindBulkReview, kindIndependent:
+		return true
+	case kindCodeReview:
+		// Compatibility for bulk rows saved before Bulk Review had its own
+		// type, including ones that have since gained an issue ref.
+		_, err := parseCodeReviewItems(r["remarks"])
+		return err == nil
+	}
+	return false
+}
+
+// rowUsesIndependentStyle is the visual grouping for work that owns the issue
+// the app creates. A regular Worklog (the stored kindOther) points at an
+// existing parent and therefore follows that parent's organisation colour.
+func rowUsesIndependentStyle(r Row) bool {
+	switch r["type"] {
+	case kindMeeting, kindBulkReview, kindIndependent:
+		return true
+	case kindCodeReview:
+		return rowCreatesOwnIssue(r) // legacy bulk-review rows only
+	}
+	return false
+}
 
 // displayName is the name a meeting issue is titled with.
 //
@@ -79,6 +116,13 @@ func meetingTitle(cfg Config, date string) string {
 // "Code Review: <date>" rather than as another Worklog stub.
 func codeReviewTitle(date string) string {
 	return fmt.Sprintf("Code Review: %s", date)
+}
+
+// dailyCodeReviewTitle is the shared issue that holds every PR reviewed on one
+// day. It mirrors the meeting issue convention and the existing manually made
+// issues, for example "Elden Code Review: 2026-09-15".
+func dailyCodeReviewTitle(cfg Config, date string) string {
+	return fmt.Sprintf("%s Code Review: %s", displayName(cfg), date)
 }
 
 // subTitleBaseFor is what PushEntry should title a row's sub-issue with. Empty
@@ -204,17 +248,43 @@ func ensureMeetingIssue(cfg Config, date, body string) (string, error) {
 	return ref, nil
 }
 
+// ensureCodeReviewIssue returns the day's bulk code-review issue, creating it
+// with the PR list as its body the first time that date is pushed.
+func ensureCodeReviewIssue(cfg Config, date, body string) (string, error) {
+	if displayName(cfg) == "" {
+		return "", ghErr("Set your worklog owner (or a display name) in Settings before logging code review.")
+	}
+	title := dailyCodeReviewTitle(cfg, date)
+	if ref, err := findIssueByTitle(bulkCodeReviewRepo, title); err != nil {
+		return "", err
+	} else if ref != "" {
+		return ref, nil
+	}
+	_, ref, err := createTypedIssue(bulkCodeReviewRepo, title, body, codeReviewIssueType)
+	if ref == "" {
+		return "", err
+	}
+	return ref, nil
+}
+
 // pushableWithoutIssue reports whether a row with no issue ref can still be
 // pushed, because its issue is decided when it is pushed rather than typed in.
 //
-// A meeting goes to the day's own meeting issue and an independent entry creates
-// the parent it names, so both sit on disk looking unfiled and are not. Reading
-// an empty issue column as "nothing to push to" would grey out the button on the
-// two kinds that were built to work that way.
+// Meetings and code reviews go to their own daily issues and an independent
+// entry creates the parent it names, so all three sit on disk looking unfiled
+// and are not. Reading an empty issue column as "nothing to push to" would grey
+// out the button on the kinds that were built to work that way.
 func pushableWithoutIssue(r Row) bool {
 	switch r["type"] {
 	case kindMeeting:
 		return true
+	case kindBulkReview:
+		return strings.TrimSpace(r["remarks"]) != ""
+	case kindCodeReview:
+		// Compatibility for a bulk draft saved by the short-lived build that
+		// used the old codereview type before bulk received its own type.
+		_, err := parseCodeReviewItems(r["remarks"])
+		return err == nil
 	case kindIndependent:
 		return strings.TrimSpace(r["parent_repo"]) != "" &&
 			strings.TrimSpace(r["parent_title"]) != ""
@@ -268,6 +338,23 @@ func ensureIssueRef(cfg Config, r Row) (Row, error) {
 		// not a parent for it, and a "Worklog: <date>" child under a one-day
 		// meeting issue would be a tree of two saying one thing.
 		return Row{"issue": ref, "mode": "issue"}, nil
+
+	case kindBulkReview:
+		ref, err := ensureCodeReviewIssue(cfg, r["date"], body)
+		if err != nil {
+			return Row{}, err
+		}
+		return Row{"issue": ref, "mode": "issue"}, nil
+
+	case kindCodeReview:
+		// Compatibility with bulk drafts saved before kindBulkReview existed.
+		if _, err := parseCodeReviewItems(r["remarks"]); err == nil {
+			ref, err := ensureCodeReviewIssue(cfg, r["date"], body)
+			if err != nil {
+				return Row{}, err
+			}
+			return Row{"issue": ref, "mode": "issue"}, nil
+		}
 
 	case kindIndependent:
 		repo := strings.TrimSpace(r["parent_repo"])

@@ -66,15 +66,16 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 		t.Fatal("a row with no issue ref must not offer a live push")
 	}
 
-	// Two kinds have no ref on disk and are pushable anyway, because theirs is
-	// decided when they are pushed: a meeting goes to the day's own issue, and
-	// an independent entry creates the parent it names. Greying those out would
-	// disable the button on the kinds built to work that way.
+	// Three kinds have no ref on disk and are pushable anyway, because theirs is
+	// decided when they are pushed: meeting and bulk review use daily issues,
+	// and an independent entry creates the parent it names.
 	for _, c := range []struct {
 		name string
 		row  Row
 	}{
 		{"meeting", Row{"id": "5", "date": "2026-08-09", "type": kindMeeting}},
+		{"bulk review", Row{"id": "8", "date": "2026-08-09", "type": kindBulkReview,
+			"remarks": "https://github.com/o/r/pull/1 (10m)"}},
 		{"independent", Row{"id": "6", "date": "2026-08-09", "type": kindIndependent,
 			"parent_repo": "bigledger/blg-intranet", "parent_title": "Tidy the docs"}},
 	} {
@@ -90,6 +91,98 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 	if b := buttonNamed(ui.rowTile(half, func() {}), "Push"); b == nil || !b.Disabled() {
 		t.Fatal("an independent entry with no parent named cannot be pushed")
 	}
+}
+
+func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	ui.cfg.ProjectURL = "https://github.com/orgs/bigledger/projects/9"
+	ui.ensureProjectCache()
+	day := today()
+	key := statusCacheKey(day[:7])
+	ui.projItems[key] = []WorklogItem{{Date: day, Minutes: 120}}
+	ui.projLoaded[key] = true
+	if _, err := ui.store.AppendRows([]Row{{
+		"date": day, "minutes": "30", "type": kindOther, "issue": "bigledger/repo#7",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tab := ui.buildLogTab()
+	if buttonNamed(tab, "Fetch issue") != nil {
+		t.Fatal("single Code Review should resolve automatically, not show a Fetch issue button")
+	}
+	if buttonNamed(tab, "Fetch linked issues") != nil {
+		t.Fatal("Bulk Review should resolve each row automatically, not show a fetch button")
+	}
+	var kinds *widget.RadioGroup
+	walk(tab, func(o fyne.CanvasObject) {
+		if group, ok := o.(*widget.RadioGroup); ok {
+			for _, option := range group.Options {
+				if option == "Bulk Review" {
+					kinds = group
+				}
+			}
+		}
+	})
+	if kinds == nil {
+		t.Fatal("missing Log Work kind selector")
+	}
+	wantOrder := []string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent"}
+	if len(kinds.Options) != len(wantOrder) {
+		t.Fatalf("Log Work selector options = %v, want %v", kinds.Options, wantOrder)
+	}
+	for i, want := range wantOrder {
+		if kinds.Options[i] != want {
+			t.Fatalf("Log Work selector options = %v, want %v", kinds.Options, wantOrder)
+		}
+	}
+	kinds.SetSelected("Bulk Review")
+	if !contains(labels(tab), "Creates/reuses its own issue in "+bulkCodeReviewRepo) {
+		t.Fatal("Bulk Review should say that it owns a general-task issue")
+	}
+	var prs, mins []*widget.Entry
+	walk(tab, func(o fyne.CanvasObject) {
+		if e, ok := o.(*widget.Entry); ok {
+			switch e.PlaceHolder {
+			case "https://github.com/bigledger/repo/pull/123":
+				prs = append(prs, e)
+			case "10":
+				mins = append(mins, e)
+			}
+		}
+	})
+	if len(prs) != 1 || len(mins) != 1 {
+		t.Fatalf("bulk sheet should start with one row, got %d PR and %d minute cells", len(prs), len(mins))
+	}
+	prs[0].SetText("https://github.com/bigledger/app/pull/12")
+	mins[0].SetText("15")
+	prs, mins = nil, nil
+	walk(tab, func(o fyne.CanvasObject) {
+		if e, ok := o.(*widget.Entry); ok {
+			switch e.PlaceHolder {
+			case "https://github.com/bigledger/repo/pull/123":
+				prs = append(prs, e)
+			case "10":
+				mins = append(mins, e)
+			}
+		}
+	})
+	if len(prs) != 2 || len(mins) != 2 {
+		t.Fatalf("completing row one should add row two, got %d PR and %d minute cells", len(prs), len(mins))
+	}
+	got := labels(tab)
+	for _, want := range []string{
+		"Total: 15 min",
+		day + " already on GitHub: " + dayScoreLine(120),
+		"30 min on pending log",
+		"+15 min this entry",
+	} {
+		if !contains(got, want) {
+			t.Fatalf("bulk total should use the commit popup's day calculation; missing %q in %v", want, got)
+		}
+	}
+	// Cancel the debounced lookup; this is an offline UI-shape test.
+	prs[0].SetText("")
 }
 
 // A push is only "done" when nothing was left unwritten.
@@ -120,5 +213,22 @@ func TestRowTileShowsRawMinutes(t *testing.T) {
 	}
 	if contains(got, "1h 30m") {
 		t.Fatalf("tile should not convert to hours: %v", got)
+	}
+}
+
+func TestDeleteConfirmationUsesWideCompactPopup(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("t")
+	w.Resize(fyne.NewSize(1200, 800))
+	ui := &UI{store: newStore(t.TempDir()), win: w}
+
+	sz := ui.compactPopupSize(widget.NewLabel("Delete this entry?"))
+	if sz.Width < 700 || sz.Height >= 400 {
+		t.Fatalf("delete confirmation should request a wide but compact size, got %v", sz)
+	}
+	ui.confirmDelete(Row{"id": "1"}, func() {})
+	if w.Canvas().Overlays().Top() == nil {
+		t.Fatal("delete confirmation did not open")
 	}
 }

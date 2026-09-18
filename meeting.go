@@ -21,17 +21,22 @@ import (
 // commits; right 10% is the local worklog entries filed against those same
 // eight days.
 
-// meetingWeekStartOf returns the Thursday on or before date — the first day of
-// the meeting window. When date itself falls on a Thursday, that Thursday is
-// the start: it is where the previous meeting sat, so the update naturally
-// begins there.
+// meetingWeekStartOf returns the previous Thursday that begins the meeting
+// window covering date. Thursday itself still belongs to the just-closed
+// window — the meeting on Thursday reports on the week ending that day — so
+// the roll-over to a new window happens the next morning, on Friday.
 func meetingWeekStartOf(date string) string {
 	t, err := time.Parse("2006-01-02", strings.TrimSpace(date))
 	if err != nil {
 		t = time.Now()
 	}
-	off := (int(t.Weekday()) - int(time.Thursday) + 7) % 7
-	return t.AddDate(0, 0, -off).Format("2006-01-02")
+	// Shift a day back so Thursday reports on the just-finished window instead
+	// of opening a fresh one; the offset math then finds the Thursday on or
+	// before yesterday, and the 8-day span meetingWeekDates renders lands on
+	// Thu → Thu inclusive of today.
+	prior := t.AddDate(0, 0, -1)
+	off := (int(prior.Weekday()) - int(time.Thursday) + 7) % 7
+	return prior.AddDate(0, 0, -off).Format("2006-01-02")
 }
 
 // meetingWeekDates lists the eight days of a meeting window, previous Thursday
@@ -73,11 +78,18 @@ func (ui *UI) buildMeetingTab() fyne.CanvasObject {
 		ui.loadMeetingCommits(false)
 		ui.drawMeeting()
 	}
+	// The visible week on first render is meetingWeekStartOf(today()); the
+	// meetingStart field only gets set once the user walks somewhere. So the
+	// prev/next arrows have to fall back to the same default as drawMeeting,
+	// otherwise a fresh session sees them shift from "" and get nowhere.
+	currentStart := func() string {
+		return orDefault(ui.meetingStart, meetingWeekStartOf(today()))
+	}
 	prev := widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
-		walkTo(shiftWeek(ui.meetingStart, -1))
+		walkTo(shiftWeek(currentStart(), -1))
 	})
 	next := widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() {
-		walkTo(shiftWeek(ui.meetingStart, 1))
+		walkTo(shiftWeek(currentStart(), 1))
 	})
 	here := widget.NewButton("This week", func() { walkTo(meetingWeekStartOf(today())) })
 	refresh := widget.NewButtonWithIcon("Refresh from GitHub", theme.ViewRefreshIcon(), func() {
@@ -87,16 +99,26 @@ func (ui *UI) buildMeetingTab() fyne.CanvasObject {
 	// vertically, on the seam between the calendar and the rows pane. Hidden
 	// state hugs the right edge and opens the drawer when tapped; open state
 	// sits on the split and closes it. Built once and kept, since the icon
-	// swap and OnTapped state need to survive a redraw.
+	// swap and OnTapped state need to survive a redraw. MediumImportance keeps
+	// the button surface visible against the calendar behind it — a flat
+	// (low-importance) rendering vanished into the background and made the
+	// control look inert.
 	ui.meetingArrow = widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
 		ui.meetingRowsVisible = !ui.meetingRowsVisible
 		ui.drawMeeting()
 	})
-	ui.meetingArrow.Importance = widget.LowImportance
 
 	ui.meetingTitle = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	ui.meetingHere = here
 	head := container.NewHBox(prev, ui.meetingTitle, next, here, layout.NewSpacer(), refresh)
+
+	// Build the split once with stable leading/trailing holders. Each redraw
+	// only swaps the content INSIDE the holders, never the holders themselves,
+	// so the split keeps a consistent object graph and drag/refresh behave.
+	ui.meetingCalendarHolder = container.NewStack()
+	ui.meetingRowsHolder = container.NewStack()
+	ui.meetingSplit = container.NewHSplit(ui.meetingCalendarHolder, ui.meetingRowsHolder)
+	ui.meetingSplit.SetOffset(closedMeetingOffset)
 
 	ui.meetingBox = container.NewStack()
 	ui.meetingProgress = newLoadingIndicator()
@@ -157,28 +179,29 @@ func (ui *UI) drawMeeting() {
 	calendarPane := container.NewScroll(calendarBody)
 	rowsPane := container.NewScroll(ui.meetingRowsPanel(days))
 
-	var content fyne.CanvasObject
+	// Swap only the inner content of the two persistent holders — the split
+	// itself, and the leading/trailing refs it holds, stay untouched across
+	// redraws so its layout state (drag position, seam width) survives.
+	ui.meetingCalendarHolder.Objects = []fyne.CanvasObject{calendarPane}
+	ui.meetingCalendarHolder.Refresh()
+	ui.meetingRowsHolder.Objects = []fyne.CanvasObject{rowsPane}
+	ui.meetingRowsHolder.Refresh()
+
 	if ui.meetingRowsVisible {
-		if ui.meetingSplit == nil {
-			ui.meetingSplit = container.NewHSplit(calendarPane, rowsPane)
+		if ui.meetingSplit.Offset >= closedMeetingOffset-0.001 {
 			ui.meetingSplit.SetOffset(openMeetingOffset)
-		} else {
-			ui.meetingSplit.Leading = calendarPane
-			ui.meetingSplit.Trailing = rowsPane
-			ui.meetingSplit.Refresh()
 		}
-		content = ui.meetingSplit
 		ui.meetingArrow.SetIcon(theme.NavigateNextIcon())
 	} else {
-		content = calendarPane
+		ui.meetingSplit.SetOffset(closedMeetingOffset)
 		ui.meetingArrow.SetIcon(theme.NavigateBackIcon())
 	}
 
-	// Stack the drawer arrow over the content with a custom layout so it lands
-	// on the split's seam vertically centered — content underneath, arrow on
-	// top, positioned at whatever offset the HSplit is currently at.
+	// Stack the drawer arrow over the split with a custom layout so the arrow
+	// lands on the split's seam vertically centered — split underneath, arrow
+	// on top, positioned at whatever offset the HSplit is currently at.
 	ui.meetingBox.Objects = []fyne.CanvasObject{
-		container.New(&meetingArrowLayout{ui: ui}, content, withPointerCursor(ui.meetingArrow)),
+		container.New(&meetingArrowLayout{ui: ui}, ui.meetingSplit, withPointerCursor(ui.meetingArrow)),
 	}
 	ui.meetingBox.Refresh()
 	relayout(ui.meetingBody)
@@ -188,6 +211,11 @@ func (ui *UI) drawMeeting() {
 // 0.80 (rows pane at 20%) leaves the calendar dominant while giving a busy
 // week's rows enough room to read; drag from here in either direction.
 const openMeetingOffset = 0.80
+
+// closedMeetingOffset pushes the seam all the way right so the rows pane sits
+// at zero width — the calendar fills the tab, and the drawer arrow still lands
+// on the seam (now at the right edge) ready to pull it open.
+const closedMeetingOffset = 1.0
 
 // meetingArrowLayout stacks the drawer arrow over the tab content. objs[0] is
 // the content (calendar alone, or the split), objs[1] is the arrow button.
@@ -210,11 +238,12 @@ func (l *meetingArrowLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 	content, arrow := objs[0], objs[1]
 	content.Resize(size)
 	content.Move(fyne.NewPos(0, 0))
-	// Divider position: right edge of the tab when the drawer is closed,
-	// otherwise the split's own Offset — following the pointer if the user is
-	// dragging the divide themselves.
+	// Divider position: the split's own Offset — following the pointer if the
+	// user is dragging the divide themselves. When closed the offset is 1.0 so
+	// the seam sits at the right edge, which is where the arrow floats waiting
+	// to be pulled open.
 	divider := size.Width
-	if l.ui != nil && l.ui.meetingRowsVisible && l.ui.meetingSplit != nil {
+	if l.ui != nil && l.ui.meetingSplit != nil {
 		divider = size.Width * float32(l.ui.meetingSplit.Offset)
 	}
 	m := arrow.MinSize()

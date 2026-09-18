@@ -161,7 +161,7 @@ func TestRowEditorPushWithoutIssueStaysLocal(t *testing.T) {
 	defer fyne.CurrentApp().Quit()
 
 	made, err := ui.store.AppendRows([]Row{{
-		"date": today(), "minutes": "60", "type": "meeting",
+		"date": today(), "minutes": "60", "type": kindOther,
 		"description": "standup", "remarks": "- standup",
 	}})
 	if err != nil {
@@ -289,6 +289,93 @@ func TestRemarksBoxWrapsItsText(t *testing.T) {
 	}
 }
 
+func TestSavingDraftShowsLocalOnlyConfirmation(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	form := ui.rowEditor(Row{
+		"id": "1", "date": today(), "minutes": "20", "type": kindOther,
+		"issue": "bigledger/repo#7", "remarks": "- draft",
+	}, func() {}, func() {}).all()
+	if ui.win.Canvas().Overlays().Top() != nil {
+		t.Fatal("test started with an unexpected dialog")
+	}
+	tapButton(t, form, "Save")
+	if ui.win.Canvas().Overlays().Top() == nil {
+		t.Fatal("saving a draft should open the local-only confirmation")
+	}
+}
+
+func TestIndependentEditorShowsStandaloneFieldsOnly(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	form := ui.rowEditor(Row{
+		"id": "1", "date": today(), "type": kindIndependent,
+		"parent_repo":  "bigledger/blg-int-general-task",
+		"parent_title": "Prepare release notes",
+		"refs":         "bigledger/repo@abc1234",
+	}, func() {}, func() {}).all()
+
+	got := labels(form)
+	for _, unwanted := range []string{"Push as", "abc1234", "(no issue ref)"} {
+		if contains(got, unwanted) {
+			t.Fatalf("independent editor should not show %q: %v", unwanted, got)
+		}
+	}
+	for _, want := range []string{"Standalone task", "Repository", "Standalone issue title"} {
+		if !contains(got, want) {
+			t.Fatalf("independent editor is missing %q: %v", want, got)
+		}
+	}
+	if entryByPlaceholder(form, "owner/repo#123") != nil {
+		t.Fatal("independent editor should not expose an issue-ref field")
+	}
+	if entryByPlaceholder(form, "bigledger/repository") == nil ||
+		entryByPlaceholder(form, "Title for the standalone task") == nil {
+		t.Fatal("independent editor should edit its destination repository and title")
+	}
+}
+
+func TestBulkReviewEditorUsesOwnIssueControls(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	form := ui.rowEditor(Row{
+		"id": "1", "date": today(), "type": kindBulkReview,
+		"remarks": "https://github.com/bigledger/repo/pull/7 (20m)",
+		"refs":    "bigledger/repo@abc1234",
+	}, func() {}, func() {}).all()
+	got := labels(form)
+	for _, unwanted := range []string{"Push as", "abc1234", "(no issue ref)"} {
+		if contains(got, unwanted) {
+			t.Fatalf("bulk review editor should not show %q: %v", unwanted, got)
+		}
+	}
+	if !contains(got, "Bulk review issue") {
+		t.Fatalf("bulk review editor should identify its own issue: %v", got)
+	}
+	if entryByPlaceholder(form, "owner/repo#123") != nil {
+		t.Fatal("bulk review editor should not expose an issue-ref field")
+	}
+}
+
+func TestOtherKeepsIssueBackedEditorControls(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	form := ui.rowEditor(Row{
+		"id": "1", "date": today(), "type": kindOther,
+		"issue": "bigledger/repo#8",
+	}, func() {}, func() {}).all()
+	if !contains(labels(form), "Push as") {
+		t.Fatal("Other is visually independent but still needs its Push-as control")
+	}
+	if entryByPlaceholder(form, "owner/repo#123") == nil {
+		t.Fatal("Other still points at an existing issue and needs its issue-ref field")
+	}
+}
+
 // Every row in the waiting list carries an edit button, and it opens a popup.
 func TestEntryTableRowOpensTheEditor(t *testing.T) {
 	ui := editorUI(t)
@@ -344,6 +431,36 @@ func TestRowLabelPrefersTheIssueTitle(t *testing.T) {
 	}
 	if got := ui.rowLabel("bigledger/other#3", nil); got != "bigledger/other#3" {
 		t.Fatalf("with nothing else to say, the ref is the label, got %q", got)
+	}
+}
+
+// Manual bubbles derive their names from current row state. In particular, a
+// drag changes the date only; the title must not keep the date captured in the
+// old description.
+func TestManualRowTitlesFollowCurrentDateAndIssue(t *testing.T) {
+	ui := &UI{
+		cfg: Config{WorklogOwner: "blg-elden"},
+		issueInfo: map[string]IssueInfo{
+			"bigledger/repo#7": {Title: "Fix invoice rounding"},
+		},
+	}
+	for _, c := range []struct {
+		name string
+		row  Row
+		want string
+	}{
+		{"meeting", Row{"type": kindMeeting, "date": "2026-09-18", "description": "old notes"},
+			"Elden Meeting & ad hocs: 2026-09-18"},
+		{"bulk review", Row{"type": kindBulkReview, "date": "2026-09-18", "description": "Elden Code Review: 2026-09-15"},
+			"Elden Code Review: 2026-09-18"},
+		{"single review issue title", Row{"type": kindCodeReview, "date": "2026-09-18", "issue": "bigledger/repo#7", "description": "Code Review: 2026-09-15"},
+			"Fix invoice rounding"},
+		{"other issue fallback", Row{"type": kindOther, "date": "2026-09-18", "issue": "bigledger/other#9", "description": "Worklog: 2026-09-15"},
+			"bigledger/other#9"},
+	} {
+		if got := ui.rowTitle(c.row); got != c.want {
+			t.Fatalf("%s: title = %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 

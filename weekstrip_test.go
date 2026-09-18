@@ -50,6 +50,22 @@ func TestDayScoreLineSpellsOutWhatIsLeft(t *testing.T) {
 	}
 }
 
+func TestDraftBubblesSortByDurationOrCreationTime(t *testing.T) {
+	rows := []Row{
+		{"id": "later-short", "minutes": "30", "logged_at": "2026-09-19T11:00:00"},
+		{"id": "early-mid", "minutes": "60", "logged_at": "2026-09-19T09:00:00"},
+		{"id": "middle-long", "minutes": "90", "logged_at": "2026-09-19T10:00:00"},
+	}
+	sortDraftRows(rows, draftSortDuration)
+	if rows[0]["id"] != "middle-long" || rows[1]["id"] != "early-mid" || rows[2]["id"] != "later-short" {
+		t.Fatalf("duration order = %v", rows)
+	}
+	sortDraftRows(rows, draftSortCreated)
+	if rows[0]["id"] != "early-mid" || rows[1]["id"] != "middle-long" || rows[2]["id"] != "later-short" {
+		t.Fatalf("creation order = %v", rows)
+	}
+}
+
 // Two captions carrying that much text do not fit side by side in a column a
 // seventh of the window wide, and fyne does not clip — the overflow prints over
 // the next day. So the row reserves the second line it may need.
@@ -401,6 +417,53 @@ func TestTheCardOnADaySpellsItselfOut(t *testing.T) {
 		if !contains(got, want) {
 			t.Fatalf("the card is missing %q: %v", want, got)
 		}
+	}
+}
+
+func TestDayCardDistinguishesIncompletePushFromRemainingCommits(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	const ref = "bigledger/repo#7"
+	ui.pending.Groups = []Group{{Issue: ref, Commits: []Commit{{Sha: "abc1234"}}}}
+	withCommitLeft := labels(ui.dayRowCard(Row{
+		"date": "2026-08-11", "minutes": "30", "issue": ref,
+	}, func() {}))
+	if !contains(withCommitLeft, "commits remaining") || contains(withCommitLeft, "partly saved") {
+		t.Fatalf("unlogged commits should not look like a failed push: %v", withCommitLeft)
+	}
+
+	partial := Row{
+		"date": "2026-08-11", "minutes": "30", "issue": "bigledger/repo#8",
+		"issue_url": "https://github.com/bigledger/repo/issues/8", "item_id": "PVTI_8",
+	}
+	partlySaved := labels(ui.dayRowCard(partial, func() {}))
+	if !contains(partlySaved, "partly saved") || contains(partlySaved, "commits remaining") {
+		t.Fatalf("an incomplete GitHub push should carry the partly-saved tag: %v", partlySaved)
+	}
+	if got := labels(ui.rowTile(partial, func() {})); !contains(got, "partly saved on GitHub — retry push") {
+		t.Fatalf("the saved-entry bubble should explain the retry state: %v", got)
+	}
+}
+
+// Dragging only patches the row date. The card title must therefore derive
+// from that current date rather than replaying the description saved earlier.
+func TestDayCardManualTitleUsesCurrentDate(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	ui.cfg.WorklogOwner = "blg-elden"
+
+	row := Row{
+		"date": "2026-09-18", "minutes": "20", "type": kindBulkReview,
+		"description": "Elden Code Review: 2026-09-15",
+		"remarks":     "https://github.com/o/r/pull/1 (20m)",
+	}
+	got := labels(ui.dayRowCard(row, func() {}))
+	if !contains(got, "Elden Code Review: 2026-09-18") {
+		t.Fatalf("day card kept the saved date instead of the current one: %v", got)
+	}
+	if contains(got, "Elden Code Review: 2026-09-15") {
+		t.Fatalf("stale description leaked into the day card: %v", got)
 	}
 }
 

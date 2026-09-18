@@ -49,6 +49,23 @@ const (
 	supportPlaceholderMins = 180
 )
 
+const (
+	draftSortDuration = "Duration"
+	draftSortCreated  = "Created (earliest first)"
+)
+
+// sortDraftRows keeps the waiting list and the cards on each day under one
+// user-selected rule. Created order uses logged_at—the moment the draft was
+// saved—not its worklog date, which may be changed later by dragging.
+func sortDraftRows(rows []Row, mode string) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		if mode == draftSortCreated {
+			return rows[i]["logged_at"] < rows[j]["logged_at"]
+		}
+		return rows[i].Minutes() > rows[j].Minutes()
+	})
+}
+
 // supportTitlePrefix is how a weekly support issue is named: "<Name>: Weekly
 // Support (28th August, 12PM - 3PM)". A day already carrying one has its real
 // shift on the board and must not have a second pencilled in on top.
@@ -514,12 +531,9 @@ func (ui *UI) weekColumn(ds string, items []WorklogItem, local []Row) *dayColumn
 	for _, v := range byOrg {
 		mins += v
 	}
-	// Biggest first, the same order the calendar's day panel uses: the card
-	// carrying the most minutes is the one worth landing on, and store order put
-	// it wherever it happened to be typed.
-	sort.SliceStable(local, func(i, j int) bool {
-		return local[i].Minutes() > local[j].Minutes()
-	})
+	// One rule for these day cards and the saved-entry list above them. Duration
+	// remains the default; creation order is useful when clearing drafts FIFO.
+	sortDraftRows(local, ui.draftSort)
 
 	draftByOrg := map[string]int{}
 	waiting := 0
@@ -754,7 +768,7 @@ func weekCaption(s string) *canvas.Text {
 // carries the same three actions in the same row as the tile in the list, so
 // the two read as the same card wherever it happens to be standing.
 func (ui *UI) dayRowCard(r Row, refresh func()) fyne.CanvasObject {
-	accent := orgColor(ui.cfg, orgOf(r["issue"]))
+	accent := rowAccentColor(ui.cfg, r)
 	// One line, elided at the width the column actually has.
 	//
 	// It used to be cut at a character count and then word-wrapped, and a count
@@ -785,10 +799,14 @@ func (ui *UI) dayRowCard(r Row, refresh func()) fyne.CanvasObject {
 	where.Wrapping = fyne.TextWrapBreak
 
 	push, edit, del := ui.rowActions(r, refresh)
-	leading := fyne.CanvasObject(compactPush(push))
-	if ui.issueHasPending(r["issue"]) {
-		leading = container.NewHBox(compactPush(push), savedTag("partly saved"))
+	leadingItems := []fyne.CanvasObject{compactPush(push)}
+	if rowPartlySaved(r) {
+		leadingItems = append(leadingItems, savedTag("partly saved"))
 	}
+	if ui.issueHasPending(r["issue"]) {
+		leadingItems = append(leadingItems, savedTag("commits remaining"))
+	}
+	leading := container.NewHBox(leadingItems...)
 	body := container.NewVBox(title, mins, where,
 		container.NewBorder(nil, nil, leading, container.NewHBox(withPointerCursor(edit), withPointerCursor(del))))
 
@@ -806,15 +824,7 @@ func (ui *UI) dayRowCard(r Row, refresh func()) fyne.CanvasObject {
 
 // weekRowTitle names a locally saved row the same way its tile does.
 func (ui *UI) weekRowTitle(r Row) string {
-	if info, ok := ui.issueInfo[r["issue"]]; ok && strings.TrimSpace(info.Title) != "" {
-		return info.Title
-	}
-	for _, s := range []string{r["description"], r["remarks"], r["issue"]} {
-		if s = strings.TrimSpace(s); s != "" {
-			return s
-		}
-	}
-	return "entry"
+	return ui.rowTitle(r)
 }
 
 // ---- drop targets ----
