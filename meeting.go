@@ -95,30 +95,16 @@ func (ui *UI) buildMeetingTab() fyne.CanvasObject {
 	refresh := widget.NewButtonWithIcon("Refresh from GitHub", theme.ViewRefreshIcon(), func() {
 		ui.loadMeetingCommits(true)
 	})
-	// The drawer arrow — a floating button that lives in the middle of the tab
-	// vertically, on the seam between the calendar and the rows pane. Hidden
-	// state hugs the right edge and opens the drawer when tapped; open state
-	// sits on the split and closes it. Built once and kept, since the icon
-	// swap and OnTapped state need to survive a redraw. MediumImportance keeps
-	// the button surface visible against the calendar behind it — a flat
-	// (low-importance) rendering vanished into the background and made the
-	// control look inert.
-	ui.meetingArrow = widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
-		ui.meetingRowsVisible = !ui.meetingRowsVisible
-		ui.drawMeeting()
-	})
 
 	ui.meetingTitle = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	ui.meetingHere = here
 	head := container.NewHBox(prev, ui.meetingTitle, next, here, layout.NewSpacer(), refresh)
 
-	// Build the split once with stable leading/trailing holders. Each redraw
-	// only swaps the content INSIDE the holders, never the holders themselves,
-	// so the split keeps a consistent object graph and drag/refresh behave.
+	// Stable holders let redraws swap their contents without rebuilding the
+	// rest of the tab. Their parent uses a fixed 90/10 layout, not a split, so
+	// the sidebar is always visible and cannot be dragged wider or narrower.
 	ui.meetingCalendarHolder = container.NewStack()
 	ui.meetingRowsHolder = container.NewStack()
-	ui.meetingSplit = container.NewHSplit(ui.meetingCalendarHolder, ui.meetingRowsHolder)
-	ui.meetingSplit.SetOffset(closedMeetingOffset)
 
 	ui.meetingBox = container.NewStack()
 	ui.meetingProgress = newLoadingIndicator()
@@ -170,92 +156,69 @@ func (ui *UI) drawMeeting() {
 	for _, c := range commits {
 		byDay[c.Date] = append(byDay[c.Date], c)
 	}
-	// The rows pane is a drawer: hidden by default so the calendar owns the
-	// whole tab, opened by tapping the arrow that floats on the divider
-	// vertically centered. Once open the divider is draggable — the initial
-	// position is 80/20 so the rows pane has room to read.
+	// The sidebar is a fixed ten percent of the tab. A custom layout keeps that
+	// ratio exact without exposing the draggable divider of an HSplit.
 	calendarBody := container.NewBorder(top, nil, nil, nil,
-		ui.commitDaysPanel(days, byDay))
+		ui.commitDaysPanelWithIssueLabel(days, byDay, meetingIssueLabel))
 	calendarPane := container.NewScroll(calendarBody)
 	rowsPane := container.NewScroll(ui.meetingRowsPanel(days))
 
-	// Swap only the inner content of the two persistent holders — the split
-	// itself, and the leading/trailing refs it holds, stay untouched across
-	// redraws so its layout state (drag position, seam width) survives.
+	// Swap only the inner content of the two persistent holders.
 	ui.meetingCalendarHolder.Objects = []fyne.CanvasObject{calendarPane}
 	ui.meetingCalendarHolder.Refresh()
 	ui.meetingRowsHolder.Objects = []fyne.CanvasObject{rowsPane}
 	ui.meetingRowsHolder.Refresh()
 
-	if ui.meetingRowsVisible {
-		if ui.meetingSplit.Offset >= closedMeetingOffset-0.001 {
-			ui.meetingSplit.SetOffset(openMeetingOffset)
-		}
-		ui.meetingArrow.SetIcon(theme.NavigateNextIcon())
-	} else {
-		ui.meetingSplit.SetOffset(closedMeetingOffset)
-		ui.meetingArrow.SetIcon(theme.NavigateBackIcon())
-	}
-
-	// Stack the drawer arrow over the split with a custom layout so the arrow
-	// lands on the split's seam vertically centered — split underneath, arrow
-	// on top, positioned at whatever offset the HSplit is currently at.
 	ui.meetingBox.Objects = []fyne.CanvasObject{
-		container.New(&meetingArrowLayout{ui: ui}, ui.meetingSplit, withPointerCursor(ui.meetingArrow)),
+		container.New(meetingColumnsLayout{}, ui.meetingCalendarHolder, ui.meetingRowsHolder),
 	}
 	ui.meetingBox.Refresh()
 	relayout(ui.meetingBody)
 }
 
-// openMeetingOffset is where the HSplit's divider lands when the drawer opens.
-// 0.80 (rows pane at 20%) leaves the calendar dominant while giving a busy
-// week's rows enough room to read; drag from here in either direction.
-const openMeetingOffset = 0.80
-
-// closedMeetingOffset pushes the seam all the way right so the rows pane sits
-// at zero width — the calendar fills the tab, and the drawer arrow still lands
-// on the seam (now at the right edge) ready to pull it open.
-const closedMeetingOffset = 1.0
-
-// meetingArrowLayout stacks the drawer arrow over the tab content. objs[0] is
-// the content (calendar alone, or the split), objs[1] is the arrow button.
-// The arrow's centre lands on the divider line — at the right edge of the tab
-// when the drawer is closed, or on the split's own seam when it is open — and
-// it is vertically centred against the tab's height.
-type meetingArrowLayout struct{ ui *UI }
-
-func (l *meetingArrowLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
-	if len(objs) == 0 {
-		return fyne.NewSize(0, 0)
+// meetingIssueLabel omits the owner because the Meeting calendar already
+// identifies it with the bubble colour. Commit List deliberately keeps its
+// full owner/repo#number reference.
+func meetingIssueLabel(issue string) string {
+	if issue == "" {
+		return issueTag(issue)
 	}
-	return objs[0].MinSize()
+	_, repo, number, err := splitIssue(issue)
+	if err != nil {
+		return issue
+	}
+	return fmt.Sprintf("%s#%d", repo, number)
 }
 
-func (l *meetingArrowLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
+const meetingRowsFraction float32 = 0.10
+
+// meetingColumnsLayout fixes the calendar/sidebar ratio at 90/10. Unlike an
+// HSplit it has no divider interaction, so the user cannot resize the sidebar.
+type meetingColumnsLayout struct{}
+
+func (meetingColumnsLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	if len(objs) < 2 {
+		if len(objs) == 1 {
+			return objs[0].MinSize()
+		}
+		return fyne.NewSize(0, 0)
+	}
+	calendarMin := objs[0].MinSize()
+	rowsMin := objs[1].MinSize()
+	width := max(calendarMin.Width/(1-meetingRowsFraction), rowsMin.Width/meetingRowsFraction)
+	return fyne.NewSize(width, max(calendarMin.Height, rowsMin.Height))
+}
+
+func (meetingColumnsLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 	if len(objs) < 2 {
 		return
 	}
-	content, arrow := objs[0], objs[1]
-	content.Resize(size)
-	content.Move(fyne.NewPos(0, 0))
-	// Divider position: the split's own Offset — following the pointer if the
-	// user is dragging the divide themselves. When closed the offset is 1.0 so
-	// the seam sits at the right edge, which is where the arrow floats waiting
-	// to be pulled open.
-	divider := size.Width
-	if l.ui != nil && l.ui.meetingSplit != nil {
-		divider = size.Width * float32(l.ui.meetingSplit.Offset)
-	}
-	m := arrow.MinSize()
-	x := divider - m.Width/2
-	if x < 0 {
-		x = 0
-	}
-	if maxX := size.Width - m.Width; x > maxX {
-		x = maxX
-	}
-	arrow.Resize(m)
-	arrow.Move(fyne.NewPos(x, (size.Height-m.Height)/2))
+	calendarWidth := size.Width * (1 - meetingRowsFraction)
+	rowsWidth := size.Width - calendarWidth
+	objs[0].Move(fyne.NewPos(0, 0))
+	objs[0].Resize(fyne.NewSize(calendarWidth, size.Height))
+	objs[1].Move(fyne.NewPos(calendarWidth, 0))
+	objs[1].Resize(fyne.NewSize(rowsWidth, size.Height))
 }
 
 // meetingRowsPanel is the right column: the eight days of logged work rolled

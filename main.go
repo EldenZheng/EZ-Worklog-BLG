@@ -127,24 +127,10 @@ type UI struct {
 	meetingCommitLoad map[string]bool
 	meetingCommitAt   map[string]time.Time
 	meetingProgress   *loadingIndicator
-	// The horizontal split between the calendar (left) and the rows list
-	// (right). Kept across redraws so a drag persists; only the two children
-	// are swapped when the tab redraws. The two holders keep the split's own
-	// leading and trailing refs stable — a rebuilt calendarPane on every
-	// redraw only replaces the holder's inner Objects, so the split has one
-	// fixed pair of children and Refresh reliably re-lays it out.
-	meetingSplit          *container.Split
+	// Stable holders for the Meeting calendar (90%) and logged rows (10%).
+	// Their fixed layout has no arrow or draggable divider.
 	meetingCalendarHolder *fyne.Container
 	meetingRowsHolder     *fyne.Container
-	// meetingRowsVisible is the drawer state: false hides the "Logged this
-	// week" pane entirely and hands the whole tab to the calendar; true opens
-	// it as an HSplit with the divider draggable and one of two preset widths.
-	// Default false — the pane is a summary you reach for, not a fixture.
-	meetingRowsVisible bool
-	// The arrow button that lives on the divider line (middle of the screen
-	// vertically). Its icon flips with the drawer state — < to open, > to
-	// close — so it always says which way it is about to go.
-	meetingArrow *widget.Button
 
 	// Shas of commits already stitched into a saved worklog row. Refreshed
 	// before each Commit List / Meeting redraw so a fresh save shows up as
@@ -2912,14 +2898,18 @@ func commitHyperlink(c Commit) fyne.CanvasObject {
 }
 
 func issueHyperlink(issue string) fyne.CanvasObject {
+	return issueHyperlinkWithLabel(issue, issueTag(issue))
+}
+
+func issueHyperlinkWithLabel(issue, label string) fyne.CanvasObject {
 	if issue == "" {
-		return widget.NewLabel(issueTag(issue))
+		return widget.NewLabel(label)
 	}
 	owner, repo, number, err := splitIssue(issue)
 	if err != nil {
-		return widget.NewLabel(issue)
+		return widget.NewLabel(label)
 	}
-	return githubHyperlink(issue, fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, number))
+	return githubHyperlink(label, fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, number))
 }
 
 // ============================ recent entries ============================

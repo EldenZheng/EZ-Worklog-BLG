@@ -130,9 +130,16 @@ func (ui *UI) commitWeekSummary(commits []Commit, loading, cached bool) fyne.Can
 }
 
 func (ui *UI) commitDaysPanel(days []string, byDay map[string][]Commit) fyne.CanvasObject {
+	return ui.commitDaysPanelWithIssueLabel(days, byDay, issueTag)
+}
+
+// commitDaysPanelWithIssueLabel lets views that share the commit calendar
+// choose how the issue reference is written without changing the Commit List.
+func (ui *UI) commitDaysPanelWithIssueLabel(days []string, byDay map[string][]Commit,
+	issueLabel func(string) string) fyne.CanvasObject {
 	grid := container.NewGridWithColumns(len(days))
 	for _, ds := range days {
-		grid.Add(ui.commitDayColumn(ds, byDay[ds]))
+		grid.Add(ui.commitDayColumn(ds, byDay[ds], issueLabel))
 	}
 	return grid
 }
@@ -141,7 +148,8 @@ func (ui *UI) commitDaysPanel(days []string, byDay map[string][]Commit) fyne.Can
 // issue holding the commits that touched it. Fills whatever height the grid
 // hands the cell — bubbles scroll internally when they overflow, so a heavy
 // day never pushes the rest of the week off the screen.
-func (ui *UI) commitDayColumn(ds string, commits []Commit) fyne.CanvasObject {
+func (ui *UI) commitDayColumn(ds string, commits []Commit,
+	issueLabel func(string) string) fyne.CanvasObject {
 	t, _ := time.Parse("2006-01-02", ds)
 	name := fmt.Sprintf("%s %d", t.Format("Mon"), t.Day())
 	if ds == today() {
@@ -159,7 +167,7 @@ func (ui *UI) commitDayColumn(ds string, commits []Commit) fyne.CanvasObject {
 			fyne.TextStyle{Italic: true}))
 	} else {
 		for _, group := range groupCommitsByIssue(commits) {
-			inner.Add(ui.commitIssueBubble(group.Issue, group.Commits))
+			inner.Add(ui.commitIssueBubble(group.Issue, group.Commits, issueLabel))
 		}
 	}
 	scroll := container.NewVScroll(inner)
@@ -182,10 +190,14 @@ func (ui *UI) commitDayColumn(ds string, commits []Commit) fyne.CanvasObject {
 // tooltip on hover so a long title read in full without clipping the column),
 // and the issue reference underneath as a hyperlink to the issue on GitHub.
 // One glance says what the bubble is about; the ref is there when you need it.
-func (ui *UI) commitIssueBubble(issue string, commits []Commit) fyne.CanvasObject {
+func (ui *UI) commitIssueBubble(issue string, commits []Commit,
+	issueLabel func(string) string) fyne.CanvasObject {
 	title := commitBubbleTitle(ui, issue)
+	if title == issue {
+		title = issueLabel(issue)
+	}
 	titleLabel := newHoverText(ui.win, title, title, fyne.TextStyle{Bold: true})
-	ref := issueHyperlink(issue)
+	ref := issueHyperlinkWithLabel(issue, issueLabel(issue))
 	head := container.NewVBox(titleLabel, ref)
 
 	rows := []fyne.CanvasObject{head}
