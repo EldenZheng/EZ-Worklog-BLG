@@ -66,12 +66,23 @@ colours as the Status tab.
 
 <img src="docs/screenshots/09-date-calendar.png" alt="The date field's calendar dropdown, each day filled by how much of the 8h target is logged">
 
-The screenshots and the animation are rendered off screen from made-up data —
+### Moving a draft to another day
+
+Entries you save without pushing sit under **Saved locally, not pushed yet**,
+and each one also stands on its day in the week calendar below. Each day shows
+what is already on GitHub and what the drafts on it would bring it to. If an
+entry landed on the wrong day, drag the card onto the right one: the day under
+the card lights up, turning green when the drop would finish it. Letting go
+moves the entry, and that is the date it is pushed with.
+
+![Dragging a 120-minute draft off a day that is already full onto the short day beside it, which turns green](docs/drag-drop.gif)
+
+The screenshots and the animations are rendered off screen from made-up data —
 no GitHub access, no real worklog. To regenerate them after a UI change:
 
 ```
 DEMO_OUT=docs/screenshots DEMO_FRAMES=/tmp/worklog-frames go test -tags demo -run TestReadmeDemoFrames .
-python docs/make_readme_media.py docs/screenshots /tmp/worklog-frames docs/demo.gif
+python docs/make_readme_media.py docs/screenshots /tmp/worklog-frames docs
 ```
 
 ## Requirements

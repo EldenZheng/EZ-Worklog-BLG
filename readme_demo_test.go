@@ -3,11 +3,11 @@
 package main
 
 // Renders the app off screen, against made-up data, into the README's
-// screenshots and the frames of its animation. Nothing here reaches GitHub and
-// nothing personal is drawn.
+// screenshots and the frames of its animations. Nothing here reaches GitHub
+// and nothing personal is drawn.
 //
 //	DEMO_OUT=docs/screenshots DEMO_FRAMES=<scratch dir> go test -tags demo -run TestReadmeDemoFrames .
-//	python docs/make_readme_media.py docs/screenshots <scratch dir> docs/demo.gif
+//	python docs/make_readme_media.py docs/screenshots <scratch dir> docs
 
 import (
 	"encoding/json"
@@ -22,6 +22,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -41,6 +42,7 @@ var demoIssues = []IssueInfo{
 	{Org: "acme-corp", Repo: "api", Number: 87, Title: "Rate-limit the public webhooks"},
 	{Org: "acme-support", Repo: "helpdesk", Number: 1203, Title: "Weekend support shift"},
 	{Org: "acme-support", Repo: "helpdesk", Number: 1188, Title: "Fix stuck payment sync for tenant 42"},
+	{Org: "acme-corp", Repo: "api", Number: 91, Title: "Document the webhook retry policy"},
 }
 
 func demoRef(i IssueInfo) string { return fmt.Sprintf("%s/%s#%d", i.Org, i.Repo, i.Number) }
@@ -49,7 +51,7 @@ func demoURL(i IssueInfo) string {
 	return fmt.Sprintf("https://github.com/%s/%s/issues/%d", i.Org, i.Repo, i.Number)
 }
 
-// demoFrame is one step of the animation: a capture, how long it stays up, and
+// demoFrame is one step of an animation: a capture, how long it stays up, and
 // where the drawn pointer sits on it. The pointer is added afterwards by the
 // script, so one capture can carry the pointer through several positions.
 type demoFrame struct {
@@ -104,24 +106,70 @@ func copyFile(from, to string) error {
 	return os.WriteFile(to, b, 0o644)
 }
 
+// frameRecorder collects captures and the pointer track laid over them.
+type frameRecorder struct {
+	t   *testing.T
+	w   fyne.Window
+	dir string
+	n   int
+	at  [2]float32
+	seq []demoFrame
+}
+
+func newFrameRecorder(t *testing.T, w fyne.Window, dir string, start [2]float32) *frameRecorder {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &frameRecorder{t: t, w: w, dir: dir, at: start}
+}
+
+func (r *frameRecorder) shot() string {
+	r.n++
+	name := fmt.Sprintf("f%02d.png", r.n)
+	capturePNG(r.t, r.w, filepath.Join(r.dir, name))
+	return name
+}
+
+// glide moves the pointer from where it last was to `to` over a few steps on
+// the same capture, then holds it there.
+func (r *frameRecorder) glide(file string, to [2]float32, hold int) {
+	from := r.at
+	for k := 1; k <= 6; k++ {
+		f := float32(k) / 7
+		p := [2]float32{from[0] + (to[0]-from[0])*f, from[1] + (to[1]-from[1])*f}
+		r.seq = append(r.seq, demoFrame{File: file, Ms: 40, Cursor: &p})
+	}
+	r.at = to
+	r.stay(file, hold, false)
+}
+
+func (r *frameRecorder) stay(file string, ms int, click bool) {
+	p := r.at
+	r.seq = append(r.seq, demoFrame{File: file, Ms: ms, Cursor: &p, Click: click})
+}
+
+// finish writes the track, with the part of the window the animation shows.
+func (r *frameRecorder) finish(crop [4]float32) {
+	writeJSON(r.t, filepath.Join(r.dir, "frames.json"),
+		map[string]any{"crop": crop, "frames": r.seq})
+}
+
 func TestReadmeDemoFrames(t *testing.T) {
 	out, frames := os.Getenv("DEMO_OUT"), os.Getenv("DEMO_FRAMES")
 	if out == "" || frames == "" {
 		t.Skip("DEMO_OUT and DEMO_FRAMES not set")
 	}
-	for _, d := range []string{out, frames} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(out, 0o755); err != nil {
+		t.Fatal(err)
 	}
 
 	a := test.NewApp()
 	defer a.Quit()
 	test.ApplyTheme(t, darkGold{goldTheme{Theme: theme.DefaultTheme()}})
 	w := a.NewWindow(windowTitle)
-	// About a maximised window on a 1080p screen: anything smaller wraps the
-	// tiles and the week columns into each other.
-	w.Resize(fyne.NewSize(1680, 1000))
+	// A maximised window on a 1080p screen. Anything narrower and the week
+	// strip's seven columns no longer fit side by side.
+	w.Resize(fyne.NewSize(1920, 1080))
 
 	ui := &UI{store: newStore(t.TempDir()), win: w,
 		calMonth: thisMonth(), repMonth: currentPeriod()}
@@ -177,42 +225,17 @@ func TestReadmeDemoFrames(t *testing.T) {
 		capturePNG(t, w, filepath.Join(out, s.name+".png"))
 	}
 
-	recordLoggingPopup(t, ui, w, out, frames)
+	recordLoggingPopup(t, ui, w, filepath.Join(frames, "popup"), out)
+	recordDraftDrag(t, ui, w, filepath.Join(frames, "drag"), out)
 }
 
 // recordLoggingPopup walks one commit group through the logging popup: open it,
 // drop the calendar down, pick the day that is still short, type the minutes.
-func recordLoggingPopup(t *testing.T, ui *UI, w fyne.Window, out, frames string) {
+func recordLoggingPopup(t *testing.T, ui *UI, w fyne.Window, dir, out string) {
 	ui.tabs.SelectIndex(0)
 	ui.renderPending()
 	g := ui.pending.Groups[0]
-
-	var seq []demoFrame
-	n := 0
-	shot := func() string {
-		n++
-		name := fmt.Sprintf("f%02d.png", n)
-		capturePNG(t, w, filepath.Join(frames, name))
-		return name
-	}
-	// Moves the pointer from where it last was to `to` over a few steps on the
-	// same capture, then holds it there.
-	at := [2]float32{1100, 820}
-	glide := func(file string, to [2]float32, hold int) {
-		from := at
-		for k := 1; k <= 6; k++ {
-			f := float32(k) / 7
-			p := [2]float32{from[0] + (to[0]-from[0])*f, from[1] + (to[1]-from[1])*f}
-			seq = append(seq, demoFrame{File: file, Ms: 40, Cursor: &p})
-		}
-		at = to
-		p := at
-		seq = append(seq, demoFrame{File: file, Ms: hold, Cursor: &p})
-	}
-	stay := func(file string, ms int, click bool) {
-		p := at
-		seq = append(seq, demoFrame{File: file, Ms: ms, Cursor: &p, Click: click})
-	}
+	rec := newFrameRecorder(t, w, dir, [2]float32{1100, 820})
 
 	// The Log Work tab, the pointer travelling to the tile it is about to open.
 	var tile fyne.CanvasObject
@@ -221,11 +244,11 @@ func recordLoggingPopup(t *testing.T, ui *UI, w fyne.Window, out, frames string)
 			tile = tp
 		}
 	})
-	logTab := shot()
-	stay(logTab, 900, false)
+	logTab := rec.shot()
+	rec.stay(logTab, 900, false)
 	if tile != nil {
-		glide(logTab, centreOf(tile), 400)
-		stay(logTab, 200, true)
+		rec.glide(logTab, centreOf(tile), 400)
+		rec.stay(logTab, 200, true)
 	}
 
 	// The popup, built the way openGroupEditor builds it.
@@ -249,16 +272,16 @@ func recordLoggingPopup(t *testing.T, ui *UI, w fyne.Window, out, frames string)
 		t.Fatal("the popup should hold a date picker and a minutes field")
 	}
 
-	popup := shot()
-	stay(popup, 1000, false)
-	glide(popup, centreOf(picker.open), 400)
-	stay(popup, 200, true)
+	popup := rec.shot()
+	rec.stay(popup, 1000, false)
+	rec.glide(popup, centreOf(picker.open), 400)
+	rec.stay(popup, 200, true)
 
 	// Drop the month down.
 	test.Tap(picker.open)
-	calendar := shot()
-	stay(calendar, 1800, false)
-	if err := copyFile(filepath.Join(frames, calendar), filepath.Join(out, "09-date-calendar.png")); err != nil {
+	calendar := rec.shot()
+	rec.stay(calendar, 1800, false)
+	if err := copyFile(filepath.Join(dir, calendar), filepath.Join(out, "09-date-calendar.png")); err != nil {
 		t.Fatal(err)
 	}
 
@@ -280,30 +303,107 @@ func recordLoggingPopup(t *testing.T, ui *UI, w fyne.Window, out, frames string)
 	if cell == nil {
 		t.Fatalf("no cell for %s in the calendar", short.Format("2006-01-02"))
 	}
-	glide(calendar, centreOf(cell), 700)
-	stay(calendar, 200, true)
+	rec.glide(calendar, centreOf(cell), 700)
+	rec.stay(calendar, 200, true)
 	test.Tap(cell)
-	picked := shot()
-	stay(picked, 1000, false)
+	picked := rec.shot()
+	rec.stay(picked, 1000, false)
 
 	// And the one number the popup needs from you.
-	glide(picked, centreOf(minE), 300)
-	stay(picked, 200, true)
+	rec.glide(picked, centreOf(minE), 300)
+	rec.stay(picked, 200, true)
 	for _, r := range "120" {
 		test.Type(minE, string(r))
-		stay(shot(), 220, false)
+		rec.stay(rec.shot(), 220, false)
 	}
-	done := shot()
-	stay(done, 3200, false)
-	writeJSON(t, filepath.Join(frames, "frames.json"), seq)
+	done := rec.shot()
+	rec.stay(done, 3200, false)
+	// The popup is 80% of the window, centred; the calendar drops a little past
+	// its bottom edge, so the crop leaves room for it.
+	sz := w.Canvas().Size()
+	rec.finish([4]float32{sz.Width*0.1 - 8, sz.Height*0.1 - 8, sz.Width*0.9 + 8, sz.Height*0.9 + 48})
 
 	// The still for the README, with the minutes field called out.
-	if err := copyFile(filepath.Join(frames, done), filepath.Join(out, "08-log-popup.png")); err != nil {
+	if err := copyFile(filepath.Join(dir, done), filepath.Join(out, "08-log-popup.png")); err != nil {
 		t.Fatal(err)
 	}
 	writeJSON(t, filepath.Join(out, "08-log-popup.json"), []demoBox{
 		boxOf(minE, "The only field to fill in"),
 	})
+}
+
+// recordDraftDrag carries a saved entry across the week strip under the drafts:
+// it was saved on a day that is already full, and belongs on the short one
+// beside it.
+func recordDraftDrag(t *testing.T, ui *UI, w fyne.Window, dir, out string) {
+	days := demoWorkdays(today())
+	full, short := days[len(days)-3], days[len(days)-2]
+	if _, err := ui.store.AppendRows([]Row{
+		{"date": full, "minutes": "120", "type": "manual", "issue": demoRef(demoIssues[5]),
+			"issue_title": demoIssues[5].Title, "owner": "demo-user", "mode": "subissue",
+			"remarks": "Wrote up the backoff schedule and the dead-letter queue."},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ui.weekStart = weekStartOf(short)
+	ui.tabs.SelectIndex(0)
+	// Tall enough that the strip under the drafts is on screen whole.
+	w.Resize(fyne.NewSize(1920, 1400))
+	ui.drawRecent()
+
+	from, to := ui.weekCols[full], ui.weekCols[short]
+	if from == nil || to == nil {
+		t.Fatal("the week strip should show both days")
+	}
+	tiles := dragTilesIn(from)
+	if len(tiles) == 0 {
+		t.Fatal("the full day should carry the card to move")
+	}
+	tile := tiles[0]
+
+	strip, drafts := boxOf(ui.weekBox, ""), boxOf(ui.recentBox, "")
+	crop := [4]float32{0, drafts.Y - 120, strip.X + strip.W + 12, strip.Y + strip.H + 12}
+	rec := newFrameRecorder(t, w, dir, [2]float32{strip.X + strip.W*0.75, strip.Y + strip.H*0.8})
+
+	still := rec.shot()
+	rec.stay(still, 1200, false)
+	grab := centreOf(tile)
+	rec.glide(still, grab, 400)
+	rec.stay(still, 200, true)
+
+	// Carried across, a capture per step so the card in the air follows. The
+	// path bows upward a little, the way a hand moves.
+	aim := centreOf(to)
+	aim[1] = grab[1]
+	entered := false
+	for k := 1; k <= 10; k++ {
+		f := float32(k) / 10
+		p := [2]float32{grab[0] + (aim[0]-grab[0])*f, grab[1] - 120*f*(1-f)}
+		tile.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{AbsolutePosition: fyne.NewPos(p[0], p[1])}})
+		if !entered && p[0] >= fyne.CurrentApp().Driver().AbsolutePositionForObject(to).X {
+			from.MouseOut()
+			to.MouseIn(&desktop.MouseEvent{})
+			entered = true
+		}
+		rec.at = p
+		rec.stay(rec.shot(), 60, false)
+	}
+
+	// Held over the short day, which breathes towards the green it would turn.
+	// The test driver runs no animations, so the breath is stepped by hand.
+	to.stopPulse()
+	green := blendColor(theme.Color(theme.ColorNameBackground), theme.Color(theme.ColorNameSuccess), weekDoneTint)
+	for _, f := range []float32{0.3, 0.6, 0.85, 1, 0.85, 0.6, 0.3, 0.6, 0.85, 1} {
+		to.frame.FillColor = blendColor(to.baseFill, green, f)
+		to.frame.Refresh()
+		rec.stay(rec.shot(), 90, false)
+	}
+
+	tile.DragEnd()
+	landed := rec.shot()
+	rec.stay(landed, 200, true)
+	rec.stay(landed, 3000, false)
+	rec.finish(crop)
 }
 
 // demoWorkdays is every weekday from the start of the report period up to and
