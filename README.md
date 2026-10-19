@@ -1,5 +1,7 @@
 # Worklog
 
+![Worklog walking through its tabs](docs/demo.gif)
+
 A desktop app for logging work against GitHub issues and reading the result
 back off a GitHub Project board.
 
@@ -22,6 +24,33 @@ Built with [Fyne](https://fyne.io). All GitHub access goes through the
 | **Settings** | Everything below. |
 
 Tapping an organisation in any colour key hides its work across all three tabs.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/01-log-work.png" alt="Log Work: unlogged commits as tiles, saved entries below"></td>
+    <td><img src="docs/screenshots/03-commit-list.png" alt="Commit List: the week's commits by day and issue"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Log Work</b> — unlogged commits, one tap to log</td>
+    <td align="center"><b>Commit List</b> — the week by day and issue</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/06-status-day.png" alt="Status: month calendar filled towards the daily target, with a day opened"></td>
+    <td><img src="docs/screenshots/07-report.png" alt="Report: payroll period stat tiles and per-day chart"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Status</b> — the month against the daily target</td>
+    <td align="center"><b>Report</b> — the payroll period, totalled</td>
+  </tr>
+</table>
+
+The screenshots and the animation are rendered off screen from made-up data —
+no GitHub access, no real worklog. To regenerate them after a UI change:
+
+```
+DEMO_OUT=docs/screenshots go test -tags demo -run TestReadmeDemoFrames .
+python docs/make_demo_gif.py docs/screenshots docs/demo.gif
+```
 
 ## Requirements
 
