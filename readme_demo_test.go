@@ -2,13 +2,15 @@
 
 package main
 
-// Renders each tab off screen, against made-up data, into PNG frames for the
-// README animation. Nothing here reaches GitHub and nothing personal is drawn.
+// Renders the app off screen, against made-up data, into the README's
+// screenshots and the frames of its animation. Nothing here reaches GitHub and
+// nothing personal is drawn.
 //
-//	DEMO_OUT=docs/frames go test -tags demo -run TestReadmeDemoFrames
-//	python docs/make_demo_gif.py docs/frames docs/demo.gif
+//	DEMO_OUT=docs/screenshots DEMO_FRAMES=<scratch dir> go test -tags demo -run TestReadmeDemoFrames .
+//	python docs/make_readme_media.py docs/screenshots <scratch dir> docs/demo.gif
 
 import (
+	"encoding/json"
 	"fmt"
 	"image/color"
 	"image/png"
@@ -18,8 +20,11 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 )
 
 // darkGold pins the app's own theme to its dark variant: the test app reports
@@ -44,20 +49,79 @@ func demoURL(i IssueInfo) string {
 	return fmt.Sprintf("https://github.com/%s/%s/issues/%d", i.Org, i.Repo, i.Number)
 }
 
-func TestReadmeDemoFrames(t *testing.T) {
-	out := os.Getenv("DEMO_OUT")
-	if out == "" {
-		t.Skip("DEMO_OUT not set")
-	}
-	if err := os.MkdirAll(out, 0o755); err != nil {
+// demoFrame is one step of the animation: a capture, how long it stays up, and
+// where the drawn pointer sits on it. The pointer is added afterwards by the
+// script, so one capture can carry the pointer through several positions.
+type demoFrame struct {
+	File   string      `json:"file"`
+	Ms     int         `json:"ms"`
+	Cursor *[2]float32 `json:"cursor,omitempty"`
+	Click  bool        `json:"click,omitempty"`
+}
+
+// demoBox is a rectangle on a capture, for the script to draw a callout around.
+type demoBox struct {
+	X, Y, W, H float32
+	Label      string
+}
+
+func capturePNG(t *testing.T, w fyne.Window, path string) {
+	t.Helper()
+	w.Content().Refresh()
+	f, err := os.Create(path)
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := png.Encode(f, w.Canvas().Capture()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func centreOf(o fyne.CanvasObject) [2]float32 {
+	at := fyne.CurrentApp().Driver().AbsolutePositionForObject(o)
+	return [2]float32{at.X + o.Size().Width/2, at.Y + o.Size().Height/2}
+}
+
+func boxOf(o fyne.CanvasObject, label string) demoBox {
+	at := fyne.CurrentApp().Driver().AbsolutePositionForObject(o)
+	return demoBox{at.X, at.Y, o.Size().Width, o.Size().Height, label}
+}
+
+func writeJSON(t *testing.T, path string, v any) {
+	t.Helper()
+	b, _ := json.MarshalIndent(v, "", "  ")
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func copyFile(from, to string) error {
+	b, err := os.ReadFile(from)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(to, b, 0o644)
+}
+
+func TestReadmeDemoFrames(t *testing.T) {
+	out, frames := os.Getenv("DEMO_OUT"), os.Getenv("DEMO_FRAMES")
+	if out == "" || frames == "" {
+		t.Skip("DEMO_OUT and DEMO_FRAMES not set")
+	}
+	for _, d := range []string{out, frames} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	a := test.NewApp()
 	defer a.Quit()
 	test.ApplyTheme(t, darkGold{goldTheme{Theme: theme.DefaultTheme()}})
 	w := a.NewWindow(windowTitle)
-	w.Resize(fyne.NewSize(1280, 800))
+	// About a maximised window on a 1080p screen: anything smaller wraps the
+	// tiles and the week columns into each other.
+	w.Resize(fyne.NewSize(1680, 1000))
 
 	ui := &UI{store: newStore(t.TempDir()), win: w,
 		calMonth: thisMonth(), repMonth: currentPeriod()}
@@ -110,18 +174,136 @@ func TestReadmeDemoFrames(t *testing.T) {
 		if s.prep != nil {
 			s.prep()
 		}
-		w.Content().Refresh()
-		time.Sleep(50 * time.Millisecond)
-		img := w.Canvas().Capture()
-		f, err := os.Create(filepath.Join(out, s.name+".png"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := png.Encode(f, img); err != nil {
-			t.Fatal(err)
-		}
-		f.Close()
+		capturePNG(t, w, filepath.Join(out, s.name+".png"))
 	}
+
+	recordLoggingPopup(t, ui, w, out, frames)
+}
+
+// recordLoggingPopup walks one commit group through the logging popup: open it,
+// drop the calendar down, pick the day that is still short, type the minutes.
+func recordLoggingPopup(t *testing.T, ui *UI, w fyne.Window, out, frames string) {
+	ui.tabs.SelectIndex(0)
+	ui.renderPending()
+	g := ui.pending.Groups[0]
+
+	var seq []demoFrame
+	n := 0
+	shot := func() string {
+		n++
+		name := fmt.Sprintf("f%02d.png", n)
+		capturePNG(t, w, filepath.Join(frames, name))
+		return name
+	}
+	// Moves the pointer from where it last was to `to` over a few steps on the
+	// same capture, then holds it there.
+	at := [2]float32{1100, 820}
+	glide := func(file string, to [2]float32, hold int) {
+		from := at
+		for k := 1; k <= 6; k++ {
+			f := float32(k) / 7
+			p := [2]float32{from[0] + (to[0]-from[0])*f, from[1] + (to[1]-from[1])*f}
+			seq = append(seq, demoFrame{File: file, Ms: 40, Cursor: &p})
+		}
+		at = to
+		p := at
+		seq = append(seq, demoFrame{File: file, Ms: hold, Cursor: &p})
+	}
+	stay := func(file string, ms int, click bool) {
+		p := at
+		seq = append(seq, demoFrame{File: file, Ms: ms, Cursor: &p, Click: click})
+	}
+
+	// The Log Work tab, the pointer travelling to the tile it is about to open.
+	var tile fyne.CanvasObject
+	walk(ui.pendingBox, func(o fyne.CanvasObject) {
+		if tp, ok := o.(*tappable); ok && tile == nil {
+			tile = tp
+		}
+	})
+	logTab := shot()
+	stay(logTab, 900, false)
+	if tile != nil {
+		glide(logTab, centreOf(tile), 400)
+		stay(logTab, 200, true)
+	}
+
+	// The popup, built the way openGroupEditor builds it.
+	form := ui.groupEditor(g, nil, nil)
+	back := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), nil)
+	back.Importance = widget.LowImportance
+	heading := g.Date + "  ·  " + ui.issueInfo[g.Issue].Title
+	d := dialog.NewCustomWithoutButtons(heading, popupShell(back, form), w)
+	d.Resize(ui.popupSize())
+	d.Show()
+	defer d.Hide()
+
+	var picker *worklogDatePicker
+	walk(form.body, func(o fyne.CanvasObject) {
+		if p, ok := o.(*worklogDatePicker); ok {
+			picker = p
+		}
+	})
+	minE := entryByPlaceholder(form.body, "480")
+	if picker == nil || minE == nil {
+		t.Fatal("the popup should hold a date picker and a minutes field")
+	}
+
+	popup := shot()
+	stay(popup, 1000, false)
+	glide(popup, centreOf(picker.open), 400)
+	stay(popup, 200, true)
+
+	// Drop the month down.
+	test.Tap(picker.open)
+	calendar := shot()
+	stay(calendar, 1800, false)
+	if err := copyFile(filepath.Join(frames, calendar), filepath.Join(out, "09-date-calendar.png")); err != nil {
+		t.Fatal(err)
+	}
+
+	// The short day: the one that still owes time.
+	days := demoWorkdays(today())
+	short, _ := time.Parse("2006-01-02", days[len(days)-2])
+	var cell *tappable
+	walk(picker.cal, func(o fyne.CanvasObject) {
+		tp, ok := o.(*tappable)
+		if !ok {
+			return
+		}
+		walk(tp.content, func(c fyne.CanvasObject) {
+			if txt, ok := c.(*canvas.Text); ok && txt.Text == fmt.Sprint(short.Day()) {
+				cell = tp
+			}
+		})
+	})
+	if cell == nil {
+		t.Fatalf("no cell for %s in the calendar", short.Format("2006-01-02"))
+	}
+	glide(calendar, centreOf(cell), 700)
+	stay(calendar, 200, true)
+	test.Tap(cell)
+	picked := shot()
+	stay(picked, 1000, false)
+
+	// And the one number the popup needs from you.
+	glide(picked, centreOf(minE), 300)
+	stay(picked, 200, true)
+	for _, r := range "120" {
+		test.Type(minE, string(r))
+		stay(shot(), 220, false)
+	}
+	done := shot()
+	stay(done, 3200, false)
+	writeJSON(t, filepath.Join(frames, "frames.json"), seq)
+
+	// The still for the README, with the minutes field called out.
+	if err := copyFile(filepath.Join(frames, done), filepath.Join(out, "08-log-popup.png")); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(out, "08-log-popup.json"), []demoBox{
+		boxOf(minE, "The only field to fill in"),
+	})
 }
 
 // demoWorkdays is every weekday from the start of the report period up to and
@@ -210,6 +392,10 @@ func seedDemoData(t *testing.T, ui *UI) {
 		} else {
 			groups[len(groups)-1].Commits = append(groups[len(groups)-1].Commits, c)
 		}
+	}
+	// The remarks arrive written from the commit messages, as they do for real.
+	for i := range groups {
+		groups[i].Remarks = buildRemarks(groups[i].Commits)
 	}
 	ui.pending = PendingResult{Groups: groups, Count: len(commits), Range: []string{days[0], td}}
 	ui.pendingLoaded = true

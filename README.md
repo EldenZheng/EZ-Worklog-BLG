@@ -1,6 +1,10 @@
 # Worklog
 
-![Worklog walking through its tabs](docs/demo.gif)
+![Logging a commit: open the tile, drop the calendar down, pick the day that is still short, type the minutes](docs/demo.gif)
+
+*Tap an unlogged commit, pick the day from the calendar — each day shows how
+full it already is and what it still owes — and type the minutes. That is the
+whole entry.*
 
 A desktop app for logging work against GitHub issues and reading the result
 back off a GitHub Project board.
@@ -44,12 +48,30 @@ Tapping an organisation in any colour key hides its work across all three tabs.
   </tr>
 </table>
 
+### Logging a commit
+
+Tapping a tile on **Log Work** opens the logging popup. Everything except the
+time is filled in for you: the date the commits were made, the owner from
+Settings, the issue the commits reference, and remarks written from the commit
+messages. **Worklog mins is the only field you have to fill in** — then
+**Save & push**.
+
+<img src="docs/screenshots/08-log-popup.png" alt="The logging popup with every field pre-filled except Worklog mins, which is called out">
+
+The line under the fields says how full the chosen day already is on GitHub and
+what it comes to with this entry, so you can see whether the day is finished
+before you push. To log against a different day, open the calendar on the date
+field: every day carries its logged minutes and what it still owes, in the same
+colours as the Status tab.
+
+<img src="docs/screenshots/09-date-calendar.png" alt="The date field's calendar dropdown, each day filled by how much of the 8h target is logged">
+
 The screenshots and the animation are rendered off screen from made-up data —
 no GitHub access, no real worklog. To regenerate them after a UI change:
 
 ```
-DEMO_OUT=docs/screenshots go test -tags demo -run TestReadmeDemoFrames .
-python docs/make_demo_gif.py docs/screenshots docs/demo.gif
+DEMO_OUT=docs/screenshots DEMO_FRAMES=/tmp/worklog-frames go test -tags demo -run TestReadmeDemoFrames .
+python docs/make_readme_media.py docs/screenshots /tmp/worklog-frames docs/demo.gif
 ```
 
 ## Requirements
