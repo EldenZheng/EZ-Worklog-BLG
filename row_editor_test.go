@@ -455,6 +455,8 @@ func TestManualRowTitlesFollowCurrentDateAndIssue(t *testing.T) {
 			"Elden Code Review: 2026-09-18"},
 		{"single review issue title", Row{"type": kindCodeReview, "date": "2026-09-18", "issue": "bigledger/repo#7", "description": "Code Review: 2026-09-15"},
 			"Fix invoice rounding"},
+		{"saved issue title", Row{"type": kindCodeReview, "date": "2026-09-18", "issue": "bigledger/repo#8", "issue_title": "Persisted invoice title"},
+			"Persisted invoice title"},
 		{"other issue fallback", Row{"type": kindOther, "date": "2026-09-18", "issue": "bigledger/other#9", "description": "Worklog: 2026-09-15"},
 			"bigledger/other#9"},
 	} {

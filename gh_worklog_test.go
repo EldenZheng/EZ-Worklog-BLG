@@ -308,6 +308,48 @@ func TestProjectURLsMergesBoards(t *testing.T) {
 	}
 }
 
+func TestProjectForIssueUsesMatchingConfiguredOwner(t *testing.T) {
+	cfg := Config{
+		ProjectURL:       "https://github.com/orgs/bigledger/projects/9",
+		ExtraProjectURLs: []string{"https://github.com/orgs/BigLedger-Support/projects/1"},
+	}
+	for _, tc := range []struct {
+		owner string
+		want  int
+	}{
+		{"bigledger", 9},
+		{"BIGLEDGER-SUPPORT", 1},
+	} {
+		got, err := projectForIssue(cfg, tc.owner)
+		if err != nil || got.number != tc.want {
+			t.Fatalf("projectForIssue(%q) = (%+v, %v), want project %d", tc.owner, got, err, tc.want)
+		}
+	}
+	if _, err := projectForIssue(cfg, "someone-else"); err == nil {
+		t.Fatal("an issue from another owner must not be added to a configured board")
+	}
+}
+
+func TestProjectStatusMustBeDoneBeforePushCompletes(t *testing.T) {
+	if _, err := setStatusDone("project", "item", nil); err == nil {
+		t.Fatal("a board without Status must not silently complete the push")
+	}
+	for _, tc := range []struct {
+		response string
+		complete bool
+	}{
+		{`{"data":{"node":{"fieldValueByName":{"name":"Done"}}}}`, true},
+		{`{"data":{"node":{"fieldValueByName":{"name":"Created"}}}}`, false},
+		{`{"data":{"node":{"fieldValueByName":null}}}`, false},
+		{`{`, false},
+	} {
+		if err := verifyProjectStatusDone(tc.response); (err == nil) != tc.complete {
+			t.Fatalf("verifyProjectStatusDone(%q) error = %v, complete = %t",
+				tc.response, err, tc.complete)
+		}
+	}
+}
+
 // An org without a Worklog issue type is a fact about the org, not a failed
 // push. Confusing the two left the row waiting to be retried forever.
 func TestMissingIssueTypeIsNotAPushFailure(t *testing.T) {

@@ -161,12 +161,13 @@ type UI struct {
 
 	// Pending commits, held so a bubble can be re-rendered without refetching,
 	// plus the issue titles their refs resolve to.
-	pending        PendingResult
-	pendingLoaded  bool
-	pendingLoading bool
-	pendingAt      time.Time // when the list last landed, for staleness
-	issueInfo      map[string]IssueInfo
-	showIgnored    bool
+	pending            PendingResult
+	pendingLoaded      bool
+	pendingLoading     bool
+	pendingAt          time.Time // when the list last landed, for staleness
+	issueInfo          map[string]IssueInfo
+	savedTitlesLoading bool
+	showIgnored        bool
 
 	// supportPlaceholder pencils an unlogged weekday support shift onto the week
 	// strip. Held in memory only and cleared whenever the week changes — it is a
@@ -561,6 +562,75 @@ func (ui *UI) loadIssueInfos(composer *progressComposer, weight float64, finish 
 	})
 }
 
+// loadSavedIssueInfos migrates the durable rows that predate issue_title. The
+// saved list used to borrow titles only from the pending-commit fetch, so a
+// code-review draft could resolve its parent issue correctly and still show a
+// bare owner/repo#number. Persisting the title makes that row self-contained on
+// the next launch and avoids repeating the GitHub request forever.
+func (ui *UI) loadSavedIssueInfos() {
+	if ui.savedTitlesLoading {
+		return
+	}
+	ui.savedTitlesLoading = true
+	var infos map[string]IssueInfo
+	var changed int
+	var loadErr error
+	ui.async(func() error {
+		rows, err := ui.store.ReadRows()
+		if err != nil {
+			loadErr = err
+			return nil
+		}
+		seen := map[string]bool{}
+		var refs []string
+		for _, r := range rows {
+			ref := strings.TrimSpace(r["issue"])
+			if ref == "" || strings.TrimSpace(r["issue_title"]) != "" {
+				continue
+			}
+			key := strings.ToLower(ref)
+			if seen[key] {
+				continue
+			}
+			if _, _, _, err := splitIssue(ref); err != nil {
+				continue
+			}
+			seen[key] = true
+			refs = append(refs, ref)
+		}
+		if len(refs) == 0 {
+			infos = map[string]IssueInfo{}
+			return nil
+		}
+		infos, _ = FetchIssueInfos(refs)
+		titles := map[string]string{}
+		for ref, info := range infos {
+			if strings.TrimSpace(info.Title) != "" {
+				titles[ref] = info.Title
+			}
+		}
+		changed, loadErr = ui.store.UpdateIssueTitles(titles)
+		return nil
+	}, func() {
+		ui.savedTitlesLoading = false
+		if loadErr != nil {
+			ui.errf(loadErr)
+			return
+		}
+		if ui.issueInfo == nil {
+			ui.issueInfo = map[string]IssueInfo{}
+		}
+		for ref, info := range infos {
+			if strings.TrimSpace(info.Title) != "" {
+				ui.issueInfo[ref] = info
+			}
+		}
+		if changed > 0 {
+			ui.drawRecent()
+		}
+	})
+}
+
 // refreshLoggedShas rereads the local rows' saved commit shas so the calendar
 // can mark rows whose issue still carries other unlogged commits. A cheap file
 // read; called on each Log Work redraw.
@@ -590,11 +660,12 @@ func (ui *UI) issueHasPending(issue string) bool {
 
 // rowPartlySaved reports that a push reached GitHub far enough to leave an
 // issue/project item behind, but did not complete every required field/status
-// update. A plain local draft has neither remote identifier and stays simply
-// "waiting to push".
+// update. Daily issues created by the app keep their issue ref on the row even
+// if the later board write failed before issue_url or item_id was recorded.
 func rowPartlySaved(r Row) bool {
 	return strings.TrimSpace(r["pushed_at"]) == "" &&
-		(strings.TrimSpace(r["issue_url"]) != "" || strings.TrimSpace(r["item_id"]) != "")
+		(strings.TrimSpace(r["issue_url"]) != "" || strings.TrimSpace(r["item_id"]) != "" ||
+			(rowCreatesOwnIssue(r) && strings.TrimSpace(r["issue"]) != ""))
 }
 
 func (ui *UI) ensureProjectCache() {
@@ -956,7 +1027,10 @@ func main() {
 	// the list starts changing under it.
 	go func() {
 		time.Sleep(750 * time.Millisecond)
-		fyne.Do(func() { ui.loadPending(false) })
+		fyne.Do(func() {
+			ui.loadSavedIssueInfos()
+			ui.loadPending(false)
+		})
 	}()
 	// Maximise once the window is up. fyne 2.8 has no Maximise method, so this
 	// asks Windows directly by title — the same effect as clicking the box in
@@ -1201,15 +1275,20 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	mReviewTarget := widget.NewLabel("")
 	mReviewTarget.Wrapping = fyne.TextWrapWord
 	reviewLookupVersion := 0
+	var reviewResolvedSource, reviewResolvedRef, reviewResolvedTitle string
 	startReviewLookup := func(source string, version int) {
 		if version != reviewLookupVersion || mReviewPR.Text != source {
 			return
 		}
 		mReviewTarget.SetText("Finding the referenced issue on GitHub…")
 		var ref string
+		var info IssueInfo
 		var err error
 		ui.async(func() error {
 			ref, _, err = resolveSingleCodeReviewTarget(source)
+			if err == nil {
+				info, _ = fetchIssueInfo(ref)
+			}
 			return nil
 		}, func() {
 			if version != reviewLookupVersion || mReviewPR.Text != source {
@@ -1219,7 +1298,16 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 				mReviewTarget.SetText(err.Error())
 				return
 			}
-			mReviewTarget.SetText("Worklog issue: " + ref)
+			if ui.issueInfo == nil {
+				ui.issueInfo = map[string]IssueInfo{}
+			}
+			if strings.TrimSpace(info.Title) != "" {
+				ui.issueInfo[ref] = info
+			}
+			reviewResolvedSource = source
+			reviewResolvedRef = ref
+			reviewResolvedTitle = strings.TrimSpace(info.Title)
+			mReviewTarget.SetText(codeReviewTargetLabel(ref, info.Title))
 		})
 	}
 	singleReviewRow := container.NewVBox(
@@ -1229,6 +1317,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	singleReviewRow.Hide()
 	mReviewPR.OnChanged = func(source string) {
 		reviewLookupVersion++
+		reviewResolvedSource, reviewResolvedRef, reviewResolvedTitle = "", "", ""
 		version := reviewLookupVersion
 		mReviewTarget.SetText("")
 		if _, ok := canonicalPullRequestURL(source); ok {
@@ -1421,7 +1510,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// resolveForPush + PushEntry, the same path the row editor uses. Reset the
 	// form only after a successful save so a failure keeps the fields for a
 	// second attempt.
-	mSaveResolved := func(push bool, codeReviewIssue string) {
+	mSaveResolved := func(push bool, codeReviewIssue, codeReviewIssueTitle string) {
 		var reviewItems []CodeReviewItem
 		mins, _ := strconv.Atoi(strings.TrimSpace(mMin.Text))
 		if kind == kindBulkReview {
@@ -1487,6 +1576,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 				return
 			}
 			row["issue"] = codeReviewIssue
+			row["issue_title"] = strings.TrimSpace(codeReviewIssueTitle)
 			row["mode"] = mModeVal()
 		case kindBulkReview:
 			// The daily issue is found or created on the first push, matching
@@ -1574,7 +1664,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// already attached to the correct issue and can be pushed later unchanged.
 	mSave := func(push bool) {
 		if kind != kindCodeReview {
-			mSaveResolved(push, "")
+			mSaveResolved(push, "", "")
 			return
 		}
 		source := mReviewPR.Text
@@ -1582,11 +1672,27 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			mMsg.SetText("Paste the PR link (or the issue link directly).")
 			return
 		}
+		// The debounced preview already did both GitHub reads in the common
+		// paste-then-save flow. Reuse it instead of resolving the same PR and
+		// issue a second time; clicking Save before the preview lands still
+		// falls through to the complete lookup below.
+		if source == reviewResolvedSource && reviewResolvedRef != "" {
+			mReviewTarget.SetText(codeReviewTargetLabel(reviewResolvedRef, reviewResolvedTitle))
+			mSaveResolved(push, reviewResolvedRef, reviewResolvedTitle)
+			return
+		}
 		mMsg.SetText("Finding the issue referenced by this PR…")
 		var ref string
+		var info IssueInfo
 		var err error
 		ui.async(func() error {
 			ref, _, err = resolveSingleCodeReviewTarget(source)
+			if err == nil {
+				// Title lookup is best-effort. Resolving the issue remains the
+				// correctness boundary; a temporary title failure must not stop a
+				// draft from being saved, and startup backfill will retry it.
+				info, _ = fetchIssueInfo(ref)
+			}
 			return nil
 		}, func() {
 			if kind != kindCodeReview || mReviewPR.Text != source {
@@ -1597,8 +1703,14 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 				mMsg.SetText(err.Error())
 				return
 			}
-			mReviewTarget.SetText("Worklog issue: " + ref)
-			mSaveResolved(push, ref)
+			if ui.issueInfo == nil {
+				ui.issueInfo = map[string]IssueInfo{}
+			}
+			if strings.TrimSpace(info.Title) != "" {
+				ui.issueInfo[ref] = info
+			}
+			mReviewTarget.SetText(codeReviewTargetLabel(ref, info.Title))
+			mSaveResolved(push, ref, info.Title)
 		})
 	}
 
@@ -3188,6 +3300,9 @@ func (ui *UI) rowTitle(r Row) string {
 	if info, ok := ui.issueInfo[r["issue"]]; ok && strings.TrimSpace(info.Title) != "" {
 		return strings.TrimSpace(info.Title)
 	}
+	if title := strings.TrimSpace(r["issue_title"]); title != "" {
+		return title
+	}
 	switch r["type"] {
 	case kindMeeting:
 		return meetingTitle(ui.cfg, r["date"])
@@ -3275,7 +3390,11 @@ func (ui *UI) rowTile(r Row, refresh func()) fyne.CanvasObject {
 		caption(state)))
 
 	push, edit, del := ui.rowActions(r, refresh)
-	actions := container.NewHBox(compactPush(push), layout.NewSpacer(), withPointerCursor(edit), withPointerCursor(del))
+	actionItems := []fyne.CanvasObject{compactPush(push)}
+	if rowPartlySaved(r) {
+		actionItems = append(actionItems, savedTag("partly saved"))
+	}
+	actions := container.NewHBox(append(actionItems, layout.NewSpacer(), withPointerCursor(edit), withPointerCursor(del))...)
 
 	body := container.NewBorder(nil, container.NewVBox(foot, actions), nil, nil, title)
 	bg := canvas.NewRectangle(blendColor(

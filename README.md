@@ -110,7 +110,9 @@ account and no server.
 
 The project the issues sit on must carry fields whose names start with
 `Worklog` — the app matches on `worklog` + `date`, `owner`, `min` and `remark`,
-case-insensitively. A `Status` field with a `Done` option is used if present.
+case-insensitively. A `Status` field with a `Done` option is required for a
+completed push; the app verifies the board item is Done before marking the
+local entry pushed.
 Without those fields an entry still pushes, and the app says which ones it could
 not write.
 

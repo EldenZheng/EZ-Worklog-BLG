@@ -64,3 +64,13 @@ func TestIssueRefsInPRTextReadsBothConventions(t *testing.T) {
 		t.Fatalf("refs = %#v, want %#v", got, want)
 	}
 }
+
+func TestCodeReviewTargetLabelIncludesFetchedTitle(t *testing.T) {
+	ref := "bigledger/blg-intranet#5804"
+	if got := codeReviewTargetLabel(ref, "Fix invoice rounding"); got != "Worklog issue: Fix invoice rounding  ·  "+ref {
+		t.Fatalf("target label = %q", got)
+	}
+	if got := codeReviewTargetLabel(ref, ""); got != "Worklog issue: "+ref {
+		t.Fatalf("fallback target label = %q", got)
+	}
+}

@@ -28,25 +28,25 @@ const (
 var fieldOrder = []string{
 	"id", "date", "minutes", "type", "description", "refs", "issue",
 	"owner", "remarks", "mode", "issue_url", "item_id", "pushed_at", "logged_at",
-	"parent_repo", "parent_title",
+	"parent_repo", "parent_title", "issue_title",
 }
 
 // Config mirrors config.json so data carries over from the Python app.
 type Config struct {
-	GithubAuthor      string   `json:"github_author"`
-	Repos             []string `json:"repos"`
-	BaseSalary        float64  `json:"base_salary_per_21_days"`
-	Currency          string   `json:"currency"`
-	DisplayCurrency   string   `json:"display_currency"`
-	FxRate            float64  `json:"fx_rate"`
-	FxUpdated         string   `json:"fx_updated"`
-	LookbackDays      int      `json:"lookback_days"`
-	WorklogOwner      string   `json:"worklog_owner"`
-	DefaultMode       string   `json:"default_mode"`
-	AnthropicAPIKey   string   `json:"anthropic_api_key"`
-	AnthropicModel    string   `json:"anthropic_model"`
-	ProjectURL        string   `json:"project_url"`
-	ExtraProjectURLs  []string `json:"extra_project_urls"`
+	GithubAuthor     string   `json:"github_author"`
+	Repos            []string `json:"repos"`
+	BaseSalary       float64  `json:"base_salary_per_21_days"`
+	Currency         string   `json:"currency"`
+	DisplayCurrency  string   `json:"display_currency"`
+	FxRate           float64  `json:"fx_rate"`
+	FxUpdated        string   `json:"fx_updated"`
+	LookbackDays     int      `json:"lookback_days"`
+	WorklogOwner     string   `json:"worklog_owner"`
+	DefaultMode      string   `json:"default_mode"`
+	AnthropicAPIKey  string   `json:"anthropic_api_key"`
+	AnthropicModel   string   `json:"anthropic_model"`
+	ProjectURL       string   `json:"project_url"`
+	ExtraProjectURLs []string `json:"extra_project_urls"`
 	// DisplayName is the name a meeting issue is titled with — "Elden" in
 	// "Elden Meeting & ad hocs: 2026-08-25". Blank means derive it from the
 	// worklog owner; see displayName.
@@ -64,12 +64,12 @@ func defaultConfig() Config {
 		// was quietly wrong for whoever was reading it — and wrong in a way that
 		// looks right, because every other number on the tab is real. Zero reads
 		// as "not set yet", which is what it is.
-		BaseSalary:     0,
-		Currency:       "RM",
+		BaseSalary:      0,
+		Currency:        "RM",
 		DisplayCurrency: "USD",
-		LookbackDays:   7,
-		DefaultMode:    "subissue",
-		AnthropicModel: "claude-sonnet-4-6",
+		LookbackDays:    7,
+		DefaultMode:     "subissue",
+		AnthropicModel:  "claude-sonnet-4-6",
 	}
 }
 
@@ -254,6 +254,73 @@ func (s *Store) UpdateRow(id string, patch Row) error {
 		}
 	}
 	return s.writeRowsLocked(rows)
+}
+
+// UpdateIssueTitles fills the durable title cache on every row for the named
+// issues. It deliberately leaves an existing title alone: the migration can be
+// retried after a partial GitHub lookup without overwriting data already saved,
+// and old rows only need fetching once.
+//
+// The first successful backfill keeps the pre-migration CSV beside the live
+// file. Removing the new column is therefore a file restore, not a reverse
+// migration that has to guess at the old bytes.
+func (s *Store) UpdateIssueTitles(titles map[string]string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.readRowsLocked()
+	if err != nil {
+		return 0, err
+	}
+	byRef := map[string]string{}
+	for ref, title := range titles {
+		ref = strings.ToLower(strings.TrimSpace(ref))
+		title = strings.TrimSpace(title)
+		if ref != "" && title != "" {
+			byRef[ref] = title
+		}
+	}
+	updated := 0
+	for _, r := range rows {
+		if strings.TrimSpace(r["issue_title"]) != "" {
+			continue
+		}
+		if title := byRef[strings.ToLower(strings.TrimSpace(r["issue"]))]; title != "" {
+			r["issue_title"] = title
+			updated++
+		}
+	}
+	if updated == 0 {
+		return 0, nil
+	}
+	if err := s.backupBeforeIssueTitlesLocked(); err != nil {
+		return 0, err
+	}
+	return updated, s.writeRowsLocked(rows)
+}
+
+func (s *Store) backupBeforeIssueTitlesLocked() error {
+	data, err := os.ReadFile(s.logf)
+	if err != nil {
+		return err
+	}
+	backup := s.logf + ".pre-issue-title.bak"
+	f, err := os.OpenFile(backup, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if os.IsExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(backup)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(backup)
+		return err
+	}
+	return nil
 }
 
 func (s *Store) DeleteRow(id string) error {

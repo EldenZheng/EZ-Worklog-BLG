@@ -112,6 +112,13 @@ type codeReviewLookup struct {
 	IssueRefs []string
 }
 
+func codeReviewTargetLabel(ref, title string) string {
+	if title = strings.TrimSpace(title); title != "" {
+		return fmt.Sprintf("Worklog issue: %s  ·  %s", title, ref)
+	}
+	return "Worklog issue: " + ref
+}
+
 // fetchCodeReviewLookup resolves the issue(s) named by a PR. GitHub's typed
 // closingIssuesReferences is preferred; branch/title/body text covers the
 // common non-closing "Refs owner/repo/issues/123" convention.

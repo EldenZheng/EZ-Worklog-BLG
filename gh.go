@@ -652,6 +652,21 @@ func projectURLs(cfg Config) []string {
 	return out
 }
 
+// projectForIssue picks the configured board owned by the issue's organisation.
+// The first matching URL is the primary board when more than one is configured.
+func projectForIssue(cfg Config, owner string) (projectRef, error) {
+	for _, url := range projectURLs(cfg) {
+		ref, err := parseProjectRef(url)
+		if err != nil {
+			return projectRef{}, err
+		}
+		if strings.EqualFold(ref.login, owner) {
+			return ref, nil
+		}
+	}
+	return projectRef{}, ghErr("No project board is configured for %s.", owner)
+}
+
 // fetchOneProject reads every page of one board's worklogs for an owner.
 func fetchOneProject(projectURL, owner, filter string) ([]WorklogItem, error) {
 	ref, err := parseProjectRef(projectURL)
@@ -1952,7 +1967,7 @@ func setIssueType(issueID, typeID string) error {
 func setStatusDone(projectID, itemID string, fields []field) (string, error) {
 	f := exactField(fields, "Status")
 	if f == nil {
-		return "", nil // board has no Status column; nothing to do
+		return "", ghErr("the project has no Status field, so it cannot be marked Done")
 	}
 	opt := f.option("Done")
 	if opt == "" {
@@ -1965,7 +1980,37 @@ func setStatusDone(projectID, itemID string, fields []field) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	out, err := gh([]string{
+		"api", "graphql", "-f",
+		"query=query($id:ID!,$name:String!){node(id:$id){... on ProjectV2Item{fieldValueByName(name:$name){... on ProjectV2ItemFieldSingleSelectValue{name}}}}}",
+		"-F", "id=" + itemID, "-F", "name=Status",
+	})
+	if err != nil {
+		return "", ghErr("Could not verify project Status: %v", err)
+	}
+	if err := verifyProjectStatusDone(out); err != nil {
+		return "", err
+	}
 	return f.Name, nil
+}
+
+func verifyProjectStatusDone(raw string) error {
+	var result struct {
+		Data struct {
+			Node struct {
+				Value struct {
+					Name string `json:"name"`
+				} `json:"fieldValueByName"`
+			} `json:"node"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return ghErr("Could not read project Status: %v", err)
+	}
+	if status := result.Data.Node.Value.Name; status != "Done" {
+		return ghErr("Project Status is %q after setting Done. Retry the push.", status)
+	}
+	return nil
 }
 
 // pushToProject puts a sub-issue on the board and writes its Worklog fields.
@@ -2204,7 +2249,23 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 	} else {
 		chosen := pickProject(items)
 		if chosen == nil {
-			return PushResult{}, ghErr("%s isn't on a project board, so there are no Worklog fields.", ref)
+			board, e := projectForIssue(cfg, o)
+			if e != nil {
+				return PushResult{}, e
+			}
+			emit(20, "Adding issue to board")
+			if _, e := gh([]string{"project", "item-add", strconv.Itoa(board.number),
+				"--owner", board.login, "--url", issue.URL}); e != nil {
+				return PushResult{}, ghErr("Could not add %s to project %d: %v", ref, board.number, e)
+			}
+			_, _, _, issue, e = getIssueContext(ref)
+			if e != nil {
+				return PushResult{}, e
+			}
+			chosen = pickProject(issue.ProjectItems.Nodes)
+			if chosen == nil {
+				return PushResult{}, ghErr("%s was added to project %d, but its board item was not returned. Retry the push.", ref, board.number)
+			}
 		}
 		proj = &chosen.Project
 		targetItem = chosen.ID

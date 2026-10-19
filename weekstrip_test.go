@@ -446,6 +446,31 @@ func TestDayCardDistinguishesIncompletePushFromRemainingCommits(t *testing.T) {
 	}
 }
 
+func TestBulkReviewIssueRefShowsPartlySavedTag(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	row := Row{
+		"date": "2026-09-21", "minutes": "85", "type": kindBulkReview,
+		"issue": "bigledger/blg-int-general-task#10440",
+	}
+	for _, card := range []fyne.CanvasObject{ui.dayRowCard(row, func() {}), ui.rowTile(row, func() {})} {
+		if got := labels(card); !contains(got, "partly saved") {
+			t.Fatalf("a created daily issue waiting for Worklog fields needs a visible tag: %v", got)
+		}
+	}
+
+	row["issue"] = ""
+	if got := labels(ui.dayRowCard(row, func() {})); contains(got, "partly saved") {
+		t.Fatalf("a local-only draft must not have a partial-save tag: %v", got)
+	}
+	row["issue"] = "bigledger/blg-int-general-task#10440"
+	row["pushed_at"] = "2026-09-21T21:00:00"
+	if got := labels(ui.dayRowCard(row, func() {})); contains(got, "partly saved") {
+		t.Fatalf("a completed push must not have a partial-save tag: %v", got)
+	}
+}
+
 // Dragging only patches the row date. The card title must therefore derive
 // from that current date rather than replaying the description saved earlier.
 func TestDayCardManualTitleUsesCurrentDate(t *testing.T) {
