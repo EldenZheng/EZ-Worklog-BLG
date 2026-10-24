@@ -27,15 +27,15 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w,
-		cfg: Config{Repos: []string{"bigledger"}}}
+		cfg: Config{Repos: []string{"exampleorg"}}}
 
 	for _, c := range []struct {
 		name string
 		row  Row
 	}{
-		{"never pushed", Row{"id": "1", "issue": "bigledger/repo#1", "date": "2026-08-09"}},
-		{"partial push", Row{"id": "2", "issue": "bigledger/repo#2", "date": "2026-08-09",
-			"item_id": "PVTI_x", "issue_url": "https://github.com/bigledger/repo/issues/2"}},
+		{"never pushed", Row{"id": "1", "issue": "exampleorg/repo#1", "date": "2026-08-09"}},
+		{"partial push", Row{"id": "2", "issue": "exampleorg/repo#2", "date": "2026-08-09",
+			"item_id": "PVTI_x", "issue_url": "https://github.com/exampleorg/repo/issues/2"}},
 	} {
 		b := buttonNamed(ui.rowTile(c.row, func() {}), "Push")
 		if b == nil {
@@ -48,7 +48,7 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 
 	// A finished row keeps a button, but it is plainly a second send: the board
 	// fields are overwritten and the sub-issue reused, not created twice.
-	done := Row{"id": "3", "issue": "bigledger/repo#3", "date": "2026-08-09",
+	done := Row{"id": "3", "issue": "exampleorg/repo#3", "date": "2026-08-09",
 		"pushed_at": "2026-08-10T03:01:18"}
 	tile := ui.rowTile(done, func() {})
 	if buttonNamed(tile, "Push") != nil {
@@ -77,7 +77,7 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 		{"bulk review", Row{"id": "8", "date": "2026-08-09", "type": kindBulkReview,
 			"remarks": "https://github.com/o/r/pull/1 (10m)"}},
 		{"independent", Row{"id": "6", "date": "2026-08-09", "type": kindIndependent,
-			"parent_repo": "bigledger/blg-intranet", "parent_title": "Tidy the docs"}},
+			"parent_repo": "exampleorg/sample-intranet", "parent_title": "Tidy the docs"}},
 	} {
 		b := buttonNamed(ui.rowTile(c.row, func() {}), "Push")
 		if b == nil || b.Disabled() {
@@ -96,14 +96,15 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	ui := editorUI(t)
 	defer fyne.CurrentApp().Quit()
-	ui.cfg.ProjectURL = "https://github.com/orgs/bigledger/projects/9"
+	ui.cfg.BulkCodeReviewRepo = "exampleorg/tasks"
+	ui.cfg.ProjectURL = "https://github.com/orgs/exampleorg/projects/9"
 	ui.ensureProjectCache()
 	day := today()
 	key := statusCacheKey(day[:7])
 	ui.projItems[key] = []WorklogItem{{Date: day, Minutes: 120}}
 	ui.projLoaded[key] = true
 	if _, err := ui.store.AppendRows([]Row{{
-		"date": day, "minutes": "30", "type": kindOther, "issue": "bigledger/repo#7",
+		"date": day, "minutes": "30", "type": kindOther, "issue": "exampleorg/repo#7",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -137,14 +138,14 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 		}
 	}
 	kinds.SetSelected("Bulk Review")
-	if !contains(labels(tab), "Creates/reuses its own issue in "+bulkCodeReviewRepo) {
+	if !contains(labels(tab), "Creates/reuses its own issue in "+ui.cfg.BulkCodeReviewRepo) {
 		t.Fatal("Bulk Review should say that it owns a general-task issue")
 	}
 	var prs, mins []*widget.Entry
 	walk(tab, func(o fyne.CanvasObject) {
 		if e, ok := o.(*widget.Entry); ok {
 			switch e.PlaceHolder {
-			case "https://github.com/bigledger/repo/pull/123":
+			case "https://github.com/exampleorg/repo/pull/123":
 				prs = append(prs, e)
 			case "10":
 				mins = append(mins, e)
@@ -154,13 +155,13 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	if len(prs) != 1 || len(mins) != 1 {
 		t.Fatalf("bulk sheet should start with one row, got %d PR and %d minute cells", len(prs), len(mins))
 	}
-	prs[0].SetText("https://github.com/bigledger/app/pull/12")
+	prs[0].SetText("https://github.com/exampleorg/app/pull/12")
 	mins[0].SetText("15")
 	prs, mins = nil, nil
 	walk(tab, func(o fyne.CanvasObject) {
 		if e, ok := o.(*widget.Entry); ok {
 			switch e.PlaceHolder {
-			case "https://github.com/bigledger/repo/pull/123":
+			case "https://github.com/exampleorg/repo/pull/123":
 				prs = append(prs, e)
 			case "10":
 				mins = append(mins, e)
@@ -201,11 +202,11 @@ func TestRowTileShowsRawMinutes(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &UI{store: newStore(t.TempDir()), win: w, cfg: Config{Repos: []string{"bigledger"}}}
+	ui := &UI{store: newStore(t.TempDir()), win: w, cfg: Config{Repos: []string{"exampleorg"}}}
 
 	tile := ui.rowTile(Row{
 		"id": "1", "date": "2026-08-11", "minutes": "90",
-		"type": "commit", "issue": "bigledger/repo#7",
+		"type": "commit", "issue": "exampleorg/repo#7",
 	}, func() {})
 	got := labels(tile)
 	if !contains(got, "90 min") {

@@ -21,7 +21,7 @@ type CodeReviewItem struct {
 var (
 	pullURLRe = regexp.MustCompile(`(?i)^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)(?:[/#?].*)?$`)
 	// Issue references occur in PR titles, bodies and branch names in both of
-	// the forms used across the BigLedger repositories.
+	// the forms used across the ExampleOrg repositories.
 	issueRefAnywhereRe = regexp.MustCompile(`(?i)([\w.-]+)/([\w.-]+)(?:/issues/|#)(\d+)`)
 )
 

@@ -8,8 +8,8 @@ import (
 )
 
 func TestMeetingIssueLabelOmitsOrgOnlyForMeeting(t *testing.T) {
-	issue := "bigledger/blg-intranet#42"
-	if got := meetingIssueLabel(issue); got != "blg-intranet#42" {
+	issue := "exampleorg/sample-intranet#42"
+	if got := meetingIssueLabel(issue); got != "sample-intranet#42" {
 		t.Fatalf("meeting issue label = %q, want repo and number only", got)
 	}
 	if got := issueTag(issue); got != issue {
@@ -22,7 +22,7 @@ func TestMeetingIssueLabelOmitsOrgOnlyForMeeting(t *testing.T) {
 	commits := map[string][]Commit{"2026-09-17": {{Date: "2026-09-17", Issue: issue}}}
 	meetingLabels := labels(ui.commitDaysPanelWithIssueLabel(
 		[]string{"2026-09-17"}, commits, meetingIssueLabel))
-	if !contains(meetingLabels, "blg-intranet#42") || contains(meetingLabels, issue) {
+	if !contains(meetingLabels, "sample-intranet#42") || contains(meetingLabels, issue) {
 		t.Fatalf("meeting labels should omit the org: %v", meetingLabels)
 	}
 	commitListLabels := labels(ui.commitDaysPanel([]string{"2026-09-17"}, commits))
@@ -36,7 +36,7 @@ func TestMeetingSidebarIsFixedAtTenPercent(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildMeetingTab())
 	ui.drawMeeting()
 

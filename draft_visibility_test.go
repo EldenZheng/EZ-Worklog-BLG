@@ -18,17 +18,17 @@ func TestDraftMinutesCountOnlyUnpushedRowsInRange(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: "2026-08", repMonth: "2026-08"}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 
 	if _, err := ui.store.AppendRows([]Row{
-		{"date": "2026-08-11", "minutes": "120", "issue": "bigledger/repo#1"},
-		{"date": "2026-08-11", "minutes": "60", "issue": "bigledger/repo#2"},
+		{"date": "2026-08-11", "minutes": "120", "issue": "exampleorg/repo#1"},
+		{"date": "2026-08-11", "minutes": "60", "issue": "exampleorg/repo#2"},
 		// Already on GitHub: the board reports it, so counting it here would
 		// draw it twice.
-		{"date": "2026-08-12", "minutes": "480", "issue": "bigledger/repo#3",
+		{"date": "2026-08-12", "minutes": "480", "issue": "exampleorg/repo#3",
 			"pushed_at": "2026-08-12T10:00:00"},
 		// Outside the month being drawn.
-		{"date": "2026-07-30", "minutes": "90", "issue": "bigledger/repo#4"},
+		{"date": "2026-07-30", "minutes": "90", "issue": "exampleorg/repo#4"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestDraftMinutesCountOnlyUnpushedRowsInRange(t *testing.T) {
 
 	// Switching an org off on the tab takes its drafts with it, the same as it
 	// takes that org's items.
-	ui.orgOff = map[string]bool{"bigledger": true}
+	ui.orgOff = map[string]bool{"exampleorg": true}
 	if len(ui.draftMinutesByDay("2026-08-01", "2026-08-31")) != 0 {
 		t.Fatal("a filtered-out org's drafts should leave the view with its items")
 	}
@@ -59,7 +59,7 @@ func TestCalendarShowsUnpushedWorkInYellow(t *testing.T) {
 	defer fyne.CurrentApp().Quit()
 
 	if _, err := ui.store.AppendRows([]Row{
-		{"date": "2026-08-13", "minutes": "150", "issue": "bigledger/blg-intranet#7"},
+		{"date": "2026-08-13", "minutes": "150", "issue": "exampleorg/sample-intranet#7"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -111,11 +111,11 @@ func TestADayTheDraftsCompleteReadsGreenNotShort(t *testing.T) {
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-14", Minutes: 360, Title: "most of a day",
-			URL: "https://github.com/bigledger/blg-intranet/issues/9"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/9"},
 	}
 	if _, err := ui.store.AppendRows([]Row{
 		// 360 + 180 clears 480; on the board alone the day is short.
-		{"date": "2026-08-14", "minutes": "180", "issue": "bigledger/blg-intranet#9"},
+		{"date": "2026-08-14", "minutes": "180", "issue": "exampleorg/sample-intranet#9"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -140,10 +140,10 @@ func TestADayTheDraftsCompleteReadsGreenNotShort(t *testing.T) {
 
 	// The chart says the same thing behind the bar.
 	days := []chartDay{
-		{date: "2026-08-14", byOrg: map[string]int{"bigledger": 360}, total: 360, draft: 180},
-		{date: "2026-08-15", byOrg: map[string]int{"bigledger": 360}, total: 360, draft: 60},
+		{date: "2026-08-14", byOrg: map[string]int{"exampleorg": 360}, total: 360, draft: 180},
+		{date: "2026-08-15", byOrg: map[string]int{"exampleorg": 360}, total: 360, draft: 60},
 	}
-	c := newDayChart(Config{Repos: []string{"bigledger"}}, days, target)
+	c := newDayChart(Config{Repos: []string{"exampleorg"}}, days, target)
 	r := c.CreateRenderer().(*dayChartRenderer)
 	c.Resize(fyne.NewSize(900, 300))
 	r.Layout(fyne.NewSize(900, 300))
@@ -191,10 +191,10 @@ func TestChartStacksDraftOnTopOfBankedWork(t *testing.T) {
 	// draft is what pushes the plot past the goal — which is the case that used
 	// to draw off the top of it.
 	days := []chartDay{
-		{date: "2026-08-24", byOrg: map[string]int{"bigledger": 480}, total: 480, draft: 120},
-		{date: "2026-08-25", byOrg: map[string]int{"bigledger": 480}, total: 480},
+		{date: "2026-08-24", byOrg: map[string]int{"exampleorg": 480}, total: 480, draft: 120},
+		{date: "2026-08-25", byOrg: map[string]int{"exampleorg": 480}, total: 480},
 	}
-	c := newDayChart(Config{Repos: []string{"bigledger"}}, days, target)
+	c := newDayChart(Config{Repos: []string{"exampleorg"}}, days, target)
 	r := c.CreateRenderer().(*dayChartRenderer)
 	c.Resize(fyne.NewSize(900, 300))
 	r.Layout(fyne.NewSize(900, 300))
@@ -229,10 +229,10 @@ func TestWeekMeterDrawsDraftsAsOneTranslucentBlock(t *testing.T) {
 	defer a.Quit()
 	test.ApplyTheme(t, theme.DefaultTheme())
 
-	cfg := Config{Repos: []string{"bigledger", "BigLedger-Support"}}
+	cfg := Config{Repos: []string{"exampleorg", "Example-Support"}}
 	bar := meterBarWithDraft(cfg,
-		map[string]int{"bigledger": 120},
-		map[string]int{"bigledger": 60, "bigledger-support": 60}, target, 8)
+		map[string]int{"exampleorg": 120},
+		map[string]int{"exampleorg": 60, "example-support": 60}, target, 8)
 	bar.Resize(fyne.NewSize(480, 8))
 
 	var drafts []*canvas.Rectangle

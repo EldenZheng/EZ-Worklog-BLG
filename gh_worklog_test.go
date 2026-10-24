@@ -15,8 +15,8 @@ func TestWorklogProjectFilter(t *testing.T) {
 	if from != "2026-07-01" || to != "2026-07-31" {
 		t.Fatalf("unexpected month bounds: %s..%s", from, to)
 	}
-	got := worklogProjectFilter("blg-elden", "2026-07-27", "2026-08-02")
-	want := `"worklog-owner-(blg-xxxx)":blg-elden "worklog-(date)":>=2026-07-27 "worklog-(date)":<=2026-08-02`
+	got := worklogProjectFilter("team-alex", "2026-07-27", "2026-08-02")
+	want := `"worklog-owner-(blg-xxxx)":team-alex "worklog-(date)":>=2026-07-27 "worklog-(date)":<=2026-08-02`
 	if got != want {
 		t.Fatalf("filter mismatch:\n got %q\nwant %q", got, want)
 	}
@@ -108,8 +108,8 @@ func TestLongBodyKeepsEveryBullet(t *testing.T) {
 	for i := 0; i < 12; i++ {
 		body = append(body, fmt.Sprintf("- bullet %d %s", i, strings.Repeat("x", 100)))
 	}
-	full := "Refs bigledger/repo/issues/1:\n" + strings.Join(body, "\n")
-	remarks := buildRemarks([]Commit{{Sha: "ddddddd", Repo: "bigledger/repo", Full: full}})
+	full := "Refs exampleorg/repo/issues/1:\n" + strings.Join(body, "\n")
+	remarks := buildRemarks([]Commit{{Sha: "ddddddd", Repo: "exampleorg/repo", Full: full}})
 	if len(remarks) <= remarkCap {
 		t.Fatalf("test needs input past the cap, got %d chars", len(remarks))
 	}
@@ -136,8 +136,8 @@ func TestLocalDateAgreesAcrossAPIFormats(t *testing.T) {
 func TestRemarksUseBodyNotRefsHeader(t *testing.T) {
 	c := Commit{
 		Sha:     "05c9cae",
-		Message: "Refs bigledger/blg-sd-senwave-senheng/issues/483:",
-		Full: "Refs bigledger/blg-sd-senwave-senheng/issues/483:\n" +
+		Message: "Refs exampleorg/sample-client-three/issues/483:",
+		Full: "Refs exampleorg/sample-client-three/issues/483:\n" +
 			"- Cap fix: limit: null -> explicit ROW_LIMIT = 9999.\n" +
 			"- Server-side search: opt-in serverSideSearch.",
 	}
@@ -166,12 +166,12 @@ func TestRemarksFallBackToSubject(t *testing.T) {
 }
 
 func TestMatchesConfig(t *testing.T) {
-	entries := []string{"bigledger", "someone/explicit-repo"}
+	entries := []string{"exampleorg", "someone/explicit-repo"}
 	cases := map[string]bool{
-		"bigledger/blg-shared-utilities": true,
-		"someone/explicit-repo":          true,
-		"someone/other-repo":             false,
-		"unrelated/thing":                false,
+		"exampleorg/sample-shared-utilities": true,
+		"someone/explicit-repo":              true,
+		"someone/other-repo":                 false,
+		"unrelated/thing":                    false,
 	}
 	for repo, want := range cases {
 		if got := matchesConfig(repo, entries); got != want {
@@ -185,16 +185,16 @@ func TestWeekendSupportBonus(t *testing.T) {
 	for i := 1; i <= 7; i++ {
 		items = append(items, WorklogItem{
 			Title:       "Worklog: 2026-07-0" + string(rune('0'+i)),
-			URL:         "https://github.com/bigledger/worklog/issues/" + string(rune('0'+i)),
-			ParentTitle: "Elden: Weekend Support Time",
-			ParentURL:   "https://github.com/bigledger/support/issues/" + string(rune('0'+i)),
+			URL:         "https://github.com/exampleorg/worklog/issues/" + string(rune('0'+i)),
+			ParentTitle: "Alex: Weekend Support Time",
+			ParentURL:   "https://github.com/exampleorg/support/issues/" + string(rune('0'+i)),
 		})
 	}
 	// A duplicate worklog for the same support issue must not be paid twice.
 	items = append(items, items[0])
 	qualifying := weekendSupportIssues(items)
-	sets, bonus := weekendSupportBonus(0, qualifying)
-	if qualifying != 7 || sets != 1 || bonus != 300 {
+	sets, bonus := weekendSupportBonus(0, qualifying, 125)
+	if qualifying != 7 || sets != 1 || bonus != 125 {
 		t.Fatalf("unexpected support bonus: issues=%d sets=%d bonus=%.2f", qualifying, sets, bonus)
 	}
 }
@@ -205,28 +205,28 @@ func TestWeekendSupportBonus(t *testing.T) {
 // the boundary. The leftover crosses it instead.
 func TestAnUnfinishedSupportSetCarriesIntoTheNextPeriod(t *testing.T) {
 	// Four of seven pays nothing, and leaves four to carry.
-	if sets, bonus := weekendSupportBonus(0, 4); sets != 0 || bonus != 0 {
+	if sets, bonus := weekendSupportBonus(0, 4, 125); sets != 0 || bonus != 0 {
 		t.Fatalf("four issues is not a set: sets=%d bonus=%.2f", sets, bonus)
 	}
 	// The next period's three finish it, on the four carried in.
-	if sets, bonus := weekendSupportBonus(4, 3); sets != 1 || bonus != 300 {
+	if sets, bonus := weekendSupportBonus(4, 3, 125); sets != 1 || bonus != 125 {
 		t.Fatalf("the carried four should complete the set: sets=%d bonus=%.2f", sets, bonus)
 	}
 	// The carry is a remainder, so nothing an earlier report already paid for
 	// can be paid again: eleven issues is one set and four carried, never two.
-	if sets, _ := weekendSupportBonus(11%supportSetSize, 3); sets != 1 {
+	if sets, _ := weekendSupportBonus(11%supportSetSize, 3, 125); sets != 1 {
 		t.Fatalf("a remainder cannot re-pay a set: sets=%d", sets)
 	}
 	// Two full sets inside one period still read as two.
-	if sets, bonus := weekendSupportBonus(0, 14); sets != 2 || bonus != 600 {
+	if sets, bonus := weekendSupportBonus(0, 14, 125); sets != 2 || bonus != 250 {
 		t.Fatalf("fourteen issues is two sets: sets=%d bonus=%.2f", sets, bonus)
 	}
 	// Carry plus this period's work can complete two at once.
-	if sets, _ := weekendSupportBonus(6, 8); sets != 2 {
+	if sets, _ := weekendSupportBonus(6, 8, 125); sets != 2 {
 		t.Fatalf("six carried plus eight is two sets: sets=%d", sets)
 	}
 	// An empty period earns nothing, however much was carried into it.
-	if sets, _ := weekendSupportBonus(6, 0); sets != 0 {
+	if sets, _ := weekendSupportBonus(6, 0, 125); sets != 0 {
 		t.Fatalf("a carry alone is not a set: sets=%d", sets)
 	}
 }
@@ -238,11 +238,11 @@ func TestCommaAmount(t *testing.T) {
 }
 
 func TestParseProjectRefWithViewQuery(t *testing.T) {
-	ref, err := parseProjectRef("https://github.com/orgs/bigledger/projects/9/views/19?filterQuery=x")
+	ref, err := parseProjectRef("https://github.com/orgs/exampleorg/projects/9/views/19?filterQuery=x")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ref.ownerKind != "orgs" || ref.login != "bigledger" || ref.number != 9 {
+	if ref.ownerKind != "orgs" || ref.login != "exampleorg" || ref.number != 9 {
 		t.Fatalf("unexpected project ref: %+v", ref)
 	}
 }
@@ -250,9 +250,9 @@ func TestParseProjectRefWithViewQuery(t *testing.T) {
 func TestWorklogFromNode(t *testing.T) {
 	minutes := 315.0
 	item, ok := worklogFromNode(
-		&projectItemContent{Title: "Worklog: 2026-07-27", URL: "https://github.com/bigledger/example/issues/1"},
+		&projectItemContent{Title: "Worklog: 2026-07-27", URL: "https://github.com/exampleorg/example/issues/1"},
 		[]pvFieldValue{
-			{Text: "blg-elden", Field: struct {
+			{Text: "team-alex", Field: struct {
 				Name string `json:"name"`
 			}{Name: "Worklog Owner (blg-xxxx)"}},
 			{Date: "2026-07-27", Field: struct {
@@ -269,7 +269,7 @@ func TestWorklogFromNode(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a worklog item")
 	}
-	if item.Owner != "blg-elden" || item.Date != "2026-07-27" || item.Minutes != 315 {
+	if item.Owner != "team-alex" || item.Date != "2026-07-27" || item.Minutes != 315 {
 		t.Fatalf("unexpected worklog item: %+v", item)
 	}
 	if !strings.Contains(item.Remarks, "report") {
@@ -281,17 +281,17 @@ func TestWorklogFromNode(t *testing.T) {
 // and a repeat is dropped so a duplicated line cannot double a day's minutes.
 func TestProjectURLsMergesBoards(t *testing.T) {
 	cfg := Config{
-		ProjectURL: "https://github.com/orgs/bigledger/projects/9",
+		ProjectURL: "https://github.com/orgs/exampleorg/projects/9",
 		ExtraProjectURLs: []string{
-			" https://github.com/orgs/BigLedger-Support/projects/1 ",
-			"https://github.com/orgs/bigledger/projects/9", // duplicate
+			" https://github.com/orgs/Example-Support/projects/1 ",
+			"https://github.com/orgs/exampleorg/projects/9", // duplicate
 			"",
 		},
 	}
 	got := projectURLs(cfg)
 	want := []string{
-		"https://github.com/orgs/bigledger/projects/9",
-		"https://github.com/orgs/BigLedger-Support/projects/1",
+		"https://github.com/orgs/exampleorg/projects/9",
+		"https://github.com/orgs/Example-Support/projects/1",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("got %v, want %v", got, want)
@@ -310,15 +310,15 @@ func TestProjectURLsMergesBoards(t *testing.T) {
 
 func TestProjectForIssueUsesMatchingConfiguredOwner(t *testing.T) {
 	cfg := Config{
-		ProjectURL:       "https://github.com/orgs/bigledger/projects/9",
-		ExtraProjectURLs: []string{"https://github.com/orgs/BigLedger-Support/projects/1"},
+		ProjectURL:       "https://github.com/orgs/exampleorg/projects/9",
+		ExtraProjectURLs: []string{"https://github.com/orgs/Example-Support/projects/1"},
 	}
 	for _, tc := range []struct {
 		owner string
 		want  int
 	}{
-		{"bigledger", 9},
-		{"BIGLEDGER-SUPPORT", 1},
+		{"exampleorg", 9},
+		{"EXAMPLE-SUPPORT", 1},
 	} {
 		got, err := projectForIssue(cfg, tc.owner)
 		if err != nil || got.number != tc.want {
@@ -353,7 +353,7 @@ func TestProjectStatusMustBeDoneBeforePushCompletes(t *testing.T) {
 // An org without a Worklog issue type is a fact about the org, not a failed
 // push. Confusing the two left the row waiting to be retried forever.
 func TestMissingIssueTypeIsNotAPushFailure(t *testing.T) {
-	err := fmt.Errorf("%w: %s has no %q issue type", errNoIssueType, "BigLedger-Support", "Worklog")
+	err := fmt.Errorf("%w: %s has no %q issue type", errNoIssueType, "Example-Support", "Worklog")
 	if !errors.Is(err, errNoIssueType) {
 		t.Fatal("a missing type must stay recognisable through wrapping")
 	}

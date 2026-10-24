@@ -66,19 +66,19 @@ func TestProgressMotionKeepsSharesAndColorsThroughInterruptedUpdates(t *testing.
 	a := newMotionTestApp(t)
 	defer a.Quit()
 	a.NewWindow("test")
-	ui := &UI{cfg: Config{Repos: []string{"bigledger", "bigledger-support"}}}
+	ui := &UI{cfg: Config{Repos: []string{"exampleorg", "example-support"}}}
 	defer ui.finishProgress()
-	bar := ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"bigledger": 120}, nil, target, 8)
+	bar := ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"exampleorg": 120}, nil, target, 8)
 	bar.Resize(fyne.NewSize(480, 8))
 	m := ui.meters["strip/Mon"]
 	if m.animation != nil {
 		t.Fatal("first display should be immediate")
 	}
-	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"bigledger": 120}, nil, target, 8)
+	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"exampleorg": 120}, nil, target, 8)
 	if m.animation != nil {
 		t.Fatal("unchanged refresh should not animate")
 	}
-	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"bigledger": 240, "bigledger-support": 120}, map[string]int{"bigledger": 120}, target, 8)
+	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"exampleorg": 240, "example-support": 120}, map[string]int{"exampleorg": 120}, target, 8)
 	m.animation.Tick(0.5)
 	check := func() {
 		t.Helper()
@@ -102,12 +102,12 @@ func TestProgressMotionKeepsSharesAndColorsThroughInterruptedUpdates(t *testing.
 		}
 	}
 	check()
-	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"bigledger-support": 240}, nil, target, 8)
-	if m.parts[0].key != "bigledger" || m.parts[1].key != "bigledger-support" {
+	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"example-support": 240}, nil, target, 8)
+	if m.parts[0].key != "exampleorg" || m.parts[1].key != "example-support" {
 		t.Fatal("removing the leading segment must not jump the remaining segment to the left")
 	}
 	currentBlue := m.parts[0].weight
-	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"bigledger": 600}, nil, target, 8)
+	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"exampleorg": 600}, nil, target, 8)
 	if m.parts[0].weight != currentBlue {
 		t.Fatal("interrupted animation jumped to a previous target")
 	}
@@ -125,7 +125,7 @@ func TestProgressMotionKeepsSharesAndColorsThroughInterruptedUpdates(t *testing.
 	if m.animation != nil || len(m.parts) != 0 {
 		t.Fatal("empty reading did not settle")
 	}
-	ui.progressBar("strip/Mon", "2026-09-14", map[string]int{"bigledger": 60}, nil, target, 8)
+	ui.progressBar("strip/Mon", "2026-09-14", map[string]int{"exampleorg": 60}, nil, target, 8)
 	if len(ui.meters) != 1 || ui.meters["strip/Mon"].animation != nil {
 		t.Fatal("navigation must reuse a bounded slot without animating unrelated dates")
 	}
@@ -135,10 +135,10 @@ func TestProgressDoesNotAnimateHiddenTabs(t *testing.T) {
 	a := newMotionTestApp(t)
 	defer a.Quit()
 	a.NewWindow("test")
-	ui := &UI{cfg: Config{Repos: []string{"bigledger"}}}
+	ui := &UI{cfg: Config{Repos: []string{"exampleorg"}}}
 	ui.tabs = newPillTabs(container.NewTabItem(statusTabName, canvas.NewRectangle(nil)))
 	ui.progressBar("strip/Mon", "2026-09-07", nil, nil, target, 8)
-	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"bigledger": 240}, nil, target, 8)
+	ui.progressBar("strip/Mon", "2026-09-07", map[string]int{"exampleorg": 240}, nil, target, 8)
 	m := ui.meters["strip/Mon"]
 	if m.animation != nil || m.parts[0].weight != 0.5 {
 		t.Fatal("hidden view should show final values without an animation")

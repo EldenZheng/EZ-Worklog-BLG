@@ -25,7 +25,7 @@ func TestUpdateIssueTitlesMigratesOldRowsAndKeepsBackup(t *testing.T) {
 		case "id":
 			row[i] = "row-1"
 		case "issue":
-			row[i] = "BigLedger/repo#7"
+			row[i] = "ExampleOrg/repo#7"
 		case "remarks":
 			row[i] = "keep me"
 		}
@@ -47,7 +47,7 @@ func TestUpdateIssueTitlesMigratesOldRowsAndKeepsBackup(t *testing.T) {
 
 	store := newStore(dir)
 	changed, err := store.UpdateIssueTitles(map[string]string{
-		"bigledger/repo#7": "Fix invoice rounding",
+		"exampleorg/repo#7": "Fix invoice rounding",
 	})
 	if err != nil || changed != 1 {
 		t.Fatalf("changed=%d err=%v", changed, err)
@@ -71,7 +71,7 @@ func TestUpdateIssueTitlesMigratesOldRowsAndKeepsBackup(t *testing.T) {
 	}
 
 	changed, err = store.UpdateIssueTitles(map[string]string{
-		"bigledger/repo#7": "A newer title must not overwrite the saved one",
+		"exampleorg/repo#7": "A newer title must not overwrite the saved one",
 	})
 	if err != nil || changed != 0 {
 		t.Fatalf("idempotent retry changed=%d err=%v", changed, err)

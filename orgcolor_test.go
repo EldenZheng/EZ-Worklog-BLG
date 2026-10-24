@@ -14,16 +14,16 @@ import (
 // The mapping must not shift when a day happens to hold only one of them.
 func TestOrgColoursFollowConfigOrder(t *testing.T) {
 	cfg := Config{
-		Repos:            []string{"bigledger", "BigLedger-Support"},
-		ProjectURL:       "https://github.com/orgs/bigledger/projects/9",
-		ExtraProjectURLs: []string{"https://github.com/orgs/BigLedger-Support/projects/1"},
+		Repos:            []string{"exampleorg", "Example-Support"},
+		ProjectURL:       "https://github.com/orgs/exampleorg/projects/9",
+		ExtraProjectURLs: []string{"https://github.com/orgs/Example-Support/projects/1"},
 	}
-	if got := orgColor(cfg, "bigledger"); got != orgPalette[0] {
+	if got := orgColor(cfg, "exampleorg"); got != orgPalette[0] {
 		t.Fatalf("first org should take the first colour, got %v", got)
 	}
-	// Case is not part of the identity: refs say "BigLedger-Support", the
-	// config may say "bigledger-support".
-	if got := orgColor(cfg, "bigledger-support"); got != orgPalette[1] {
+	// Case is not part of the identity: refs say "Example-Support", the
+	// config may say "example-support".
+	if got := orgColor(cfg, "example-support"); got != orgPalette[1] {
 		t.Fatalf("second org should take the second colour, got %v", got)
 	}
 	if got := orgColor(cfg, "someone-else"); got != orgUnknown {
@@ -32,42 +32,42 @@ func TestOrgColoursFollowConfigOrder(t *testing.T) {
 
 	// A board-only org still gets a colour, after the ones typed in Repos.
 	boardOnly := Config{
-		Repos:            []string{"bigledger"},
-		ProjectURL:       "https://github.com/orgs/bigledger/projects/9",
-		ExtraProjectURLs: []string{"https://github.com/orgs/BigLedger-Support/projects/1"},
+		Repos:            []string{"exampleorg"},
+		ProjectURL:       "https://github.com/orgs/exampleorg/projects/9",
+		ExtraProjectURLs: []string{"https://github.com/orgs/Example-Support/projects/1"},
 	}
-	if got := orgColor(boardOnly, "BigLedger-Support"); got != orgPalette[1] {
+	if got := orgColor(boardOnly, "Example-Support"); got != orgPalette[1] {
 		t.Fatalf("board-only org should still be coloured, got %v", got)
 	}
 }
 
 func TestIndependentWorkRowsKeepTheirPurpleAccent(t *testing.T) {
-	cfg := Config{Repos: []string{"bigledger", "BigLedger-Support"}}
+	cfg := Config{Repos: []string{"exampleorg", "Example-Support"}}
 	for name, row := range map[string]Row{
 		"independent draft":  {"type": kindIndependent},
-		"pushed independent": {"type": kindIndependent, "issue": "bigledger/repo#7"},
+		"pushed independent": {"type": kindIndependent, "issue": "exampleorg/repo#7"},
 		"meeting":            {"type": kindMeeting},
-		"bulk review":        {"type": kindBulkReview, "description": "Elden Code Review: 2026-09-23"},
+		"bulk review":        {"type": kindBulkReview, "description": "Alex Code Review: 2026-09-23"},
 	} {
 		if got := rowAccentColor(cfg, row); got != independentWorkAccent {
 			t.Fatalf("%s accent = %v, want purple %v", name, got, independentWorkAccent)
 		}
 	}
-	if got := rowAccentColor(cfg, Row{"type": kindCodeReview, "issue": "bigledger/repo#7"}); got != orgPalette[0] {
+	if got := rowAccentColor(cfg, Row{"type": kindCodeReview, "issue": "exampleorg/repo#7"}); got != orgPalette[0] {
 		t.Fatalf("issue-backed code review should keep its org colour, got %v", got)
 	}
-	if got := rowAccentColor(cfg, Row{"type": kindOther, "issue": "bigledger/repo#8"}); got != orgPalette[0] {
+	if got := rowAccentColor(cfg, Row{"type": kindOther, "issue": "exampleorg/repo#8"}); got != orgPalette[0] {
 		t.Fatalf("parent-backed Worklog should keep its org colour, got %v", got)
 	}
 }
 
 func TestOrgOf(t *testing.T) {
 	cases := map[string]string{
-		"https://github.com/bigledger/blg-intranet/issues/42":  "bigledger",
-		"https://github.com/orgs/BigLedger-Support/projects/1": "BigLedger-Support",
-		"bigledger/blg-int-general-task#6511":                  "bigledger",
-		"bigledger/repo":                                       "bigledger",
-		"":                                                     "",
+		"https://github.com/exampleorg/sample-intranet/issues/42": "exampleorg",
+		"https://github.com/orgs/Example-Support/projects/1":      "Example-Support",
+		"exampleorg/sample-general-tasks#6511":                    "exampleorg",
+		"exampleorg/repo":                                         "exampleorg",
+		"":                                                        "",
 	}
 	for in, want := range cases {
 		if got := orgOf(in); got != want {
@@ -79,22 +79,22 @@ func TestOrgOf(t *testing.T) {
 // A day's minutes split by org, so the calendar cell can colour its bar.
 func TestMinutesByOrgSplitsTheDay(t *testing.T) {
 	items := []WorklogItem{
-		{URL: "https://github.com/bigledger/repo/issues/1", Minutes: 300},
-		{URL: "https://github.com/BigLedger-Support/help/issues/9", Minutes: 180},
-		{URL: "https://github.com/bigledger/other/issues/2", Minutes: 60},
+		{URL: "https://github.com/exampleorg/repo/issues/1", Minutes: 300},
+		{URL: "https://github.com/Example-Support/help/issues/9", Minutes: 180},
+		{URL: "https://github.com/exampleorg/other/issues/2", Minutes: 60},
 		// No URL of its own: fall back to the parent it hangs off.
-		{ParentURL: "https://github.com/bigledger/repo/issues/7", Minutes: 30},
+		{ParentURL: "https://github.com/exampleorg/repo/issues/7", Minutes: 30},
 	}
 	got := minutesByOrg(items)
-	if got["bigledger"] != 390 {
-		t.Fatalf("bigledger minutes = %d, want 390", got["bigledger"])
+	if got["exampleorg"] != 390 {
+		t.Fatalf("exampleorg minutes = %d, want 390", got["exampleorg"])
 	}
-	if got["bigledger-support"] != 180 {
-		t.Fatalf("support minutes = %d, want 180", got["bigledger-support"])
+	if got["example-support"] != 180 {
+		t.Fatalf("support minutes = %d, want 180", got["example-support"])
 	}
 
-	cfg := Config{Repos: []string{"bigledger", "BigLedger-Support"}}
-	if order := orgsByShare(cfg, got); order[0] != "bigledger" || order[1] != "bigledger-support" {
+	cfg := Config{Repos: []string{"exampleorg", "Example-Support"}}
+	if order := orgsByShare(cfg, got); order[0] != "exampleorg" || order[1] != "example-support" {
 		t.Fatalf("configured order should hold, got %v", order)
 	}
 }
@@ -105,8 +105,8 @@ func TestMeterBarStaysInsideItsTrack(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 
-	cfg := Config{Repos: []string{"bigledger", "BigLedger-Support"}}
-	byOrg := map[string]int{"bigledger": 300, "bigledger-support": 180}
+	cfg := Config{Repos: []string{"exampleorg", "Example-Support"}}
+	byOrg := map[string]int{"exampleorg": 300, "example-support": 180}
 
 	bar := meterBar(cfg, byOrg, target, 8)
 	bar.Resize(fyne.NewSize(480, 8))
@@ -115,13 +115,13 @@ func TestMeterBarStaysInsideItsTrack(t *testing.T) {
 		t.Fatalf("480 of 480 minutes should fill the bar, filled %g of 480", filled)
 	}
 
-	half := meterBar(cfg, map[string]int{"bigledger": 240}, target, 8)
+	half := meterBar(cfg, map[string]int{"exampleorg": 240}, target, 8)
 	half.Resize(fyne.NewSize(480, 8))
 	if f := meterFilled(half); f < 230 || f > 250 {
 		t.Fatalf("half a day should fill half the bar, filled %g of 480", f)
 	}
 
-	over := meterBar(cfg, map[string]int{"bigledger": 600, "bigledger-support": 600}, target, 8)
+	over := meterBar(cfg, map[string]int{"exampleorg": 600, "example-support": 600}, target, 8)
 	over.Resize(fyne.NewSize(480, 8))
 	if f := meterFilled(over); f > 481 {
 		t.Fatalf("an over-target day must not paint past its track, filled %g", f)
@@ -154,8 +154,8 @@ func TestVMeterFillsFromTheBottom(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 
-	cfg := Config{Repos: []string{"bigledger", "BigLedger-Support"}}
-	fill := vMeterFill(cfg, map[string]int{"bigledger": 240, "bigledger-support": 120}, 0, target, cellCornerRadius)
+	cfg := Config{Repos: []string{"exampleorg", "Example-Support"}}
+	fill := vMeterFill(cfg, map[string]int{"exampleorg": 240, "example-support": 120}, 0, target, cellCornerRadius)
 	fill.Resize(fyne.NewSize(80, 100)) // 100px tall cell, 480 target
 
 	segs := []*canvas.Rectangle{}
@@ -191,7 +191,7 @@ func TestVMeterFillsFromTheBottom(t *testing.T) {
 	if base.A != 0xff {
 		t.Fatalf("a see-through segment blends with the one it overlaps: %v", base)
 	}
-	if base == orgColor(cfg, "bigledger") {
+	if base == orgColor(cfg, "exampleorg") {
 		t.Fatal("the fill must be paler than the org's own colour, or the day number is lost in it")
 	}
 	// The seam is where the blending showed, so both sides of it are checked.
@@ -203,7 +203,7 @@ func TestVMeterFillsFromTheBottom(t *testing.T) {
 	}
 
 	// A day past target fills the cell and no further.
-	over := vMeterFill(cfg, map[string]int{"bigledger": 900}, 0, target, cellCornerRadius)
+	over := vMeterFill(cfg, map[string]int{"exampleorg": 900}, 0, target, cellCornerRadius)
 	over.Resize(fyne.NewSize(80, 100))
 	tall := float32(0)
 	walk(over, func(c fyne.CanvasObject) {

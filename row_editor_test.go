@@ -89,7 +89,7 @@ func editorUI(t *testing.T) *UI {
 	t.Helper()
 	w := test.NewApp().NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildLogTab())
 	return ui
 }
@@ -102,7 +102,7 @@ func TestRowEditorSavesInPlace(t *testing.T) {
 
 	made, err := ui.store.AppendRows([]Row{{
 		"date": today(), "minutes": "90", "type": "commit",
-		"description": "half written", "issue": "bigledger/repo#7",
+		"description": "half written", "issue": "exampleorg/repo#7",
 		"refs": "3613aff", "remarks": "- half written", "mode": "subissue",
 	}})
 	if err != nil {
@@ -203,7 +203,7 @@ func TestPopupKeepsTheActionsBesideBack(t *testing.T) {
 	defer fyne.CurrentApp().Quit()
 
 	made, err := ui.store.AppendRows([]Row{{
-		"date": today(), "minutes": "90", "issue": "bigledger/repo#7", "remarks": "- work",
+		"date": today(), "minutes": "90", "issue": "exampleorg/repo#7", "remarks": "- work",
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +295,7 @@ func TestSavingDraftShowsLocalOnlyConfirmation(t *testing.T) {
 
 	form := ui.rowEditor(Row{
 		"id": "1", "date": today(), "minutes": "20", "type": kindOther,
-		"issue": "bigledger/repo#7", "remarks": "- draft",
+		"issue": "exampleorg/repo#7", "remarks": "- draft",
 	}, func() {}, func() {}).all()
 	if ui.win.Canvas().Overlays().Top() != nil {
 		t.Fatal("test started with an unexpected dialog")
@@ -312,9 +312,9 @@ func TestIndependentEditorShowsStandaloneFieldsOnly(t *testing.T) {
 
 	form := ui.rowEditor(Row{
 		"id": "1", "date": today(), "type": kindIndependent,
-		"parent_repo":  "bigledger/blg-int-general-task",
+		"parent_repo":  "exampleorg/sample-general-tasks",
 		"parent_title": "Prepare release notes",
-		"refs":         "bigledger/repo@abc1234",
+		"refs":         "exampleorg/repo@abc1234",
 	}, func() {}, func() {}).all()
 
 	got := labels(form)
@@ -331,7 +331,7 @@ func TestIndependentEditorShowsStandaloneFieldsOnly(t *testing.T) {
 	if entryByPlaceholder(form, "owner/repo#123") != nil {
 		t.Fatal("independent editor should not expose an issue-ref field")
 	}
-	if entryByPlaceholder(form, "bigledger/repository") == nil ||
+	if entryByPlaceholder(form, "exampleorg/repository") == nil ||
 		entryByPlaceholder(form, "Title for the standalone task") == nil {
 		t.Fatal("independent editor should edit its destination repository and title")
 	}
@@ -343,8 +343,8 @@ func TestBulkReviewEditorUsesOwnIssueControls(t *testing.T) {
 
 	form := ui.rowEditor(Row{
 		"id": "1", "date": today(), "type": kindBulkReview,
-		"remarks": "https://github.com/bigledger/repo/pull/7 (20m)",
-		"refs":    "bigledger/repo@abc1234",
+		"remarks": "https://github.com/exampleorg/repo/pull/7 (20m)",
+		"refs":    "exampleorg/repo@abc1234",
 	}, func() {}, func() {}).all()
 	got := labels(form)
 	for _, unwanted := range []string{"Push as", "abc1234", "(no issue ref)"} {
@@ -366,7 +366,7 @@ func TestOtherKeepsIssueBackedEditorControls(t *testing.T) {
 
 	form := ui.rowEditor(Row{
 		"id": "1", "date": today(), "type": kindOther,
-		"issue": "bigledger/repo#8",
+		"issue": "exampleorg/repo#8",
 	}, func() {}, func() {}).all()
 	if !contains(labels(form), "Push as") {
 		t.Fatal("Other is visually independent but still needs its Push-as control")
@@ -383,7 +383,7 @@ func TestEntryTableRowOpensTheEditor(t *testing.T) {
 
 	if _, err := ui.store.AppendRows([]Row{{
 		"date": today(), "minutes": "90", "type": "commit",
-		"description": "waiting", "issue": "bigledger/repo#7",
+		"description": "waiting", "issue": "exampleorg/repo#7",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -410,26 +410,26 @@ func TestEntryTableRowOpensTheEditor(t *testing.T) {
 // joined end to end — the remarks already carry the work in full.
 func TestRowLabelPrefersTheIssueTitle(t *testing.T) {
 	ui := &UI{issueInfo: map[string]IssueInfo{
-		"bigledger/repo#12": {Org: "bigledger", Repo: "repo", Number: 12,
+		"exampleorg/repo#12": {Org: "exampleorg", Repo: "repo", Number: 12,
 			Title: "Datepicker custom field: relative defaults"},
 	}}
 	commits := []Commit{
 		{Sha: "3613aff", Message: "relative date defaults", Full: "relative date defaults\n- resolver"},
 		{Sha: "9993d06", Message: "partial-save fix", Full: "partial-save fix\n- error path"},
 	}
-	if got := ui.rowLabel("bigledger/repo#12", commits); got != "Datepicker custom field: relative defaults" {
+	if got := ui.rowLabel("exampleorg/repo#12", commits); got != "Datepicker custom field: relative defaults" {
 		t.Fatalf("expected the issue title, got %q", got)
 	}
 	// Title not loaded yet: fall back to the commit, and say how many there are
 	// so the row is not mistaken for a single one.
-	got := ui.rowLabel("bigledger/other#3", commits)
+	got := ui.rowLabel("exampleorg/other#3", commits)
 	if !strings.Contains(got, "relative date defaults") || !strings.Contains(got, "2 commits") {
 		t.Fatalf("fallback should name the commit and its count, got %q", got)
 	}
-	if got := ui.rowLabel("bigledger/other#3", commits[:1]); got != "relative date defaults" {
+	if got := ui.rowLabel("exampleorg/other#3", commits[:1]); got != "relative date defaults" {
 		t.Fatalf("a lone commit should speak for itself, got %q", got)
 	}
-	if got := ui.rowLabel("bigledger/other#3", nil); got != "bigledger/other#3" {
+	if got := ui.rowLabel("exampleorg/other#3", nil); got != "exampleorg/other#3" {
 		t.Fatalf("with nothing else to say, the ref is the label, got %q", got)
 	}
 }
@@ -439,9 +439,9 @@ func TestRowLabelPrefersTheIssueTitle(t *testing.T) {
 // old description.
 func TestManualRowTitlesFollowCurrentDateAndIssue(t *testing.T) {
 	ui := &UI{
-		cfg: Config{WorklogOwner: "blg-elden"},
+		cfg: Config{WorklogOwner: "team-alex"},
 		issueInfo: map[string]IssueInfo{
-			"bigledger/repo#7": {Title: "Fix invoice rounding"},
+			"exampleorg/repo#7": {Title: "Fix invoice rounding"},
 		},
 	}
 	for _, c := range []struct {
@@ -450,15 +450,15 @@ func TestManualRowTitlesFollowCurrentDateAndIssue(t *testing.T) {
 		want string
 	}{
 		{"meeting", Row{"type": kindMeeting, "date": "2026-09-18", "description": "old notes"},
-			"Elden Meeting & ad hocs: 2026-09-18"},
-		{"bulk review", Row{"type": kindBulkReview, "date": "2026-09-18", "description": "Elden Code Review: 2026-09-15"},
-			"Elden Code Review: 2026-09-18"},
-		{"single review issue title", Row{"type": kindCodeReview, "date": "2026-09-18", "issue": "bigledger/repo#7", "description": "Code Review: 2026-09-15"},
+			"Alex Meeting & ad hocs: 2026-09-18"},
+		{"bulk review", Row{"type": kindBulkReview, "date": "2026-09-18", "description": "Alex Code Review: 2026-09-15"},
+			"Alex Code Review: 2026-09-18"},
+		{"single review issue title", Row{"type": kindCodeReview, "date": "2026-09-18", "issue": "exampleorg/repo#7", "description": "Code Review: 2026-09-15"},
 			"Fix invoice rounding"},
-		{"saved issue title", Row{"type": kindCodeReview, "date": "2026-09-18", "issue": "bigledger/repo#8", "issue_title": "Persisted invoice title"},
+		{"saved issue title", Row{"type": kindCodeReview, "date": "2026-09-18", "issue": "exampleorg/repo#8", "issue_title": "Persisted invoice title"},
 			"Persisted invoice title"},
-		{"other issue fallback", Row{"type": kindOther, "date": "2026-09-18", "issue": "bigledger/other#9", "description": "Worklog: 2026-09-15"},
-			"bigledger/other#9"},
+		{"other issue fallback", Row{"type": kindOther, "date": "2026-09-18", "issue": "exampleorg/other#9", "description": "Worklog: 2026-09-15"},
+			"exampleorg/other#9"},
 	} {
 		if got := ui.rowTitle(c.row); got != c.want {
 			t.Fatalf("%s: title = %q, want %q", c.name, got, c.want)
@@ -472,11 +472,11 @@ func TestRowTileShowsTheIssueTitle(t *testing.T) {
 	ui := editorUI(t)
 	defer fyne.CurrentApp().Quit()
 	ui.issueInfo = map[string]IssueInfo{
-		"bigledger/repo#12": {Repo: "repo", Number: 12, Title: "Relative date defaults"},
+		"exampleorg/repo#12": {Repo: "repo", Number: 12, Title: "Relative date defaults"},
 	}
 	tile := ui.rowTile(Row{
 		"id": "1", "date": today(), "minutes": "90", "type": "commit",
-		"issue": "bigledger/repo#12", "description": "old joined commit subjects",
+		"issue": "exampleorg/repo#12", "description": "old joined commit subjects",
 	}, func() {})
 	got := labels(tile)
 	if !contains(got, "Relative date defaults") {

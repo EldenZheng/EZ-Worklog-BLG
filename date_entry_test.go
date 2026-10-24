@@ -18,12 +18,12 @@ import (
 func TestPickerProgressUsesOrgAndDraftColours(t *testing.T) {
 	ui := statusUI(t)
 	defer fyne.CurrentApp().Quit()
-	ui.cfg.ProjectURL = "https://github.com/orgs/bigledger/projects/9"
+	ui.cfg.ProjectURL = "https://github.com/orgs/exampleorg/projects/9"
 	ui.projItems[statusCacheKey("2026-08")] = []WorklogItem{
-		{Date: "2026-08-11", Minutes: 120, URL: "https://github.com/bigledger/repo/issues/1"},
-		{Date: "2026-08-11", Minutes: 60, ParentURL: "https://github.com/BigLedger-Support/repo/issues/2"},
+		{Date: "2026-08-11", Minutes: 120, URL: "https://github.com/exampleorg/repo/issues/1"},
+		{Date: "2026-08-11", Minutes: 60, ParentURL: "https://github.com/Example-Support/repo/issues/2"},
 	}
-	if _, err := ui.store.AppendRows([]Row{{"date": "2026-08-11", "minutes": "60", "type": kindCommit, "issue": "bigledger/repo#3"}}); err != nil {
+	if _, err := ui.store.AppendRows([]Row{{"date": "2026-08-11", "minutes": "60", "type": kindCommit, "issue": "exampleorg/repo#3"}}); err != nil {
 		t.Fatal(err)
 	}
 	p := newWorklogDatePicker(ui, "2026-08-11")
@@ -69,18 +69,18 @@ func TestWorklogDatePickerScoresTheDaysItOffers(t *testing.T) {
 
 	// The picker reads board minutes through monthWorklogs, which is the filtered
 	// door and needs a project to read from — seeded here so nothing shells out.
-	ui.cfg.ProjectURL = "https://github.com/orgs/bigledger/projects/9"
+	ui.cfg.ProjectURL = "https://github.com/orgs/exampleorg/projects/9"
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
-		{Date: "2026-08-11", Minutes: 240, URL: "https://github.com/bigledger/blg-intranet/issues/1"},
-		{Date: "2026-08-12", Minutes: 480, URL: "https://github.com/bigledger/blg-intranet/issues/2"},
+		{Date: "2026-08-11", Minutes: 240, URL: "https://github.com/exampleorg/sample-intranet/issues/1"},
+		{Date: "2026-08-12", Minutes: 480, URL: "https://github.com/exampleorg/sample-intranet/issues/2"},
 	}
 	ui.projLoaded[key] = true
 	ui.projLoaded[statusCacheKey("2026-09")] = true
 	ui.projLoaded[statusCacheKey("2026-07")] = true
 	ui.projLoaded[statusCacheKey(thisMonth())] = true
 	if _, err := ui.store.AppendRows([]Row{
-		{"date": "2026-08-13", "minutes": "150", "type": kindCommit, "issue": "bigledger/repo#3"},
+		{"date": "2026-08-13", "minutes": "150", "type": kindCommit, "issue": "exampleorg/repo#3"},
 	}); err != nil {
 		t.Fatal(err)
 	}

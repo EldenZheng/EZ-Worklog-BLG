@@ -33,22 +33,26 @@ var fieldOrder = []string{
 
 // Config mirrors config.json so data carries over from the Python app.
 type Config struct {
-	GithubAuthor     string   `json:"github_author"`
-	Repos            []string `json:"repos"`
-	BaseSalary       float64  `json:"base_salary_per_21_days"`
-	Currency         string   `json:"currency"`
-	DisplayCurrency  string   `json:"display_currency"`
-	FxRate           float64  `json:"fx_rate"`
-	FxUpdated        string   `json:"fx_updated"`
-	LookbackDays     int      `json:"lookback_days"`
-	WorklogOwner     string   `json:"worklog_owner"`
-	DefaultMode      string   `json:"default_mode"`
-	AnthropicAPIKey  string   `json:"anthropic_api_key"`
-	AnthropicModel   string   `json:"anthropic_model"`
-	ProjectURL       string   `json:"project_url"`
-	ExtraProjectURLs []string `json:"extra_project_urls"`
-	// DisplayName is the name a meeting issue is titled with — "Elden" in
-	// "Elden Meeting & ad hocs: 2026-08-25". Blank means derive it from the
+	GithubAuthor       string   `json:"github_author"`
+	Repos              []string `json:"repos"`
+	BaseSalary         float64  `json:"base_salary_per_21_days"`
+	SupportSetPay      float64  `json:"support_set_pay"`
+	MeetingRepo        string   `json:"meeting_repo"`
+	BulkCodeReviewRepo string   `json:"bulk_code_review_repo"`
+	BoardViewURLs      []string `json:"board_view_urls"`
+	Currency           string   `json:"currency"`
+	DisplayCurrency    string   `json:"display_currency"`
+	FxRate             float64  `json:"fx_rate"`
+	FxUpdated          string   `json:"fx_updated"`
+	LookbackDays       int      `json:"lookback_days"`
+	WorklogOwner       string   `json:"worklog_owner"`
+	DefaultMode        string   `json:"default_mode"`
+	AnthropicAPIKey    string   `json:"anthropic_api_key"`
+	AnthropicModel     string   `json:"anthropic_model"`
+	ProjectURL         string   `json:"project_url"`
+	ExtraProjectURLs   []string `json:"extra_project_urls"`
+	// DisplayName is the name a meeting issue is titled with — "Alex" in
+	// "Alex Meeting & ad hocs: 2026-08-25". Blank means derive it from the
 	// worklog owner; see displayName.
 	DisplayName string `json:"display_name"`
 	// OrgColors overrides the default palette colour for named organisations,
@@ -412,7 +416,7 @@ func (s *Store) SetIgnored(sha string, ignored bool) error {
 //
 // The repo used to be left out, and the row editor rebuilt it from the issue the
 // entry was filed against. Those are not the same repo and usually cannot be: an
-// issue lives in a tracker like BigLedger-Support/tuhu-finance while the commit
+// issue lives in a tracker like Example-Support/sample-finance while the commit
 // under it is in whichever applet was changed, so every sha on a saved entry
 // linked to a commit URL in the wrong repository and answered 404.
 type commitRef struct{ Repo, Sha string }

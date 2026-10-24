@@ -24,7 +24,7 @@ func TestARefreshThatFindsCommitsMakesRoomForThem(t *testing.T) {
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w,
 		calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildLogTab())
 	w.Resize(fyne.NewSize(1200, 900))
 
@@ -36,9 +36,9 @@ func TestARefreshThatFindsCommitsMakesRoomForThem(t *testing.T) {
 	var groups []Group
 	for i := 0; i < 4; i++ {
 		groups = append(groups, Group{Date: "2026-08-21",
-			Issue: "bigledger/blg-intranet#42",
+			Issue: "exampleorg/sample-intranet#42",
 			Commits: []Commit{{Sha: fmt.Sprintf("aaa111%d", i),
-				Repo: "bigledger/blg-intranet", Message: "work", Full: "work"}}})
+				Repo: "exampleorg/sample-intranet", Message: "work", Full: "work"}}})
 	}
 	ui.pending = PendingResult{Count: 4, Range: []string{"2026-08-20", "2026-08-22"},
 		Groups: groups}

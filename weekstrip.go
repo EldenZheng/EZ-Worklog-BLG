@@ -396,7 +396,7 @@ func (ui *UI) drawWeekStrip() {
 // not the address, so there is nothing to select.
 func (ui *UI) weekBoardsPanel(from, to string) fyne.CanvasObject {
 	rows := []fyne.CanvasObject{bold("Boards for this week")}
-	for _, raw := range weekBoardLinks(ui.cfg.WorklogOwner, from, to) {
+	for _, raw := range weekBoardLinks(ui.cfg, ui.cfg.WorklogOwner, from, to) {
 		raw := raw
 		var open fyne.CanvasObject = widget.NewLabel(raw)
 		if u, err := url.Parse(raw); err == nil {
@@ -494,7 +494,7 @@ func (ui *UI) exportWeekForEmail(days []string, byDay map[string][]WorklogItem, 
 		items = append(items, byDay[d]...)
 	}
 	path, n, mailText, err := exportWeek(
-		downloadsDir(dataDir()), ui.cfg.WorklogOwner, from, to, items)
+		ui.cfg, downloadsDir(dataDir()), ui.cfg.WorklogOwner, from, to, items)
 	if err != nil {
 		ui.errf(err)
 		return

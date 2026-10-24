@@ -26,17 +26,6 @@ import (
 // being deleted or re-dated.
 
 const (
-	// meetingRepo is where the day's meeting issue lives. Fixed, because that
-	// is what the board expects: every "<Name> Meeting & ad hocs" issue filed so
-	// far is in this repo, and one filed anywhere else would fall out of the
-	// views the weekly mail links to.
-	meetingRepo = "bigledger/blg-int-general-task"
-	// Bulk reviews are standalone daily Task issues in the general-task repo.
-	// Keep this separate from meetingRepo even though both currently point to
-	// the same place: neither workflow should silently follow the other if its
-	// destination changes later.
-	bulkCodeReviewRepo = "bigledger/blg-int-general-task"
-
 	// The issue types the created kinds take. A meeting is not a piece of
 	// development work and the board types it apart; code review and independent
 	// entries are ordinary tasks.
@@ -84,7 +73,7 @@ func rowUsesIndependentStyle(r Row) bool {
 
 // displayName is the name a meeting issue is titled with.
 //
-// Derived from the worklog owner by default — "blg-elden" becomes "Elden" — so
+// Derived from the worklog owner by default — "team-alex" becomes "Alex" — so
 // a fresh install titles its meetings correctly without being told twice. The
 // setting overrides it for anyone whose handle is not their name.
 func displayName(cfg Config) string {
@@ -95,7 +84,7 @@ func displayName(cfg Config) string {
 	if owner == "" {
 		return ""
 	}
-	// Handles are "blg-elden": drop the org prefix, keep the last part.
+	// Handles are "team-alex": drop the org prefix, keep the last part.
 	if i := strings.LastIndexAny(owner, "-_"); i >= 0 && i+1 < len(owner) {
 		owner = owner[i+1:]
 	}
@@ -120,7 +109,7 @@ func codeReviewTitle(date string) string {
 
 // dailyCodeReviewTitle is the shared issue that holds every PR reviewed on one
 // day. It mirrors the meeting issue convention and the existing manually made
-// issues, for example "Elden Code Review: 2026-09-15".
+// issues, for example "Alex Code Review: 2026-09-15".
 func dailyCodeReviewTitle(cfg Config, date string) string {
 	return fmt.Sprintf("%s Code Review: %s", displayName(cfg), date)
 }
@@ -230,16 +219,20 @@ func refFromIssueURL(url string) (string, error) {
 // and its Worklog (mins) is the day's total, so a second meeting logged on the
 // same day adds to that issue rather than opening another beside it.
 func ensureMeetingIssue(cfg Config, date, body string) (string, error) {
+	repo := strings.TrimSpace(cfg.MeetingRepo)
+	if !validRepo(repo) {
+		return "", ghErr("Set the meeting repository to owner/repo in Settings before pushing.")
+	}
 	if displayName(cfg) == "" {
 		return "", ghErr("Set your worklog owner (or a display name) in Settings before logging a meeting.")
 	}
 	title := meetingTitle(cfg, date)
-	if ref, err := findIssueByTitle(meetingRepo, title); err != nil {
+	if ref, err := findIssueByTitle(repo, title); err != nil {
 		return "", err
 	} else if ref != "" {
 		return ref, nil
 	}
-	_, ref, err := createTypedIssue(meetingRepo, title, body, meetingIssueType)
+	_, ref, err := createTypedIssue(repo, title, body, meetingIssueType)
 	if ref == "" {
 		return "", err
 	}
@@ -251,16 +244,20 @@ func ensureMeetingIssue(cfg Config, date, body string) (string, error) {
 // ensureCodeReviewIssue returns the day's bulk code-review issue, creating it
 // with the PR list as its body the first time that date is pushed.
 func ensureCodeReviewIssue(cfg Config, date, body string) (string, error) {
+	repo := strings.TrimSpace(cfg.BulkCodeReviewRepo)
+	if !validRepo(repo) {
+		return "", ghErr("Set the bulk review repository to owner/repo in Settings before pushing.")
+	}
 	if displayName(cfg) == "" {
 		return "", ghErr("Set your worklog owner (or a display name) in Settings before logging code review.")
 	}
 	title := dailyCodeReviewTitle(cfg, date)
-	if ref, err := findIssueByTitle(bulkCodeReviewRepo, title); err != nil {
+	if ref, err := findIssueByTitle(repo, title); err != nil {
 		return "", err
 	} else if ref != "" {
 		return ref, nil
 	}
-	_, ref, err := createTypedIssue(bulkCodeReviewRepo, title, body, codeReviewIssueType)
+	_, ref, err := createTypedIssue(repo, title, body, codeReviewIssueType)
 	if ref == "" {
 		return "", err
 	}

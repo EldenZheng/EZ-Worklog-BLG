@@ -9,14 +9,14 @@ import (
 )
 
 // A commit is not in the repo its issue is in — the issue lives in a tracker
-// like BigLedger-Support/tuhu-finance and the commit is in whichever applet
+// like Example-Support/sample-finance and the commit is in whichever applet
 // changed — so the sha has to carry its own repo or the link can only guess.
 func TestCommitRefsCarryTheirOwnRepo(t *testing.T) {
 	for _, c := range []struct {
 		repo, sha, want string
 	}{
-		{"bigledger/blg-applet-wavelet-doc-item-maintenance-applet", "a8d4121",
-			"bigledger/blg-applet-wavelet-doc-item-maintenance-applet@a8d4121"},
+		{"exampleorg/sample-document-applet", "a8d4121",
+			"exampleorg/sample-document-applet@a8d4121"},
 		{"", "a8d4121", "a8d4121"}, // nothing to say where it is
 		{"  o/r  ", "  abc123  ", "o/r@abc123"},
 	} {
@@ -30,11 +30,11 @@ func TestCommitRefsCarryTheirOwnRepo(t *testing.T) {
 // have to read back — as a sha with no repo, so the caller can fall back the way
 // the editor always did rather than dropping the commit.
 func TestParseCommitRefsReadsBothSpellings(t *testing.T) {
-	got := parseCommitRefs("o/r@aaa1111, bbb2222 ,bigledger/blg-intranet@ccc3333,, ")
+	got := parseCommitRefs("o/r@aaa1111, bbb2222 ,exampleorg/sample-intranet@ccc3333,, ")
 	want := []commitRef{
 		{Repo: "o/r", Sha: "aaa1111"},
 		{Sha: "bbb2222"},
-		{Repo: "bigledger/blg-intranet", Sha: "ccc3333"},
+		{Repo: "exampleorg/sample-intranet", Sha: "ccc3333"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d refs, got %d: %+v", len(want), len(got), got)
@@ -55,7 +55,7 @@ func TestParseCommitRefsReadsBothSpellings(t *testing.T) {
 func TestLoggedShasIgnoresTheRepoHalf(t *testing.T) {
 	s := newStore(t.TempDir())
 	if _, err := s.AppendRows([]Row{
-		{"date": "2026-08-31", "minutes": "300", "refs": "bigledger/applet@aaa1111,bbb2222"},
+		{"date": "2026-08-31", "minutes": "300", "refs": "exampleorg/applet@aaa1111,bbb2222"},
 		{"date": "2026-08-30", "minutes": "60", "refs": "ccc3333"},
 	}); err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestLoggedShasIgnoresTheRepoHalf(t *testing.T) {
 			t.Fatalf("%s is logged and should not be offered again: %v", sha, got)
 		}
 	}
-	if got["bigledger/applet@aaa1111"] {
+	if got["exampleorg/applet@aaa1111"] {
 		t.Fatal("the stored spelling is not a sha; only the sha half is matched")
 	}
 }
@@ -82,8 +82,8 @@ func TestRowEditorLinksTheShaToItsOwnRepo(t *testing.T) {
 
 	form := ui.rowEditor(Row{
 		"id": "1", "date": "2026-08-31", "minutes": "300",
-		"issue": "BigLedger-Support/tuhu-finance#48",
-		"refs":  "bigledger/blg-applet-wavelet-doc-item-maintenance-applet@a8d4121",
+		"issue": "Example-Support/sample-finance#48",
+		"refs":  "exampleorg/sample-document-applet@a8d4121",
 	}, func() {}, func() {})
 
 	var links []*widget.Hyperlink
@@ -101,11 +101,11 @@ func TestRowEditorLinksTheShaToItsOwnRepo(t *testing.T) {
 	if sha == nil {
 		t.Fatalf("the sha should be a link: %v", labels(form.body))
 	}
-	want := "https://github.com/bigledger/blg-applet-wavelet-doc-item-maintenance-applet/commit/a8d4121"
+	want := "https://github.com/exampleorg/sample-document-applet/commit/a8d4121"
 	if got := sha.URL.String(); got != want {
 		t.Fatalf("sha links to %q, want %q", got, want)
 	}
-	if strings.Contains(sha.URL.String(), "tuhu-finance") {
+	if strings.Contains(sha.URL.String(), "sample-finance") {
 		t.Fatal("the issue's repo is not the commit's repo")
 	}
 
@@ -113,7 +113,7 @@ func TestRowEditorLinksTheShaToItsOwnRepo(t *testing.T) {
 	// losing its link altogether.
 	old := ui.rowEditor(Row{
 		"id": "2", "date": "2026-08-31", "minutes": "300",
-		"issue": "BigLedger-Support/tuhu-finance#48", "refs": "a8d4121",
+		"issue": "Example-Support/sample-finance#48", "refs": "a8d4121",
 	}, func() {}, func() {})
 	var fallback *widget.Hyperlink
 	walk(old.body, func(o fyne.CanvasObject) {
@@ -124,7 +124,7 @@ func TestRowEditorLinksTheShaToItsOwnRepo(t *testing.T) {
 	if fallback == nil {
 		t.Fatal("a bare sha should still link somewhere")
 	}
-	if !strings.Contains(fallback.URL.String(), "tuhu-finance/commit/a8d4121") {
+	if !strings.Contains(fallback.URL.String(), "sample-finance/commit/a8d4121") {
 		t.Fatalf("a repo-less sha falls back to the issue's repo, got %q", fallback.URL)
 	}
 }

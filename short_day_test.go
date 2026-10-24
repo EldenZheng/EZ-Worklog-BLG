@@ -39,12 +39,12 @@ func TestTheChartWashesColumnsThatFellShort(t *testing.T) {
 	test.ApplyTheme(t, theme.DefaultTheme())
 
 	days := []chartDay{
-		{date: "2026-08-24", byOrg: map[string]int{"bigledger": 240}, total: 240},
-		{date: "2026-08-25", byOrg: map[string]int{"bigledger": 480}, total: 480},
+		{date: "2026-08-24", byOrg: map[string]int{"exampleorg": 240}, total: 240},
+		{date: "2026-08-25", byOrg: map[string]int{"exampleorg": 480}, total: 480},
 		{date: "2026-08-26"}, // nothing logged
-		{date: "2026-08-27", byOrg: map[string]int{"bigledger": 600}, total: 600},
+		{date: "2026-08-27", byOrg: map[string]int{"exampleorg": 600}, total: 600},
 	}
-	c := newDayChart(Config{Repos: []string{"bigledger"}}, days, target)
+	c := newDayChart(Config{Repos: []string{"exampleorg"}}, days, target)
 	r := c.CreateRenderer().(*dayChartRenderer)
 	c.Resize(fyne.NewSize(900, 300))
 	r.Layout(fyne.NewSize(900, 300))
@@ -81,9 +81,9 @@ func TestTheCalendarColoursAShortDaysReadout(t *testing.T) {
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-11", Minutes: 240, Title: "half a day",
-			URL: "https://github.com/bigledger/blg-intranet/issues/1"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/1"},
 		{Date: "2026-08-12", Minutes: 480, Title: "a full day",
-			URL: "https://github.com/bigledger/blg-intranet/issues/2"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/2"},
 	}
 	ui.drawCalendar()
 

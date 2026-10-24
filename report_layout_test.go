@@ -20,25 +20,25 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 	store := newStore(t.TempDir())
 	if _, err := store.AppendRows([]Row{{
 		"date": "2026-08-12", "minutes": "240", "owner": "sample-owner",
-		"issue_url": "https://github.com/bigledger/work/issues/2",
+		"issue_url": "https://github.com/exampleorg/work/issues/2",
 	}}); err != nil {
 		t.Fatal(err)
 	}
 
 	ui := &UI{store: store, win: w, hasCfg: true, repMonth: "2026-08",
-		cfg: Config{Repos: []string{"bigledger"}, WorklogOwner: "sample-owner",
-			BaseSalary: 2793, Currency: "RM", DisplayCurrency: "IDR", FxRate: 3.8}}
+		cfg: Config{Repos: []string{"exampleorg"}, WorklogOwner: "sample-owner",
+			SupportSetPay: 125, BaseSalary: 2793, Currency: "RM", DisplayCurrency: "IDR", FxRate: 3.8}}
 	w.SetContent(ui.buildReportTab())
 	key := reportCacheKey("2026-08")
 	ui.ensureProjectCache()
 	ui.projItems[key] = []WorklogItem{{
 		Date: "2026-08-11", Minutes: 600, Owner: "sample-owner",
-		URL: "https://github.com/bigledger/work/issues/1",
+		URL: "https://github.com/exampleorg/work/issues/1",
 	}}
 	for i := 0; i < supportSetSize; i++ {
 		ui.projItems[key] = append(ui.projItems[key], WorklogItem{
 			Date: "2026-08-16", Owner: "sample-owner", Title: "Weekend support",
-			URL: fmt.Sprintf("https://github.com/bigledger/support/issues/%d", i),
+			URL: fmt.Sprintf("https://github.com/exampleorg/support/issues/%d", i),
 		})
 	}
 	ui.projLoaded[key] = true
@@ -49,9 +49,9 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 		t.Fatalf("top row should contain the three money cards, got %T", ui.repBox.Objects[0])
 	}
 	wants := [][]string{
-		{"Payable", "RM 433.00", "1.00 days × RM 133.00", "(RM 133.00 before support)", "Converted: IDR 1,645.40"},
-		{"Payable after drafts", "RM 499.50", "1.50 days × RM 133.00", "(RM 199.50 before support)", "Converted: IDR 1,898.10"},
-		{"Support bonus", "RM 300.00", "Converted: IDR 1,140.00"},
+		{"Payable", "RM 258.00", "1.00 days × RM 133.00", "(RM 133.00 before support)", "Converted: IDR 980.40"},
+		{"Payable after drafts", "RM 324.50", "1.50 days × RM 133.00", "(RM 199.50 before support)", "Converted: IDR 1,233.10"},
+		{"Support bonus", "RM 125.00", "Converted: IDR 475.00"},
 	}
 	for i, want := range wants {
 		got := labels(top.Objects[i])
@@ -86,9 +86,9 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 		text  string
 		color color.Color
 	}{
-		{"Converted: IDR 1,645.40", reportConversionAccent()},
-		{"Converted: IDR 1,898.10", reportConversionAccent()},
-		{"Converted: IDR 1,140.00", reportSupportConversionAccent},
+		{"Converted: IDR 980.40", reportConversionAccent()},
+		{"Converted: IDR 1,233.10", reportConversionAccent()},
+		{"Converted: IDR 475.00", reportSupportConversionAccent},
 	}
 	for i, want := range conversions {
 		highlighted := false
@@ -102,16 +102,16 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 		}
 	}
 	inlineDetails := [][2]string{
-		{"1.00 days × RM 133.00", "Converted: IDR 1,645.40"},
-		{"1.50 days × RM 133.00", "Converted: IDR 1,898.10"},
-		{"7 issues, 1 set(s)", "Converted: IDR 1,140.00"},
+		{"1.00 days × RM 133.00", "Converted: IDR 980.40"},
+		{"1.50 days × RM 133.00", "Converted: IDR 1,233.10"},
+		{"7 issues, 1 set(s)", "Converted: IDR 475.00"},
 	}
 	for i, detail := range inlineDetails {
 		if !hasInlineReportDetail(top.Objects[i], detail[0], detail[1]) {
 			t.Fatalf("card %d should keep %q inline with %q", i, detail[0], detail[1])
 		}
 	}
-	if got := labels(top.Objects[2]); !inOrder(got, "7 issues, 1 set(s)", "Converted: IDR 1,140.00") {
+	if got := labels(top.Objects[2]); !inOrder(got, "7 issues, 1 set(s)", "Converted: IDR 475.00") {
 		t.Fatalf("support conversion should follow the set count: %v", got)
 	}
 	if got := labels(top); contains(got, "Time logged") || contains(got, "Saved here, not pushed") {

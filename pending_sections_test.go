@@ -26,21 +26,21 @@ func TestPendingListGroupsTilesUnderTheIssue(t *testing.T) {
 	ui := pendingUI(t)
 	defer fyne.CurrentApp().Quit()
 
-	const issue = "bigledger/blg-intranet#42"
+	const issue = "exampleorg/sample-intranet#42"
 	ui.issueInfo = map[string]IssueInfo{
-		issue: {Org: "bigledger", Repo: "blg-intranet", Number: 42,
+		issue: {Org: "exampleorg", Repo: "sample-intranet", Number: 42,
 			Title: "DOC ITEM ENHANCEMENT"},
-		"bigledger/blg-intranet#9": {Org: "bigledger", Repo: "blg-intranet", Number: 9,
+		"exampleorg/sample-intranet#9": {Org: "exampleorg", Repo: "sample-intranet", Number: 9,
 			Title: "Lone piece of work"},
 	}
 	commit := func(sha, msg string) []Commit {
-		return []Commit{{Sha: sha, Repo: "bigledger/blg-intranet", Message: msg, Full: msg}}
+		return []Commit{{Sha: sha, Repo: "exampleorg/sample-intranet", Message: msg, Full: msg}}
 	}
 	ui.pending = PendingResult{Count: 4, Groups: []Group{
 		{Date: "2026-08-11", Issue: issue, Commits: commit("aaa1111", "cap the dropdown")},
 		{Date: "2026-08-10", Issue: issue, Commits: commit("bbb2222", "widen the picker")},
 		{Date: "2026-08-09", Issue: issue, Commits: commit("ccc3333", "fix the tooltip")},
-		{Date: "2026-08-09", Issue: "bigledger/blg-intranet#9",
+		{Date: "2026-08-09", Issue: "exampleorg/sample-intranet#9",
 			Commits: commit("ddd4444", "tidy imports")},
 	}}
 	ui.renderPending()
@@ -92,9 +92,9 @@ func TestPendingListSkipsHeadingsWithNothingToGroup(t *testing.T) {
 	defer fyne.CurrentApp().Quit()
 
 	ui.pending = PendingResult{Count: 2, Groups: []Group{
-		{Date: "2026-08-11", Issue: "bigledger/repo#1",
+		{Date: "2026-08-11", Issue: "exampleorg/repo#1",
 			Commits: []Commit{{Sha: "aaa1111", Message: "one", Full: "one"}}},
-		{Date: "2026-08-10", Issue: "bigledger/repo#2",
+		{Date: "2026-08-10", Issue: "exampleorg/repo#2",
 			Commits: []Commit{{Sha: "bbb2222", Message: "two", Full: "two"}}},
 	}}
 	ui.renderPending()
@@ -109,7 +109,7 @@ func TestPendingListSkipsHeadingsWithNothingToGroup(t *testing.T) {
 		t.Fatalf("expected a single block of tiles, got %d", n)
 	}
 	// With no heading above them the tiles are named after their issue refs.
-	if got := labels(ui.pendingBox); !contains(got, "bigledger/repo#1") {
+	if got := labels(ui.pendingBox); !contains(got, "exampleorg/repo#1") {
 		t.Fatalf("an unheaded tile should still name its issue: %v", got)
 	}
 }

@@ -18,7 +18,7 @@ func TestRender(t *testing.T) {
 	w := a.NewWindow("t")
 
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}, WorklogOwner: "blg-elden", DefaultMode: "subissue"}
+	ui.cfg = Config{Repos: []string{"exampleorg"}, WorklogOwner: "team-alex", DefaultMode: "subissue"}
 	content := ui.buildLogTab()
 	w.SetContent(content)
 
@@ -26,11 +26,11 @@ func TestRender(t *testing.T) {
 		Count: 2,
 		Range: []string{"2026-07-28", "2026-08-03"},
 		Groups: []Group{
-			{Date: "2026-07-31", Issue: "bigledger/blg-shared-utilities#147",
-				Commits: []Commit{{Sha: "abc1234", Repo: "bigledger/blg-shared-utilities", Date: "2026-07-31", Message: "fix thing"}},
+			{Date: "2026-07-31", Issue: "exampleorg/sample-shared-utilities#147",
+				Commits: []Commit{{Sha: "abc1234", Repo: "exampleorg/sample-shared-utilities", Date: "2026-07-31", Message: "fix thing"}},
 				Remarks: "- fix thing (abc1234)"},
 			{Date: "2026-07-30", Issue: "",
-				Commits: []Commit{{Sha: "def5678", Repo: "bigledger/other", Date: "2026-07-30", Message: "no issue here"}},
+				Commits: []Commit{{Sha: "def5678", Repo: "exampleorg/other", Date: "2026-07-30", Message: "no issue here"}},
 				Remarks: "- no issue here (def5678)"},
 		},
 	}
@@ -41,10 +41,10 @@ func TestRender(t *testing.T) {
 	// Bubbles render before the issue titles arrive, then again after — both
 	// states must survive, including the group with no issue ref at all.
 	ui.issueInfo = map[string]IssueInfo{
-		"bigledger/blg-shared-utilities#147": {
-			Org: "bigledger", Repo: "blg-shared-utilities", Number: 147,
+		"exampleorg/sample-shared-utilities#147": {
+			Org: "exampleorg", Repo: "sample-shared-utilities", Number: 147,
 			Title: "Category dropdown capped at 100 rows",
-			URL:   "https://github.com/bigledger/blg-shared-utilities/issues/147",
+			URL:   "https://github.com/exampleorg/sample-shared-utilities/issues/147",
 		},
 	}
 	ui.renderPending()
@@ -63,12 +63,12 @@ func TestDropLoggedCommitsKeepsUnpicked(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildLogTab())
 
-	g := Group{Date: "2026-08-06", Issue: "bigledger/repo#1", Commits: []Commit{
-		{Sha: "aaa1111", Repo: "bigledger/repo"},
-		{Sha: "bbb2222", Repo: "bigledger/repo"},
+	g := Group{Date: "2026-08-06", Issue: "exampleorg/repo#1", Commits: []Commit{
+		{Sha: "aaa1111", Repo: "exampleorg/repo"},
+		{Sha: "bbb2222", Repo: "exampleorg/repo"},
 	}}
 	ui.pending = PendingResult{Count: 2, Range: []string{"2026-08-01", "2026-08-06"}, Groups: []Group{g}}
 

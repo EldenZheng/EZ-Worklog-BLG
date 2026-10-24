@@ -994,7 +994,7 @@ func parseReposPushedSince(out string, cutoff time.Time) ([]string, bool) {
 }
 
 // matchesConfig reports whether a repo falls under a configured entry, which is
-// either a bare owner ("bigledger") or an explicit "owner/repo".
+// either a bare owner ("exampleorg") or an explicit "owner/repo".
 func matchesConfig(repo string, entries []string) bool {
 	owner := repo
 	if i := strings.IndexByte(repo, '/'); i >= 0 {
@@ -1443,7 +1443,7 @@ func commitSubject(c Commit) string {
 }
 
 // refHeaderRe matches the bookkeeping line a commit starts with, e.g.
-// "Refs bigledger/blg-sd-senwave-senheng/issues/483:". It names the issue the
+// "Refs exampleorg/sample-client-three/issues/483:". It names the issue the
 // group is already filed under, so repeating it in the remarks says nothing.
 // The reference itself must look like an issue so an ordinary subject that
 // happens to begin with the word "refs" is not swallowed.
@@ -1569,12 +1569,8 @@ func truncateRunes(s string, max int) string {
 }
 
 // supportSetSize is how many qualifying issues make one complete weekend
-// support set, and supportSetPay is what a set is worth in the report's base
-// currency.
-const (
-	supportSetSize = 7
-	supportSetPay  = 300
-)
+// support set. Its payment rate comes from local settings.
+const supportSetSize = 7
 
 // weekendSupportIssues counts the unique qualifying issues in a run of
 // worklogs. An issue worked over two days is one issue, not two.
@@ -1612,9 +1608,9 @@ func weekendSupportIssues(items []WorklogItem) (qualifying int) {
 //
 // carriedIn is a remainder, always under a full set, so a period never pays for
 // work an earlier report already paid for.
-func weekendSupportBonus(carriedIn, qualifying int) (sets int, bonus float64) {
+func weekendSupportBonus(carriedIn, qualifying int, setPay float64) (sets int, bonus float64) {
 	sets = (carriedIn + qualifying) / supportSetSize
-	return sets, float64(sets * supportSetPay)
+	return sets, float64(sets) * setPay
 }
 
 // ---- project discovery + writing ----
@@ -1946,7 +1942,7 @@ func issueTypeID(org, name string) (string, error) {
 
 // errNoIssueType marks an organisation that simply does not define the type, as
 // opposed to a lookup that failed. Not every org carries a Worklog type —
-// BigLedger-Support has only Task, Bug and Feature — and an untyped sub-issue
+// Example-Support has only Task, Bug and Feature — and an untyped sub-issue
 // still holds its worklog fields and its Done status, so this must not be
 // counted as a failed push or the row waits to be retried forever.
 var errNoIssueType = errors.New("issue type not defined")

@@ -15,9 +15,10 @@ func logListUI(t *testing.T) *UI {
 	ui := &UI{store: newStore(t.TempDir()), win: w,
 		calMonth: "2026-08", repMonth: "2026-08", weekStart: "2026-08-24"}
 	ui.cfg = Config{
-		Repos:        []string{"bigledger", "BigLedger-Support"},
-		WorklogOwner: "blg-elden",
-		ProjectURL:   "https://github.com/orgs/bigledger/projects/9",
+		BoardViewURLs: boardViewURLs,
+		Repos:         []string{"exampleorg", "Example-Support"},
+		WorklogOwner:  "team-alex",
+		ProjectURL:    "https://github.com/orgs/exampleorg/projects/9",
 	}
 	ui.issueInfo = map[string]IssueInfo{}
 	ui.ensureProjectCache()
@@ -32,10 +33,10 @@ func TestPendingByIssueMergesSavedMinutesAndUnloggedCommits(t *testing.T) {
 	defer fyne.CurrentApp().Quit()
 
 	if _, err := ui.store.AppendRows([]Row{
-		{"date": "2026-08-25", "minutes": "240", "type": kindCommit, "issue": "bigledger/repo#1"},
-		{"date": "2026-08-26", "minutes": "60", "type": kindCommit, "issue": "bigledger/repo#1"},
+		{"date": "2026-08-25", "minutes": "240", "type": kindCommit, "issue": "exampleorg/repo#1"},
+		{"date": "2026-08-26", "minutes": "60", "type": kindCommit, "issue": "exampleorg/repo#1"},
 		// Already on the board: not waiting on anything.
-		{"date": "2026-08-26", "minutes": "480", "type": kindCommit, "issue": "bigledger/repo#9",
+		{"date": "2026-08-26", "minutes": "480", "type": kindCommit, "issue": "exampleorg/repo#9",
 			"pushed_at": "2026-08-26T10:00:00"},
 		// No ref until it is pushed — named for what it will become rather than
 		// lumped in with everything else that has no issue.
@@ -45,11 +46,11 @@ func TestPendingByIssueMergesSavedMinutesAndUnloggedCommits(t *testing.T) {
 	}
 	ui.pending = PendingResult{Groups: []Group{
 		// Same issue as the saved minutes above: one row, both amounts.
-		{Date: "2026-08-27", Issue: "bigledger/repo#1", Commits: []Commit{{Sha: "a"}, {Sha: "b"}}},
-		{Date: "2026-08-27", Issue: "bigledger/repo#2", Commits: []Commit{{Sha: "c"}}},
+		{Date: "2026-08-27", Issue: "exampleorg/repo#1", Commits: []Commit{{Sha: "a"}, {Sha: "b"}}},
+		{Date: "2026-08-27", Issue: "exampleorg/repo#2", Commits: []Commit{{Sha: "c"}}},
 		// Ignored commits are fetched so they can be handed back; they are not
 		// work still to do.
-		{Date: "2026-08-27", Issue: "bigledger/repo#3",
+		{Date: "2026-08-27", Issue: "exampleorg/repo#3",
 			Commits: []Commit{{Sha: "d"}}, Ignored: true},
 	}}
 	ui.pendingLoaded = true
@@ -60,24 +61,24 @@ func TestPendingByIssueMergesSavedMinutesAndUnloggedCommits(t *testing.T) {
 		byIssue[p.Issue] = p
 	}
 
-	if p := byIssue["bigledger/repo#1"]; p.Minutes != 300 || p.Commits != 2 || p.Entries != 2 {
+	if p := byIssue["exampleorg/repo#1"]; p.Minutes != 300 || p.Commits != 2 || p.Entries != 2 {
 		t.Fatalf("one issue's saved minutes and unlogged commits should meet: %+v", p)
 	}
-	if p := byIssue["bigledger/repo#2"]; p.Minutes != 0 || p.Commits != 1 {
+	if p := byIssue["exampleorg/repo#2"]; p.Minutes != 0 || p.Commits != 1 {
 		t.Fatalf("a commit-only issue should still be listed: %+v", p)
 	}
-	if _, listed := byIssue["bigledger/repo#3"]; listed {
+	if _, listed := byIssue["exampleorg/repo#3"]; listed {
 		t.Fatal("an ignored commit is not work still to do")
 	}
-	if _, listed := byIssue["bigledger/repo#9"]; listed {
+	if _, listed := byIssue["exampleorg/repo#9"]; listed {
 		t.Fatal("a pushed entry is on the board, not pending")
 	}
-	if p := byIssue["Elden Meeting & ad hocs: 2026-08-27"]; p.Minutes != 90 {
+	if p := byIssue["Alex Meeting & ad hocs: 2026-08-27"]; p.Minutes != 90 {
 		t.Fatalf("a meeting should be named for the issue it will become: %+v", byIssue)
 	}
 
 	// Nearest to pushable first: minutes lead, then commit count.
-	if got[0].Issue != "bigledger/repo#1" {
+	if got[0].Issue != "exampleorg/repo#1" {
 		t.Fatalf("the biggest waiting issue should lead, got %q", got[0].Issue)
 	}
 }
@@ -91,12 +92,12 @@ func TestLogListDrawsBoardsAndBothColumns(t *testing.T) {
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-25", Minutes: 300, Title: "Worklog: 2026-08-25",
-			URL:         "https://github.com/bigledger/blg-intranet/issues/2",
-			ParentTitle: "Chinese translation", ParentURL: "https://github.com/bigledger/blg-intranet/issues/1"},
+			URL:         "https://github.com/exampleorg/sample-intranet/issues/2",
+			ParentTitle: "Chinese translation", ParentURL: "https://github.com/exampleorg/sample-intranet/issues/1"},
 	}
 	ui.projLoaded[key] = true
 	if _, err := ui.store.AppendRows([]Row{
-		{"date": "2026-08-26", "minutes": "120", "type": kindCommit, "issue": "bigledger/repo#7"},
+		{"date": "2026-08-26", "minutes": "120", "type": kindCommit, "issue": "exampleorg/repo#7"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestLogListDrawsBoardsAndBothColumns(t *testing.T) {
 	got := labels(ui.listBox)
 	for _, want := range []string{
 		"Boards for this week",
-		"bigledger · project 9 · view 19",
+		"exampleorg · project 9 · view 19",
 		"By issue",
 		"Chinese translation", // the board column
 		"Pending — not on the board yet",
@@ -161,16 +162,16 @@ func TestWeekProgressPanelScoresBankedAndWaitingApart(t *testing.T) {
 
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
-		{Date: "2026-08-25", Minutes: 480, URL: "https://github.com/bigledger/blg-intranet/issues/1"},
-		{Date: "2026-08-26", Minutes: 240, URL: "https://github.com/bigledger/blg-intranet/issues/2"},
+		{Date: "2026-08-25", Minutes: 480, URL: "https://github.com/exampleorg/sample-intranet/issues/1"},
+		{Date: "2026-08-26", Minutes: 240, URL: "https://github.com/exampleorg/sample-intranet/issues/2"},
 	}
 	ui.projLoaded[key] = true
 	if _, err := ui.store.AppendRows([]Row{
-		{"date": "2026-08-27", "minutes": "300", "type": kindCommit, "issue": "bigledger/repo#7"},
+		{"date": "2026-08-27", "minutes": "300", "type": kindCommit, "issue": "exampleorg/repo#7"},
 		// Outside the shown week: it belongs to another week's score.
-		{"date": "2026-09-10", "minutes": "999", "type": kindCommit, "issue": "bigledger/repo#8"},
+		{"date": "2026-09-10", "minutes": "999", "type": kindCommit, "issue": "exampleorg/repo#8"},
 		// Already pushed: the board reports it, so counting it here doubles it.
-		{"date": "2026-08-25", "minutes": "480", "type": kindCommit, "issue": "bigledger/repo#9",
+		{"date": "2026-08-25", "minutes": "480", "type": kindCommit, "issue": "exampleorg/repo#9",
 			"pushed_at": "2026-08-25T10:00:00"},
 	}); err != nil {
 		t.Fatal(err)
@@ -208,13 +209,13 @@ func TestListDaysPanelMirrorsTheStripWithoutTheCards(t *testing.T) {
 
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
-		{Date: "2026-08-25", Minutes: 480, URL: "https://github.com/bigledger/blg-intranet/issues/1"},
-		{Date: "2026-08-26", Minutes: 240, URL: "https://github.com/bigledger/blg-intranet/issues/2"},
+		{Date: "2026-08-25", Minutes: 480, URL: "https://github.com/exampleorg/sample-intranet/issues/1"},
+		{Date: "2026-08-26", Minutes: 240, URL: "https://github.com/exampleorg/sample-intranet/issues/2"},
 	}
 	ui.projLoaded[key] = true
 	if _, err := ui.store.AppendRows([]Row{
 		{"date": "2026-08-26", "minutes": "300", "type": kindCommit,
-			"issue": "bigledger/repo#7", "description": "standup notes"},
+			"issue": "exampleorg/repo#7", "description": "standup notes"},
 	}); err != nil {
 		t.Fatal(err)
 	}

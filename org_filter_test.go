@@ -71,7 +71,7 @@ func TestAFreshInstallAssumesNoSalary(t *testing.T) {
 	key := reportCacheKey("2026-08")
 	ui.ensureProjectCache()
 	ui.projItems[key] = []WorklogItem{{Date: "2026-08-11", Minutes: 480,
-		URL: "https://github.com/bigledger/blg-intranet/issues/1"}}
+		URL: "https://github.com/exampleorg/sample-intranet/issues/1"}}
 	ui.projLoaded[key] = true
 	ui.drawReport()
 
@@ -94,7 +94,7 @@ func TestTheReportCarriesAnUnfinishedSupportSetAcrossTheCutOff(t *testing.T) {
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, hasCfg: true,
 		calMonth: "2026-08", repMonth: "2026-09",
-		cfg: Config{Repos: []string{"bigledger"}, BaseSalary: 2800, Currency: "RM"}}
+		cfg: Config{Repos: []string{"exampleorg"}, SupportSetPay: 125, BaseSalary: 2800, Currency: "RM"}}
 	w.SetContent(ui.buildReportTab())
 
 	// Period "2026-09" runs 21 Aug to 20 Sep. Four support issues fall the far
@@ -104,7 +104,7 @@ func TestTheReportCarriesAnUnfinishedSupportSetAcrossTheCutOff(t *testing.T) {
 		for i := from; i < to; i++ {
 			out = append(out, WorklogItem{Date: date, Minutes: 60,
 				Title: "Weekend support",
-				URL:   fmt.Sprintf("https://github.com/bigledger/support/issues/%d", i)})
+				URL:   fmt.Sprintf("https://github.com/exampleorg/support/issues/%d", i)})
 		}
 		return out
 	}
@@ -118,8 +118,8 @@ func TestTheReportCarriesAnUnfinishedSupportSetAcrossTheCutOff(t *testing.T) {
 	if !contains(got, "4 carried in + 3 issues, 1 set(s)") {
 		t.Fatalf("the four before the cut-off should finish the set: %v", got)
 	}
-	if !contains(got, "RM 300.00") {
-		t.Fatalf("a completed set is worth 300: %v", got)
+	if !contains(got, "RM 125.00") {
+		t.Fatalf("a completed set uses the configured rate: %v", got)
 	}
 	// The run-up is only there for the carry: it must not reach the period's own
 	// figures. Three issues at an hour each is all this period logged.
@@ -137,14 +137,14 @@ func TestTheReportNamesWhatCarriesToTheNextPeriod(t *testing.T) {
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, hasCfg: true,
 		calMonth: "2026-08", repMonth: "2026-09",
-		cfg: Config{Repos: []string{"bigledger"}, BaseSalary: 2800, Currency: "RM"}}
+		cfg: Config{Repos: []string{"exampleorg"}, SupportSetPay: 125, BaseSalary: 2800, Currency: "RM"}}
 	w.SetContent(ui.buildReportTab())
 
 	var items []WorklogItem
 	for i := 0; i < 4; i++ {
 		items = append(items, WorklogItem{Date: "2026-08-30", Minutes: 60,
 			Title: "Weekend support",
-			URL:   fmt.Sprintf("https://github.com/bigledger/support/issues/%d", i)})
+			URL:   fmt.Sprintf("https://github.com/exampleorg/support/issues/%d", i)})
 	}
 	key := reportCacheKey("2026-09")
 	ui.ensureProjectCache()
@@ -159,7 +159,7 @@ func TestTheReportNamesWhatCarriesToTheNextPeriod(t *testing.T) {
 }
 
 // tapKey finds the colour-key entry for an org and clicks it. The match is on
-// "<org> (" so that tapping bigledger does not land on bigledger-support, which
+// "<org> (" so that tapping exampleorg does not land on example-support, which
 // starts with the same letters.
 func tapKey(t *testing.T, root fyne.CanvasObject, org string) {
 	t.Helper()
@@ -189,9 +189,9 @@ func TestTheTargetLineIsDrawnOverTheBars(t *testing.T) {
 	defer a.Quit()
 
 	days := testChartDays("2026-08-01", "2026-08-02")
-	days[0].byOrg = map[string]int{"bigledger": target + 120} // past the line
+	days[0].byOrg = map[string]int{"exampleorg": target + 120} // past the line
 	days[0].total = target + 120
-	c := newDayChart(Config{Repos: []string{"bigledger"}}, days, target)
+	c := newDayChart(Config{Repos: []string{"exampleorg"}}, days, target)
 	r := c.CreateRenderer().(*dayChartRenderer)
 	c.Resize(fyne.NewSize(900, 300))
 	r.Layout(fyne.NewSize(900, 300))
@@ -235,16 +235,16 @@ func statusUI(t *testing.T) *UI {
 	test.ApplyTheme(t, theme.DefaultTheme())
 	ui := &UI{store: newStore(t.TempDir()), win: w,
 		calMonth: "2026-08", repMonth: "2026-08"}
-	ui.cfg = Config{Repos: []string{"bigledger", "BigLedger-Support"}}
+	ui.cfg = Config{Repos: []string{"exampleorg", "Example-Support"}}
 	w.SetContent(ui.buildStatusTab())
 
 	ui.ensureProjectCache()
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-11", Minutes: 120, Title: "platform work",
-			URL: "https://github.com/bigledger/blg-intranet/issues/1"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/1"},
 		{Date: "2026-08-12", Minutes: 60, Title: "support work",
-			URL: "https://github.com/BigLedger-Support/pcimage-operations/issues/2"},
+			URL: "https://github.com/Example-Support/sample-operations/issues/2"},
 	}
 	ui.projLoaded[key] = true
 	ui.drawCalendar()
@@ -262,15 +262,15 @@ func TestTappingTheKeyTakesAnOrgOutOfTheCalendar(t *testing.T) {
 		t.Fatalf("the month starts with both orgs in it, got %q", got)
 	}
 
-	tapKey(t, ui.calLegend, "bigledger")
+	tapKey(t, ui.calLegend, "exampleorg")
 	if got := ui.calSummary.Text; !strings.HasPrefix(got, "60 min") {
-		t.Fatalf("hiding bigledger should leave only the support hours, got %q", got)
+		t.Fatalf("hiding exampleorg should leave only the support hours, got %q", got)
 	}
 
 	// The org that was switched off still holds its place in the key, at what it
 	// is worth — it is the only way back, and a key that only shows what is
 	// already on screen tells you nothing you cannot see.
-	if !contains(labels(ui.calLegend), "bigledger (2h)") {
+	if !contains(labels(ui.calLegend), "exampleorg (2h)") {
 		t.Fatalf("the hidden org must stay in the key: %v", labels(ui.calLegend))
 	}
 
@@ -282,7 +282,7 @@ func TestTappingTheKeyTakesAnOrgOutOfTheCalendar(t *testing.T) {
 	}
 
 	// Tapping again puts it back: this is a filter, not a delete.
-	tapKey(t, ui.calLegend, "bigledger")
+	tapKey(t, ui.calLegend, "exampleorg")
 	if got := ui.calSummary.Text; !strings.HasPrefix(got, "180 min") {
 		t.Fatalf("tapping again should restore the month, got %q", got)
 	}
@@ -297,18 +297,18 @@ func TestThePendingKeyIsDrawnForASingleOrg(t *testing.T) {
 
 	ui.pendingLoaded = true
 	ui.pending = PendingResult{Count: 1, Range: []string{"2026-08-20", "2026-08-21"},
-		Groups: []Group{{Date: "2026-08-21", Issue: "bigledger/blg-sd-one-living#293",
-			Commits: []Commit{{Sha: "aaa1111", Repo: "bigledger/blg-shared-utilities",
+		Groups: []Group{{Date: "2026-08-21", Issue: "exampleorg/sample-client-one#293",
+			Commits: []Commit{{Sha: "aaa1111", Repo: "exampleorg/sample-shared-utilities",
 				Message: "gate the clone button", Full: "gate the clone button"}}}}}
 	ui.renderPending()
 
-	if !contains(labels(ui.logLegend), "bigledger (1)") {
+	if !contains(labels(ui.logLegend), "exampleorg (1)") {
 		t.Fatalf("the only org on the list still has to be named: %v", labels(ui.logLegend))
 	}
 
 	// Switching that one org off empties the list, and the list has to say that
 	// is why — "no unlogged commits" over a key counting one is a contradiction.
-	tapKey(t, ui.logLegend, "bigledger")
+	tapKey(t, ui.logLegend, "exampleorg")
 	got := labels(ui.pendingBox)
 	if !contains(got, "hidden by the filter") {
 		t.Fatalf("an empty list should say the filter emptied it: %v", got)
@@ -326,12 +326,12 @@ func TestTheKeyFiltersTheSavedListAndTheWeekToo(t *testing.T) {
 	ui := pendingUI(t)
 	defer fyne.CurrentApp().Quit()
 
-	ui.cfg = Config{Repos: []string{"bigledger", "BigLedger-Support"}}
+	ui.cfg = Config{Repos: []string{"exampleorg", "Example-Support"}}
 	if _, err := ui.store.AppendRows([]Row{
 		{"date": today(), "minutes": "120", "type": "commit",
-			"issue": "bigledger/blg-intranet#42", "description": "platform work"},
+			"issue": "exampleorg/sample-intranet#42", "description": "platform work"},
 		{"date": today(), "minutes": "60", "type": "commit",
-			"issue": "BigLedger-Support/pcimage-operations#51", "description": "support work"},
+			"issue": "Example-Support/sample-operations#51", "description": "support work"},
 	}); err != nil {
 		t.Fatalf("seed rows: %v", err)
 	}
@@ -342,18 +342,18 @@ func TestTheKeyFiltersTheSavedListAndTheWeekToo(t *testing.T) {
 	}
 	// The key counts the saved entries as well, so it is there before a single
 	// commit has been fetched.
-	if !contains(labels(ui.logLegend), "bigledger (1)") {
+	if !contains(labels(ui.logLegend), "exampleorg (1)") {
 		t.Fatalf("saved entries alone should raise the key: %v", labels(ui.logLegend))
 	}
 
-	tapKey(t, ui.logLegend, "bigledger")
+	tapKey(t, ui.logLegend, "exampleorg")
 	if !contains(labels(ui.recentBox), "1 waiting to push") {
 		t.Fatalf("the hidden org's entry should be off the list: %v", labels(ui.recentBox))
 	}
 	if contains(labels(ui.weekBox), "platform work") {
 		t.Fatalf("nor should it stand on the week strip: %v", labels(ui.weekBox))
 	}
-	if !contains(labels(ui.logLegend), "bigledger (1)") {
+	if !contains(labels(ui.logLegend), "exampleorg (1)") {
 		t.Fatalf("the hidden org keeps its count in the key: %v", labels(ui.logLegend))
 	}
 }
@@ -366,7 +366,7 @@ func TestNoKeyWhenThereIsOnlyOneOrg(t *testing.T) {
 
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{{Date: "2026-08-11", Minutes: 120,
-		URL: "https://github.com/bigledger/blg-intranet/issues/1"}}
+		URL: "https://github.com/exampleorg/sample-intranet/issues/1"}}
 	ui.drawCalendar()
 
 	if len(ui.calLegend.Objects) != 0 {
@@ -386,9 +386,9 @@ func TestTheFilterCarriesToTheReport(t *testing.T) {
 	key := reportCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-11", Minutes: 120, Title: "platform work",
-			URL: "https://github.com/bigledger/blg-intranet/issues/1"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/1"},
 		{Date: "2026-08-12", Minutes: 60, Title: "support work",
-			URL: "https://github.com/BigLedger-Support/pcimage-operations/issues/2"},
+			URL: "https://github.com/Example-Support/sample-operations/issues/2"},
 	}
 	ui.projLoaded[key] = true
 	ui.drawReport()
@@ -397,14 +397,14 @@ func TestTheFilterCarriesToTheReport(t *testing.T) {
 		t.Fatalf("the whole period is three hours: %v", labels(ui.repBox))
 	}
 
-	ui.toggleOrg("bigledger")
+	ui.toggleOrg("exampleorg")
 	if !contains(labels(ui.repBox), "1.0h") {
-		t.Fatalf("with bigledger hidden the period is one hour: %v", labels(ui.repBox))
+		t.Fatalf("with exampleorg hidden the period is one hour: %v", labels(ui.repBox))
 	}
 	// The split is the report's key, so it keeps naming the hidden org — and at
 	// its real share of the period, not recomputed to 100% of what is left.
 	got := labels(ui.repBox)
-	if !contains(got, "bigledger") {
+	if !contains(got, "exampleorg") {
 		t.Fatalf("the hidden org must stay in the split: %v", got)
 	}
 	if !contains(got, "1h · 33%") {
@@ -418,15 +418,15 @@ func TestTappingTheKeyFiltersThePendingList(t *testing.T) {
 	ui := pendingUI(t)
 	defer fyne.CurrentApp().Quit()
 
-	ui.cfg = Config{Repos: []string{"bigledger", "BigLedger-Support"}}
+	ui.cfg = Config{Repos: []string{"exampleorg", "Example-Support"}}
 	ui.pendingLoaded = true
 	ui.pending = PendingResult{Count: 2, Range: []string{"2026-08-10", "2026-08-12"},
 		Groups: []Group{
-			{Date: "2026-08-11", Issue: "bigledger/blg-intranet#42",
-				Commits: []Commit{{Sha: "aaa1111", Repo: "bigledger/blg-intranet",
+			{Date: "2026-08-11", Issue: "exampleorg/sample-intranet#42",
+				Commits: []Commit{{Sha: "aaa1111", Repo: "exampleorg/sample-intranet",
 					Message: "cap the dropdown", Full: "cap the dropdown"}}},
-			{Date: "2026-08-11", Issue: "BigLedger-Support/pcimage-operations#51",
-				Commits: []Commit{{Sha: "bbb2222", Repo: "bigledger/blg-shared-utilities",
+			{Date: "2026-08-11", Issue: "Example-Support/sample-operations#51",
+				Commits: []Commit{{Sha: "bbb2222", Repo: "exampleorg/sample-shared-utilities",
 					Message: "widen the picker", Full: "widen the picker"}}},
 		}}
 	ui.renderPending()
@@ -435,11 +435,11 @@ func TestTappingTheKeyFiltersThePendingList(t *testing.T) {
 	if !contains(got, "cap the dropdown") || !contains(got, "widen the picker") {
 		t.Fatalf("both commits start out on the list: %v", got)
 	}
-	if !contains(labels(ui.logLegend), "bigledger (1)") {
+	if !contains(labels(ui.logLegend), "exampleorg (1)") {
 		t.Fatalf("the key names both orgs: %v", labels(ui.logLegend))
 	}
 
-	tapKey(t, ui.logLegend, "bigledger")
+	tapKey(t, ui.logLegend, "exampleorg")
 	got = labels(ui.pendingBox)
 	if contains(got, "cap the dropdown") {
 		t.Fatalf("the hidden org's commit should be off the list: %v", got)
@@ -448,7 +448,7 @@ func TestTappingTheKeyFiltersThePendingList(t *testing.T) {
 		t.Fatalf("the other org's commit should still be there: %v", got)
 	}
 	// Still counted in the key at its full size, so it can be brought back.
-	if !contains(labels(ui.logLegend), "bigledger (1)") {
+	if !contains(labels(ui.logLegend), "exampleorg (1)") {
 		t.Fatalf("the hidden org keeps its count in the key: %v", labels(ui.logLegend))
 	}
 }

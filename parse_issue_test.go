@@ -8,7 +8,7 @@ import "testing"
 // number in the repo it was scraped from — a ref that can resolve to a real but
 // unrelated issue, so the mistake looked like a correct answer.
 func TestParseIssueKeepsTheOwnerRepoInBothSpellings(t *testing.T) {
-	const scraped = "bigledger/blg-applet-wavelet-doc-item-maintenance-applet"
+	const scraped = "exampleorg/sample-document-applet"
 
 	cases := []struct {
 		name     string
@@ -18,21 +18,21 @@ func TestParseIssueKeepsTheOwnerRepoInBothSpellings(t *testing.T) {
 	}{
 		{
 			name:     "shorthand ref",
-			message:  "Refs BigLedger-Support/tuhu-finance#48:\n- Reverted custom-field relabeling",
+			message:  "Refs Example-Support/sample-finance#48:\n- Reverted custom-field relabeling",
 			fallback: scraped,
-			want:     "BigLedger-Support/tuhu-finance#48",
+			want:     "Example-Support/sample-finance#48",
 		},
 		{
 			name:     "url path ref",
-			message:  "Refs bigledger/blg-sd-senwave-senheng/issues/483:\n- Cap fix",
+			message:  "Refs exampleorg/sample-client-three/issues/483:\n- Cap fix",
 			fallback: scraped,
-			want:     "bigledger/blg-sd-senwave-senheng#483",
+			want:     "exampleorg/sample-client-three#483",
 		},
 		{
 			name:     "singular ref keyword",
-			message:  "Ref BigLedger-Support/tuhu-finance#48",
+			message:  "Ref Example-Support/sample-finance#48",
 			fallback: scraped,
-			want:     "BigLedger-Support/tuhu-finance#48",
+			want:     "Example-Support/sample-finance#48",
 		},
 		{
 			// A bare number carries no repo of its own, so the scraped repo is

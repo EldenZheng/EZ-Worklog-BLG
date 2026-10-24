@@ -150,6 +150,17 @@ none of them belong in a commit:
 | `worklog.csv` | every entry you have logged, remarks and all |
 | `ignored.json` | the commit shas you have deliberately kept off the pending list |
 
+Company repositories, board views, salary and support payments belong in local
+Settings, never in source code. `config.json` is ignored by Git but is plain text,
+not encrypted storage. GitHub Actions secrets are not used by this desktop app.
+Do not commit the config or include it in release archives. Removing a value in
+a new commit does not remove it from older commits.
+
+When upgrading from a version with fixed meeting/review repositories, board
+views or support payments, enter those values in Settings before using the
+corresponding features. New installations leave these settings empty and assume
+no salary or support payment.
+
 ## First run
 
 The app starts empty and asks for nothing at launch — open **Settings** and
@@ -162,7 +173,10 @@ account and no server.
 | Worklog owner | The value written to the board's *worklog-owner* field, and what Status and Report filter on. |
 | Repos or orgs to scan | Comma-separated. A bare `myorg` scans every repo in the org; `myorg/one-repo` scans just that one. |
 | Worklog project URLs | One per line, e.g. `https://github.com/orgs/myorg/projects/9`. Status and Report read all of them. |
+| Board view URLs | Optional saved views for weekly links, one per line. Preserves view parameters; blank uses the configured project URLs. |
+| Meeting / Bulk review repository | Separate `owner/repo` destinations for daily meeting and bulk review issues. Required before pushing those kinds. |
 | Base salary per 21 days | Drives the Report tab's rate. A period pays for 21 working days regardless of what the calendar says. |
+| Support payment per set | Payment in the salary currency per seven qualifying issues. Blank means unset; incomplete sets still carry across periods. |
 | Currency / Also show in | The second is converted with a rate fetched from `open.er-api.com`, at most once a day. |
 | Look back (days) | How far back the pending-commit scan goes. |
 | Default push mode | `subissue` creates a sub-issue under the referenced issue; `issue` writes the fields onto that issue directly. |

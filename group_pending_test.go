@@ -9,9 +9,9 @@ import (
 // every set of remarks carries exactly one sha and one commit's bullets.
 func TestEachCommitGetsItsOwnBubble(t *testing.T) {
 	commits := []Commit{
-		{Sha: "3613aff", Repo: "bigledger/repo", Date: "2026-08-09", Issue: "bigledger/repo#12",
+		{Sha: "3613aff", Repo: "exampleorg/repo", Date: "2026-08-09", Issue: "exampleorg/repo#12",
 			Message: "relative date defaults", Full: "relative date defaults\n- resolver\n- packer"},
-		{Sha: "9993d06", Repo: "bigledger/repo", Date: "2026-08-09", Issue: "bigledger/repo#12",
+		{Sha: "9993d06", Repo: "exampleorg/repo", Date: "2026-08-09", Issue: "exampleorg/repo#12",
 			Message: "partial-save fix", Full: "partial-save fix\n- error path dispatches"},
 	}
 	groups := groupPending(commits, map[string]bool{}, map[string]bool{})
@@ -44,11 +44,11 @@ func TestEachCommitGetsItsOwnBubble(t *testing.T) {
 // Already-logged shas, duplicates and merge commits never reach a bubble.
 func TestGroupPendingFiltersAndOrders(t *testing.T) {
 	commits := []Commit{
-		{Sha: "aaa1111", Date: "2026-08-07", Issue: "bigledger/repo#1", Message: "older"},
-		{Sha: "bbb2222", Date: "2026-08-09", Issue: "bigledger/repo#2", Message: "newer"},
-		{Sha: "bbb2222", Date: "2026-08-09", Issue: "bigledger/repo#2", Message: "dupe"},
-		{Sha: "ccc3333", Date: "2026-08-09", Issue: "bigledger/repo#2", Message: "Merge branch 'main'"},
-		{Sha: "ddd4444", Date: "2026-08-08", Issue: "bigledger/repo#3", Message: "already logged"},
+		{Sha: "aaa1111", Date: "2026-08-07", Issue: "exampleorg/repo#1", Message: "older"},
+		{Sha: "bbb2222", Date: "2026-08-09", Issue: "exampleorg/repo#2", Message: "newer"},
+		{Sha: "bbb2222", Date: "2026-08-09", Issue: "exampleorg/repo#2", Message: "dupe"},
+		{Sha: "ccc3333", Date: "2026-08-09", Issue: "exampleorg/repo#2", Message: "Merge branch 'main'"},
+		{Sha: "ddd4444", Date: "2026-08-08", Issue: "exampleorg/repo#3", Message: "already logged"},
 	}
 	groups := groupPending(commits, map[string]bool{"ddd4444": true}, map[string]bool{})
 
@@ -67,17 +67,17 @@ func TestGroupPendingFiltersAndOrders(t *testing.T) {
 // Nothing is merged — every commit still has its own tile.
 func TestPendingSectionsGroupRepeatIssues(t *testing.T) {
 	groups := []Group{
-		{Date: "2026-08-11", Issue: "bigledger/repo#42", Commits: []Commit{{Sha: "aaa1111"}}},
-		{Date: "2026-08-11", Issue: "bigledger/repo#7", Commits: []Commit{{Sha: "bbb2222"}}},
-		{Date: "2026-08-10", Issue: "bigledger/repo#42", Commits: []Commit{{Sha: "ccc3333"}}},
+		{Date: "2026-08-11", Issue: "exampleorg/repo#42", Commits: []Commit{{Sha: "aaa1111"}}},
+		{Date: "2026-08-11", Issue: "exampleorg/repo#7", Commits: []Commit{{Sha: "bbb2222"}}},
+		{Date: "2026-08-10", Issue: "exampleorg/repo#42", Commits: []Commit{{Sha: "ccc3333"}}},
 		{Date: "2026-08-09", Commits: []Commit{{Sha: "ddd4444"}}}, // no ref at all
-		{Date: "2026-08-09", Issue: "bigledger/repo#42", Commits: []Commit{{Sha: "eee5555"}}},
+		{Date: "2026-08-09", Issue: "exampleorg/repo#42", Commits: []Commit{{Sha: "eee5555"}}},
 	}
 	got := pendingSections(groups)
 	if len(got) != 2 {
 		t.Fatalf("one heading plus the loose tiles is 2 sections, got %d", len(got))
 	}
-	if got[0].issue != "bigledger/repo#42" {
+	if got[0].issue != "exampleorg/repo#42" {
 		t.Fatalf("the repeated issue leads, got %q", got[0].issue)
 	}
 	if len(got[0].groups) != 3 {
@@ -107,8 +107,8 @@ func TestPendingSectionsGroupRepeatIssues(t *testing.T) {
 // Nothing repeats: no headings, one plain block of tiles.
 func TestPendingSectionsLeaveSinglesAlone(t *testing.T) {
 	got := pendingSections([]Group{
-		{Date: "2026-08-11", Issue: "bigledger/repo#1", Commits: []Commit{{Sha: "aaa1111"}}},
-		{Date: "2026-08-10", Issue: "bigledger/repo#2", Commits: []Commit{{Sha: "bbb2222"}}},
+		{Date: "2026-08-11", Issue: "exampleorg/repo#1", Commits: []Commit{{Sha: "aaa1111"}}},
+		{Date: "2026-08-10", Issue: "exampleorg/repo#2", Commits: []Commit{{Sha: "bbb2222"}}},
 	})
 	if len(got) != 1 || got[0].issue != "" || len(got[0].groups) != 2 {
 		t.Fatalf("expected one unheaded section of 2, got %+v", got)
@@ -120,9 +120,9 @@ func TestPendingSectionsLeaveSinglesAlone(t *testing.T) {
 func TestCommitSubjectSkipsRefsHeader(t *testing.T) {
 	c := Commit{
 		Sha:     "05c9cae",
-		Repo:    "bigledger/repo",
-		Message: "Refs bigledger/repo/issues/483:",
-		Full:    "Refs bigledger/repo/issues/483:\n- Cap fix: limit null to ROW_LIMIT = 9999.",
+		Repo:    "exampleorg/repo",
+		Message: "Refs exampleorg/repo/issues/483:",
+		Full:    "Refs exampleorg/repo/issues/483:\n- Cap fix: limit null to ROW_LIMIT = 9999.",
 	}
 	if got := commitSubject(c); !strings.Contains(got, "ROW_LIMIT = 9999") {
 		t.Fatalf("expected the body line, got %q", got)

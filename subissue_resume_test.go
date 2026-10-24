@@ -50,17 +50,17 @@ func TestWorklogTitleNumbersTheSecondEntryOfADay(t *testing.T) {
 func TestWorklogPartOfReadsTheNumberBack(t *testing.T) {
 	const base = "Worklog: 2026-08-30"
 	for title, want := range map[string]int{
-		base:                    1,
-		"  " + base + "  ":      1,
-		base + " Part 2":        2,
-		base + " part 11":       11,
-		base + " Part 0":        0, // not a part, so not this day's worklog
-		base + " Part":          0,
-		base + " Part two":      0,
-		"Worklog: 2026-08-29":   0,
-		"Worklog: 2026-08-300":  0,
-		"Refs bigledger/repo#1": 0,
-		"":                      0,
+		base:                     1,
+		"  " + base + "  ":       1,
+		base + " Part 2":         2,
+		base + " part 11":        11,
+		base + " Part 0":         0, // not a part, so not this day's worklog
+		base + " Part":           0,
+		base + " Part two":       0,
+		"Worklog: 2026-08-29":    0,
+		"Worklog: 2026-08-300":   0,
+		"Refs exampleorg/repo#1": 0,
+		"":                       0,
 	} {
 		if got := worklogPartOf(title, base); got != want {
 			t.Fatalf("worklogPartOf(%q) = %d, want %d", title, got, want)
@@ -74,19 +74,19 @@ func TestWorklogPartOfReadsTheNumberBack(t *testing.T) {
 // two entries' sub-issues apart.
 func TestFindSubIssueMatchesTheURLTheRowRecorded(t *testing.T) {
 	const (
-		mine   = "https://github.com/BigLedger-Support/tuhu-finance/issues/72"
-		theirs = "https://github.com/BigLedger-Support/tuhu-finance/issues/73"
+		mine   = "https://github.com/Example-Support/sample-finance/issues/72"
+		theirs = "https://github.com/Example-Support/sample-finance/issues/73"
 	)
 	node := issueNode{}
 	node.SubIssues.Nodes = []subIssue{
 		{Number: 71, Title: "Worklog: 2026-08-29", State: "CLOSED",
-			URL: "https://github.com/BigLedger-Support/tuhu-finance/issues/71"},
+			URL: "https://github.com/Example-Support/sample-finance/issues/71"},
 		// Same day, same title, two different entries. Picking by title would
 		// hand back whichever came first and write one entry over the other.
 		{Number: 72, Title: "Worklog: 2026-08-30", State: "CLOSED", URL: mine},
 		{Number: 73, Title: "Worklog: 2026-08-30", State: "OPEN", URL: theirs},
 		{Number: 74, Title: "Worklog: 2026-08-31", State: "OPEN",
-			URL: "  https://github.com/BigLedger-Support/tuhu-finance/issues/74  "},
+			URL: "  https://github.com/Example-Support/sample-finance/issues/74  "},
 	}
 
 	cases := map[string]int{
@@ -95,8 +95,8 @@ func TestFindSubIssueMatchesTheURLTheRowRecorded(t *testing.T) {
 		// time anything is retried.
 		mine:   72,
 		theirs: 73,
-		"https://github.com/BigLedger-Support/tuhu-finance/issues/74": 74, // padding trimmed
-		"https://github.com/BigLedger-Support/tuhu-finance/issues/99": 0,  // not this issue's
+		"https://github.com/Example-Support/sample-finance/issues/74": 74, // padding trimmed
+		"https://github.com/Example-Support/sample-finance/issues/99": 0,  // not this issue's
 		"": 0, // a first push has nothing to resume from
 	}
 	for url, want := range cases {

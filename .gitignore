@@ -11,4 +11,5 @@
 # ignored.json names the commits deliberately kept off the pending list.
 config.json
 worklog.csv
+worklog-*.tsv
 ignored.json

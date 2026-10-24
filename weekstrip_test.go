@@ -115,9 +115,9 @@ func TestSplitCaptionStacksWhenTheTwoWillNotFit(t *testing.T) {
 // The support placeholder pencils an unlogged rota shift onto the weekdays so
 // the week can be read as it will stand. Nothing is written for it.
 func TestSupportPlaceholderCoversWeekdaysWithoutOne(t *testing.T) {
-	cfg := Config{WorklogOwner: "blg-elden"}
+	cfg := Config{WorklogOwner: "team-alex"}
 	support := []WorklogItem{{
-		ParentTitle: "Elden: Weekly Support (28th August, 12PM - 3PM)",
+		ParentTitle: "Alex: Weekly Support (28th August, 12PM - 3PM)",
 		Title:       "Worklog: 2026-08-28",
 	}}
 
@@ -135,7 +135,7 @@ func TestSupportPlaceholderCoversWeekdaysWithoutOne(t *testing.T) {
 		// Matched on the parent, since the worklog under it is called
 		// "Worklog: <date>" like every other one.
 		{"matched on the item's own title", true, "2026-08-28",
-			[]WorklogItem{{Title: "Elden: Weekly Support (28th August)"}}, 0},
+			[]WorklogItem{{Title: "Alex: Weekly Support (28th August)"}}, 0},
 		{"other work on the day is not the shift", true, "2026-08-24",
 			[]WorklogItem{{ParentTitle: "Chinese translation"}}, supportPlaceholderMins},
 		// The rota is weekdays; a weekend is its own arrangement.
@@ -182,12 +182,12 @@ func TestSupportPlaceholderClearsWhenTheWeekChanges(t *testing.T) {
 func TestSupportPlaceholderShowsOnTheStrip(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
-	ui.cfg.WorklogOwner = "blg-elden"
+	ui.cfg.WorklogOwner = "team-alex"
 	withProject(ui, "2026-08")
 
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
-		{Date: "2026-08-10", Minutes: 240, URL: "https://github.com/bigledger/blg-intranet/issues/1"},
+		{Date: "2026-08-10", Minutes: 240, URL: "https://github.com/exampleorg/sample-intranet/issues/1"},
 	}
 	ui.projLoaded[key] = true
 
@@ -251,7 +251,7 @@ func TestWeekRunsMondayToSunday(t *testing.T) {
 func weekUI(t *testing.T) *UI {
 	t.Helper()
 	ui := pendingUI(t)
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	ui.weekStart = "2026-08-10" // Monday
 	return ui
 }
@@ -259,7 +259,7 @@ func weekUI(t *testing.T) *UI {
 // withProject points a test UI at a project and seeds the months it may read,
 // this month included: the foot of the tab scores today whatever week is shown.
 func withProject(ui *UI, months ...string) {
-	ui.cfg.ProjectURL = "https://github.com/orgs/bigledger/projects/9"
+	ui.cfg.ProjectURL = "https://github.com/orgs/exampleorg/projects/9"
 	ui.ensureProjectCache()
 	for _, m := range append(months, thisMonth()) {
 		key := statusCacheKey(m)
@@ -279,9 +279,9 @@ func TestWeekStripShowsWhatEachDayHolds(t *testing.T) {
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-12", Minutes: 240, ParentTitle: "DOC ITEM ENHANCEMENT",
-			URL: "https://github.com/bigledger/blg-intranet/issues/42"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/42"},
 		{Date: "2026-08-13", Minutes: 480, Title: "Support rota",
-			URL: "https://github.com/bigledger/blg-intranet/issues/9"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/9"},
 	}
 	ui.projLoaded[key] = true
 	if thisMonth() != "2026-08" {
@@ -397,9 +397,9 @@ func TestTheCardOnADaySpellsItselfOut(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
 
-	const ref = "bigledger/blg-sd-senwave-senheng#490"
+	const ref = "exampleorg/sample-client-three#490"
 	if _, err := ui.store.AppendRows([]Row{{
-		"date": "2026-08-11", "minutes": "90", "description": "senheng fixes",
+		"date": "2026-08-11", "minutes": "90", "description": "sample client fixes",
 		"issue": ref,
 	}}); err != nil {
 		t.Fatal(err)
@@ -413,7 +413,7 @@ func TestTheCardOnADaySpellsItselfOut(t *testing.T) {
 	if !contains(got, "90 min") {
 		t.Fatalf("the minutes are the number the card carries: %v", got)
 	}
-	for _, want := range []string{"Push", "senheng fixes"} {
+	for _, want := range []string{"Push", "sample client fixes"} {
 		if !contains(got, want) {
 			t.Fatalf("the card is missing %q: %v", want, got)
 		}
@@ -424,7 +424,7 @@ func TestDayCardDistinguishesIncompletePushFromRemainingCommits(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
 
-	const ref = "bigledger/repo#7"
+	const ref = "exampleorg/repo#7"
 	ui.pending.Groups = []Group{{Issue: ref, Commits: []Commit{{Sha: "abc1234"}}}}
 	withCommitLeft := labels(ui.dayRowCard(Row{
 		"date": "2026-08-11", "minutes": "30", "issue": ref,
@@ -434,8 +434,8 @@ func TestDayCardDistinguishesIncompletePushFromRemainingCommits(t *testing.T) {
 	}
 
 	partial := Row{
-		"date": "2026-08-11", "minutes": "30", "issue": "bigledger/repo#8",
-		"issue_url": "https://github.com/bigledger/repo/issues/8", "item_id": "PVTI_8",
+		"date": "2026-08-11", "minutes": "30", "issue": "exampleorg/repo#8",
+		"issue_url": "https://github.com/exampleorg/repo/issues/8", "item_id": "PVTI_8",
 	}
 	partlySaved := labels(ui.dayRowCard(partial, func() {}))
 	if !contains(partlySaved, "partly saved") || contains(partlySaved, "commits remaining") {
@@ -452,7 +452,7 @@ func TestBulkReviewIssueRefShowsPartlySavedTag(t *testing.T) {
 
 	row := Row{
 		"date": "2026-09-21", "minutes": "85", "type": kindBulkReview,
-		"issue": "bigledger/blg-int-general-task#10440",
+		"issue": "exampleorg/sample-general-tasks#10440",
 	}
 	for _, card := range []fyne.CanvasObject{ui.dayRowCard(row, func() {}), ui.rowTile(row, func() {})} {
 		if got := labels(card); !contains(got, "partly saved") {
@@ -464,7 +464,7 @@ func TestBulkReviewIssueRefShowsPartlySavedTag(t *testing.T) {
 	if got := labels(ui.dayRowCard(row, func() {})); contains(got, "partly saved") {
 		t.Fatalf("a local-only draft must not have a partial-save tag: %v", got)
 	}
-	row["issue"] = "bigledger/blg-int-general-task#10440"
+	row["issue"] = "exampleorg/sample-general-tasks#10440"
 	row["pushed_at"] = "2026-09-21T21:00:00"
 	if got := labels(ui.dayRowCard(row, func() {})); contains(got, "partly saved") {
 		t.Fatalf("a completed push must not have a partial-save tag: %v", got)
@@ -476,18 +476,18 @@ func TestBulkReviewIssueRefShowsPartlySavedTag(t *testing.T) {
 func TestDayCardManualTitleUsesCurrentDate(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
-	ui.cfg.WorklogOwner = "blg-elden"
+	ui.cfg.WorklogOwner = "team-alex"
 
 	row := Row{
 		"date": "2026-09-18", "minutes": "20", "type": kindBulkReview,
-		"description": "Elden Code Review: 2026-09-15",
+		"description": "Alex Code Review: 2026-09-15",
 		"remarks":     "https://github.com/o/r/pull/1 (20m)",
 	}
 	got := labels(ui.dayRowCard(row, func() {}))
-	if !contains(got, "Elden Code Review: 2026-09-18") {
+	if !contains(got, "Alex Code Review: 2026-09-18") {
 		t.Fatalf("day card kept the saved date instead of the current one: %v", got)
 	}
-	if contains(got, "Elden Code Review: 2026-09-15") {
+	if contains(got, "Alex Code Review: 2026-09-15") {
 		t.Fatalf("stale description leaked into the day card: %v", got)
 	}
 }
@@ -513,7 +513,7 @@ func TestFinishedDaysGoGreen(t *testing.T) {
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-12", Minutes: 480, Title: "a full day",
-			URL: "https://github.com/bigledger/blg-intranet/issues/9"},
+			URL: "https://github.com/exampleorg/sample-intranet/issues/9"},
 	}
 	ui.projLoaded[key] = true
 	// The Monday reaches the target only on drafts.
@@ -609,7 +609,7 @@ func TestDroppingACardMovesItToThatDay(t *testing.T) {
 
 	made, err := ui.store.AppendRows([]Row{{
 		"date": "2026-08-10", "minutes": "90", "description": "fix the picker",
-		"issue": "bigledger/blg-intranet#42",
+		"issue": "exampleorg/sample-intranet#42",
 	}})
 	if err != nil {
 		t.Fatal(err)

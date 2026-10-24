@@ -9,12 +9,12 @@ func TestMeetingTitleAndDisplayName(t *testing.T) {
 		cfg  Config
 		want string
 	}{
-		{Config{WorklogOwner: "blg-elden"}, "Elden"},
-		{Config{WorklogOwner: "blg_elden"}, "Elden"},
-		{Config{WorklogOwner: "elden"}, "Elden"},
+		{Config{WorklogOwner: "team-alex"}, "Alex"},
+		{Config{WorklogOwner: "team_alex"}, "Alex"},
+		{Config{WorklogOwner: "alex"}, "Alex"},
 		// Set explicitly for anyone whose handle is not their name.
-		{Config{WorklogOwner: "blg-elden", DisplayName: "Elden Zheng"}, "Elden Zheng"},
-		{Config{DisplayName: "  Elden  "}, "Elden"},
+		{Config{WorklogOwner: "team-alex", DisplayName: "Alex Smith"}, "Alex Smith"},
+		{Config{DisplayName: "  Alex  "}, "Alex"},
 		// Nothing to go on: the caller must refuse rather than title an issue
 		// " Meeting & ad hocs: …".
 		{Config{}, ""},
@@ -24,13 +24,13 @@ func TestMeetingTitleAndDisplayName(t *testing.T) {
 		}
 	}
 
-	cfg := Config{WorklogOwner: "blg-elden"}
+	cfg := Config{WorklogOwner: "team-alex"}
 	// The exact shape of the issues already filed — #9509 is
-	// "Elden Meeting & ad hocs: 2026-08-25".
-	if got := meetingTitle(cfg, "2026-08-25"); got != "Elden Meeting & ad hocs: 2026-08-25" {
+	// "Alex Meeting & ad hocs: 2026-08-25".
+	if got := meetingTitle(cfg, "2026-08-25"); got != "Alex Meeting & ad hocs: 2026-08-25" {
 		t.Fatalf("meeting title = %q", got)
 	}
-	if got := dailyCodeReviewTitle(cfg, "2026-09-15"); got != "Elden Code Review: 2026-09-15" {
+	if got := dailyCodeReviewTitle(cfg, "2026-09-15"); got != "Alex Code Review: 2026-09-15" {
 		t.Fatalf("code review title = %q", got)
 	}
 }
@@ -40,9 +40,9 @@ func TestIssueRefFromAnyTakesLinksOrRefs(t *testing.T) {
 	for _, c := range []struct {
 		in, want string
 	}{
-		{"https://github.com/bigledger/blg-intranet/issues/5760", "bigledger/blg-intranet#5760"},
-		{"  https://github.com/BigLedger-Support/tuhu-finance/issues/48  ", "BigLedger-Support/tuhu-finance#48"},
-		{"bigledger/blg-intranet#5760", "bigledger/blg-intranet#5760"},
+		{"https://github.com/exampleorg/sample-intranet/issues/5760", "exampleorg/sample-intranet#5760"},
+		{"  https://github.com/Example-Support/sample-finance/issues/48  ", "Example-Support/sample-finance#48"},
+		{"exampleorg/sample-intranet#5760", "exampleorg/sample-intranet#5760"},
 	} {
 		got, err := issueRefFromAny(c.in)
 		if err != nil {
@@ -52,7 +52,7 @@ func TestIssueRefFromAnyTakesLinksOrRefs(t *testing.T) {
 			t.Fatalf("%q = %q, want %q", c.in, got, c.want)
 		}
 	}
-	for _, bad := range []string{"", "   ", "just some words", "bigledger/blg-intranet", "#123"} {
+	for _, bad := range []string{"", "   ", "just some words", "exampleorg/sample-intranet", "#123"} {
 		if _, err := issueRefFromAny(bad); err == nil {
 			t.Fatalf("%q should not be accepted as an issue", bad)
 		}
@@ -66,8 +66,8 @@ func TestRefFromIssueURL(t *testing.T) {
 		in, want string
 		ok       bool
 	}{
-		{"https://github.com/bigledger/blg-int-general-task/issues/9509",
-			"bigledger/blg-int-general-task#9509", true},
+		{"https://github.com/exampleorg/sample-general-tasks/issues/9509",
+			"exampleorg/sample-general-tasks#9509", true},
 		{"https://github.com/o/r/pull/12", "o/r#12", true}, // a PR is still numbered
 		{"https://github.com/o/r/issues", "", false},
 		{"not a url", "", false},
@@ -111,11 +111,11 @@ func TestPushableWithoutIssue(t *testing.T) {
 // ensureIssueRef decides what a row needs before it can be pushed. It must not
 // go near GitHub for the cases that are already settled, or that cannot be.
 func TestEnsureIssueRefLeavesSettledRowsAlone(t *testing.T) {
-	cfg := Config{WorklogOwner: "blg-elden"}
+	cfg := Config{WorklogOwner: "team-alex"}
 
 	// Already filed: nothing to do, whatever kind it is.
 	for _, r := range []Row{
-		{"type": kindMeeting, "issue": "bigledger/blg-int-general-task#9509"},
+		{"type": kindMeeting, "issue": "exampleorg/sample-general-tasks#9509"},
 		{"type": kindIndependent, "issue": "o/r#1", "parent_repo": "o/r", "parent_title": "x"},
 		{"type": kindCommit, "issue": "o/r#1"},
 	} {

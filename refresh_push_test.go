@@ -66,7 +66,7 @@ func TestLogTabRefreshCoversEveryMonthTheWeekTouches(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{ProjectURL: "https://github.com/orgs/bigledger/projects/9"}
+	ui.cfg = Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
 
 	// A week that straddles the turn of a month needs both of them.
 	ui.weekStart = "2026-08-31" // Monday; the week runs into September
@@ -149,7 +149,7 @@ func TestRefreshTodayScoreDropsTheStatusMonth(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{ProjectURL: "https://github.com/orgs/bigledger/projects/9"}
+	ui.cfg = Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
 
 	ui.ensureProjectCache()
 	key := statusCacheKey(thisMonth())
@@ -228,7 +228,7 @@ func TestAPushDuringAFetchMarksItStale(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{ProjectURL: "https://github.com/orgs/bigledger/projects/9"}
+	ui.cfg = Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
 
 	ui.ensureProjectCache()
 	key := statusCacheKey(thisMonth())

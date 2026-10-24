@@ -9,27 +9,34 @@ import (
 	"time"
 )
 
+var boardViewURLs = []string{
+	"https://github.com/orgs/exampleorg/projects/9/views/19?visibleFields=Title&filterQuery=old",
+	"https://github.com/orgs/Example-Support/projects/1/views/66?groupedBy=Status&sumFields=Minutes&hideItemsCount=false",
+}
+
+func sampleExportConfig() Config { return Config{BoardViewURLs: boardViewURLs} }
+
 func sampleWeek() []WorklogItem {
 	return []WorklogItem{
-		{Date: "2026-08-25", Minutes: 300, Owner: "blg-elden", Status: "Done",
-			Title: "Worklog: 2026-08-25", URL: "https://github.com/BigLedger-Support/tuhu-finance/issues/72",
+		{Date: "2026-08-25", Minutes: 300, Owner: "team-alex", Status: "Done",
+			Title: "Worklog: 2026-08-25", URL: "https://github.com/Example-Support/sample-finance/issues/72",
 			ParentTitle: "Chinese translation: Internal Sales Return Applet",
-			ParentURL:   "https://github.com/BigLedger-Support/tuhu-finance/issues/48",
-			Assignees:   []string{"blg-elden"},
+			ParentURL:   "https://github.com/Example-Support/sample-finance/issues/48",
+			Assignees:   []string{"team-alex"},
 			Remarks:     "-Reverted labels\n-Moved getLabel\tinto refreshLabels()"},
-		{Date: "2026-08-24", Minutes: 240, Owner: "blg-elden", Status: "Done",
-			Title: "Worklog: 2026-08-24", URL: "https://github.com/BigLedger-Support/tuhu-finance/issues/70",
+		{Date: "2026-08-24", Minutes: 240, Owner: "team-alex", Status: "Done",
+			Title: "Worklog: 2026-08-24", URL: "https://github.com/Example-Support/sample-finance/issues/70",
 			ParentTitle: "Chinese translation: Internal Sales Return Applet",
-			ParentURL:   "https://github.com/BigLedger-Support/tuhu-finance/issues/48",
-			Assignees:   []string{"blg-elden"}},
-		{Date: "2026-08-26", Minutes: 480, Owner: "blg-elden", Status: "Done",
-			Title: "Worklog: 2026-08-26", URL: "https://github.com/bigledger/blg-sd-senwave-senheng/issues/551",
+			ParentURL:   "https://github.com/Example-Support/sample-finance/issues/48",
+			Assignees:   []string{"team-alex"}},
+		{Date: "2026-08-26", Minutes: 480, Owner: "team-alex", Status: "Done",
+			Title: "Worklog: 2026-08-26", URL: "https://github.com/exampleorg/sample-client-three/issues/551",
 			ParentTitle: "Doc Item temp feature does not save",
-			ParentURL:   "https://github.com/bigledger/blg-sd-senwave-senheng/issues/424"},
+			ParentURL:   "https://github.com/exampleorg/sample-client-three/issues/424"},
 		// No parent: a worklog written straight onto an issue. It has to stand as
 		// its own row rather than vanish out of the summary.
-		{Date: "2026-08-27", Minutes: 60, Owner: "blg-elden", Status: "Done",
-			Title: "Fix the null cap", URL: "https://github.com/bigledger/blg-intranet/issues/5760"},
+		{Date: "2026-08-27", Minutes: 60, Owner: "team-alex", Status: "Done",
+			Title: "Fix the null cap", URL: "https://github.com/exampleorg/sample-intranet/issues/5760"},
 	}
 }
 
@@ -50,7 +57,7 @@ func TestWeekByIssueGroupsOnTheParentLongestFirst(t *testing.T) {
 		t.Fatalf("two worklogs on one issue should add up: %d min over %d entries",
 			got[0].Minutes, got[0].Entries)
 	}
-	if got[0].URL != "https://github.com/BigLedger-Support/tuhu-finance/issues/48" {
+	if got[0].URL != "https://github.com/Example-Support/sample-finance/issues/48" {
 		t.Fatalf("the row should link the parent issue, got %q", got[0].URL)
 	}
 	if got[1].Minutes != 480 {
@@ -79,11 +86,11 @@ func TestWeekTSVKeepsEveryRowOnOneLine(t *testing.T) {
 		}
 	}
 	// Oldest first, the way the board downloads it.
-	if !strings.HasPrefix(lines[1], "https://github.com/BigLedger-Support/tuhu-finance/issues/48\tWorklog: 2026-08-24") {
+	if !strings.HasPrefix(lines[1], "https://github.com/Example-Support/sample-finance/issues/48\tWorklog: 2026-08-24") {
 		t.Fatalf("rows should run oldest first, got %q", lines[1])
 	}
 	// Repository is read off the URL rather than fetched.
-	if !strings.Contains(lines[1], "\tBigLedger-Support/tuhu-finance\t") {
+	if !strings.Contains(lines[1], "\tExample-Support/sample-finance\t") {
 		t.Fatalf("the repo column should come off the issue URL: %q", lines[1])
 	}
 }
@@ -91,7 +98,7 @@ func TestWeekTSVKeepsEveryRowOnOneLine(t *testing.T) {
 // The saved views carry a view id and a column set that a project URL does not,
 // so the link is kept whole and only the week and the owner are rewritten.
 func TestWeekBoardLinksRewriteOnlyTheFilter(t *testing.T) {
-	links := weekBoardLinks("blg-elden", "2026-08-24", "2026-08-30")
+	links := weekBoardLinks(sampleExportConfig(), "team-alex", "2026-08-24", "2026-08-30")
 	if len(links) != len(boardViewURLs) {
 		t.Fatalf("one link per saved view, got %d", len(links))
 	}
@@ -102,7 +109,7 @@ func TestWeekBoardLinksRewriteOnlyTheFilter(t *testing.T) {
 			t.Fatalf("link %d does not parse: %v", i, err)
 		}
 		q := u.Query()
-		want := `"worklog-owner-(blg-xxxx)":blg-elden "worklog-(date)":>=2026-08-24 "worklog-(date)":<=2026-08-30`
+		want := `"worklog-owner-(blg-xxxx)":team-alex "worklog-(date)":>=2026-08-24 "worklog-(date)":<=2026-08-30`
 		if got := q.Get("filterQuery"); got != want {
 			t.Fatalf("link %d filter = %q, want %q", i, got, want)
 		}
@@ -128,9 +135,9 @@ func TestWeekBoardLinksRewriteOnlyTheFilter(t *testing.T) {
 // to carry it or the dialog names both the same.
 func TestBoardLinkLabelNamesTheOrgProjectAndView(t *testing.T) {
 	for _, c := range []struct{ url, want string }{
-		{boardViewURLs[0], "bigledger · project 9 · view 19"},
-		{boardViewURLs[1], "BigLedger-Support · project 1 · view 66"},
-		{"https://github.com/orgs/bigledger/projects/9", "bigledger · project 9"},
+		{boardViewURLs[0], "exampleorg · project 9 · view 19"},
+		{boardViewURLs[1], "Example-Support · project 1 · view 66"},
+		{"https://github.com/orgs/exampleorg/projects/9", "exampleorg · project 9"},
 		// Not a project URL at all: shown as it stands rather than mislabelled.
 		{"https://example.com/nope", "https://example.com/nope"},
 	} {
@@ -144,12 +151,12 @@ func TestBoardLinkLabelNamesTheOrgProjectAndView(t *testing.T) {
 // it should be talked about. The TSV stays out of it — pasted into a mail body
 // it is a wall of tabs.
 func TestWeekMailTextLeadsWithBoardsThenTheSummary(t *testing.T) {
-	text := weekMailText("blg-elden", "2026-08-24", "2026-08-30", sampleWeek(), "C:\\out.tsv")
+	text := weekMailText(sampleExportConfig(), "team-alex", "2026-08-24", "2026-08-30", sampleWeek(), "C:\\out.tsv")
 
 	for _, want := range []string{
-		"Worklog 2026-08-24 to 2026-08-30 — blg-elden",
-		"/orgs/bigledger/projects/9/views/19",
-		"/orgs/BigLedger-Support/projects/1/views/66",
+		"Worklog 2026-08-24 to 2026-08-30 — team-alex",
+		"/orgs/exampleorg/projects/9/views/19",
+		"/orgs/Example-Support/projects/1/views/66",
 		"By issue (1080 min · 18h across 3 issues)",
 		// Minutes per issue, the unit the board sums in.
 		"540m",
@@ -238,7 +245,7 @@ func TestCommitsAreBucketedOnTheWorkingDayNotTheCalendarDay(t *testing.T) {
 // thing to report, not an error.
 func TestExportWeekWritesAFileEvenWithNothingOnTheBoard(t *testing.T) {
 	dir := t.TempDir()
-	path, n, text, err := exportWeek(dir, "blg-elden", "2026-08-24", "2026-08-30", nil)
+	path, n, text, err := exportWeek(sampleExportConfig(), dir, "team-alex", "2026-08-24", "2026-08-30", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

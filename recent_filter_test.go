@@ -90,7 +90,7 @@ func TestRecentShowsOnlyUnpushed(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildLogTab())
 	// The week strip holds any waiting entry dated inside the week it shows, so
 	// this list is tested with the strip parked well away from the rows below.
@@ -100,12 +100,12 @@ func TestRecentShowsOnlyUnpushed(t *testing.T) {
 	lastMonth := shiftMonth(month, -1)
 	if _, err := ui.store.AppendRows([]Row{
 		{"date": month + "-02", "minutes": "60", "type": "commit",
-			"description": "pushed already", "issue": "bigledger/repo#1",
+			"description": "pushed already", "issue": "exampleorg/repo#1",
 			"pushed_at": time.Now().Format("2006-01-02T15:04:05")},
 		{"date": month + "-03", "minutes": "90", "type": "commit",
-			"description": "still waiting", "issue": "bigledger/repo#2"},
+			"description": "still waiting", "issue": "exampleorg/repo#2"},
 		{"date": lastMonth + "-20", "minutes": "30", "type": "commit",
-			"description": "stale unpushed", "issue": "bigledger/repo#3"},
+			"description": "stale unpushed", "issue": "exampleorg/repo#3"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -143,12 +143,12 @@ func TestRecentEmptyWhenAllPushed(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildLogTab())
 
 	if _, err := ui.store.AppendRows([]Row{{
 		"date": thisMonth() + "-01", "minutes": "480", "type": "commit",
-		"description": "done", "issue": "bigledger/repo#1",
+		"description": "done", "issue": "exampleorg/repo#1",
 		"pushed_at": "2026-08-01T10:00:00",
 	}}); err != nil {
 		t.Fatal(err)
@@ -170,20 +170,20 @@ func TestPendingBubblesWrapIntoAGrid(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildLogTab())
 
 	long := strings.Repeat("Category dropdown capped at one hundred rows ", 4)
 	var groups []Group
 	for i := 0; i < 5; i++ {
 		groups = append(groups, Group{
-			Date: "2026-08-0" + string(rune('1'+i)), Issue: "bigledger/repo#" + string(rune('1'+i)),
-			Commits: []Commit{{Sha: "aaa111" + string(rune('1'+i)), Repo: "bigledger/repo"}},
+			Date: "2026-08-0" + string(rune('1'+i)), Issue: "exampleorg/repo#" + string(rune('1'+i)),
+			Commits: []Commit{{Sha: "aaa111" + string(rune('1'+i)), Repo: "exampleorg/repo"}},
 		})
 	}
 	ui.pending = PendingResult{Count: 5, Range: []string{"2026-08-01", "2026-08-05"}, Groups: groups}
 	ui.issueInfo = map[string]IssueInfo{
-		"bigledger/repo#1": {Org: "bigledger", Repo: "repo", Number: 1, Title: long},
+		"exampleorg/repo#1": {Org: "exampleorg", Repo: "repo", Number: 1, Title: long},
 	}
 	ui.renderPending()
 
@@ -202,12 +202,12 @@ func TestPendingBubblesWrapIntoAGrid(t *testing.T) {
 				len([]rune(s)), bubbleTitleChars, s)
 		}
 	}
-	// The footer carries the org-less form. The full "bigledger / repo #1" was
+	// The footer carries the org-less form. The full "exampleorg / repo #1" was
 	// wide enough to collide with the date on the same line.
 	if !contains(got, "repo #1") {
 		t.Fatalf("tile footer lost the issue ref: %v", got)
 	}
-	if contains(got, "bigledger / repo") {
+	if contains(got, "exampleorg / repo") {
 		t.Fatalf("tile footer still carries the org, which is what overflowed: %v", got)
 	}
 }
@@ -218,10 +218,10 @@ func TestShortIssueLabel(t *testing.T) {
 		ref  string
 		want string
 	}{
-		{IssueInfo{Org: "bigledger", Repo: "blg-int-general-task", Number: 6511},
-			"bigledger/blg-int-general-task#6511", "blg-int-general-task #6511"},
+		{IssueInfo{Org: "exampleorg", Repo: "sample-general-tasks", Number: 6511},
+			"exampleorg/sample-general-tasks#6511", "sample-general-tasks #6511"},
 		// Title lookup still in flight: the ref alone carries the same fields.
-		{IssueInfo{}, "bigledger/blg-intranet#42", "blg-intranet #42"},
+		{IssueInfo{}, "exampleorg/sample-intranet#42", "sample-intranet #42"},
 		// Unparseable refs are passed through rather than mangled.
 		{IssueInfo{}, "not-a-ref", "not-a-ref"},
 	}
@@ -248,7 +248,7 @@ func TestTodayProgressSourcesFromGitHub(t *testing.T) {
 
 	// With the month cached, the target is scored on GitHub's minutes (120),
 	// and the 300 sitting unpushed locally is called out, not added in.
-	ui.cfg = Config{ProjectURL: "https://github.com/orgs/bigledger/projects/9"}
+	ui.cfg = Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
 	ui.ensureProjectCache()
 	key := statusCacheKey(thisMonth())
 	ui.projItems[key] = []WorklogItem{

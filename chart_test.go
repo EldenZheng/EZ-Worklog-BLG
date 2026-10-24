@@ -19,7 +19,7 @@ func testChartDays(dates ...string) []chartDay {
 		mins := 240 + i*60
 		days = append(days, chartDay{
 			date:  d,
-			byOrg: map[string]int{"bigledger": mins},
+			byOrg: map[string]int{"exampleorg": mins},
 			total: mins,
 		})
 	}
@@ -33,7 +33,7 @@ func TestDayChartMapsPointerToDay(t *testing.T) {
 	defer a.Quit()
 
 	dates := []string{"2026-08-01", "2026-08-02", "2026-08-03", "2026-08-04"}
-	c := newDayChart(Config{Repos: []string{"bigledger"}}, testChartDays(dates...), target)
+	c := newDayChart(Config{Repos: []string{"exampleorg"}}, testChartDays(dates...), target)
 
 	for _, w := range []float32{920, 460, 1840} {
 		c.Resize(fyne.NewSize(w, 260))
@@ -62,7 +62,7 @@ func TestDayChartHoverAndClick(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 
-	c := newDayChart(Config{Repos: []string{"bigledger"}},
+	c := newDayChart(Config{Repos: []string{"exampleorg"}},
 		testChartDays("2026-08-01", "2026-08-02"), target)
 	c.Resize(fyne.NewSize(920, 260))
 
@@ -98,9 +98,9 @@ func TestDayChartBarsFollowTheWidgetSize(t *testing.T) {
 	defer a.Quit()
 
 	days := testChartDays("2026-08-01", "2026-08-02", "2026-08-03")
-	days[2].byOrg = map[string]int{"bigledger": 480, "bigledger-support": 240}
+	days[2].byOrg = map[string]int{"exampleorg": 480, "example-support": 240}
 	days[2].total = 720
-	c := newDayChart(Config{Repos: []string{"bigledger", "BigLedger-Support"}}, days, target)
+	c := newDayChart(Config{Repos: []string{"exampleorg", "Example-Support"}}, days, target)
 	r := c.CreateRenderer().(*dayChartRenderer)
 
 	measure := func(w, h float32) (barW, tall float32) {
@@ -162,7 +162,7 @@ func TestTabNamesAndIndicesMatchTheBarThatIsBuilt(t *testing.T) {
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w,
 		calMonth: "2026-08", repMonth: "2026-08"}
-	ui.cfg = Config{Repos: []string{"bigledger"}} // no project URL: stays offline
+	ui.cfg = Config{Repos: []string{"exampleorg"}} // no project URL: stays offline
 	ui.buildAllTabs()
 
 	want := []string{
@@ -192,7 +192,7 @@ func TestOpenDayOnCalendarSwitchesTabs(t *testing.T) {
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w,
 		calMonth: "2026-08", repMonth: "2026-08"}
-	ui.cfg = Config{Repos: []string{"bigledger"}} // no project URL: stays offline
+	ui.cfg = Config{Repos: []string{"exampleorg"}} // no project URL: stays offline
 	ui.buildAllTabs()
 
 	ui.openDayOnCalendar("2026-07-15")
@@ -221,16 +221,16 @@ func TestDayPanelNamesTheParentIssue(t *testing.T) {
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: "2026-08", repMonth: "2026-08"}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildStatusTab())
 
 	ui.ensureProjectCache()
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{{
 		Date: "2026-08-11", Minutes: 90, Title: "Worklog 2026-08-11",
-		URL:         "https://github.com/bigledger/blg-intranet/issues/900",
+		URL:         "https://github.com/exampleorg/sample-intranet/issues/900",
 		ParentTitle: "DOC ITEM ENHANCEMENT",
-		ParentURL:   "https://github.com/bigledger/blg-intranet/issues/42",
+		ParentURL:   "https://github.com/exampleorg/sample-intranet/issues/42",
 	}}
 	ui.projLoaded[key] = true
 	ui.selDay = "2026-08-11"
@@ -257,7 +257,7 @@ func TestDayPanelNamesTheParentIssue(t *testing.T) {
 	if link == nil {
 		t.Fatalf("the parent name should be clickable: %v", got)
 	}
-	if link.URL == nil || link.URL.String() != "https://github.com/bigledger/blg-intranet/issues/42" {
+	if link.URL == nil || link.URL.String() != "https://github.com/exampleorg/sample-intranet/issues/42" {
 		t.Fatalf("the parent link points at %v", link.URL)
 	}
 }
@@ -271,18 +271,18 @@ func TestDayPanelPutsTheBiggestWorklogOnTop(t *testing.T) {
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: "2026-08", repMonth: "2026-08"}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildStatusTab())
 
 	ui.ensureProjectCache()
 	key := statusCacheKey("2026-08")
 	ui.projItems[key] = []WorklogItem{
 		{Date: "2026-08-11", Minutes: 120, Title: "smallest",
-			URL: "https://github.com/bigledger/repo/issues/3"},
+			URL: "https://github.com/exampleorg/repo/issues/3"},
 		{Date: "2026-08-11", Minutes: 240, Title: "biggest",
-			URL: "https://github.com/bigledger/repo/issues/1"},
+			URL: "https://github.com/exampleorg/repo/issues/1"},
 		{Date: "2026-08-11", Minutes: 220, Title: "middling",
-			URL: "https://github.com/bigledger/repo/issues/2"},
+			URL: "https://github.com/exampleorg/repo/issues/2"},
 	}
 	ui.projLoaded[key] = true
 	ui.selDay = "2026-08-11"
@@ -305,7 +305,7 @@ func TestDayPanelHoldsItsPlaceWithNoSelection(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: "2026-08", repMonth: "2026-08"}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildStatusTab())
 
 	if !ui.daySide.Visible() {
@@ -346,11 +346,11 @@ func TestChartReadoutNamesTheDay(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w,
-		cfg: Config{Repos: []string{"bigledger", "BigLedger-Support"}}}
+		cfg: Config{Repos: []string{"exampleorg", "Example-Support"}}}
 
 	days := []chartDay{{
 		date:  "2026-08-03",
-		byOrg: map[string]int{"bigledger": 300, "bigledger-support": 180},
+		byOrg: map[string]int{"exampleorg": 300, "example-support": 180},
 		total: 480,
 	}}
 	body := ui.chartWithReadout(days, "2026-08-01", "2026-08-31")
@@ -366,7 +366,7 @@ func TestChartReadoutNamesTheDay(t *testing.T) {
 	}
 	chart.onHover("2026-08-03")
 	got := strings.Join(labels(body), " ")
-	for _, want := range []string{"Mon 3 Aug", "8h of 8h", "bigledger 5h", "bigledger-support 3h"} {
+	for _, want := range []string{"Mon 3 Aug", "8h of 8h", "exampleorg 5h", "example-support 3h"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("readout missing %q: %q", want, got)
 		}

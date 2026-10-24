@@ -16,21 +16,6 @@ import (
 // and a file to open. Both are built from the same fetched items the strip is
 // already showing, so what is sent is what was on screen.
 
-// boardViewURLs are the saved board views the weekly mail links to, kept whole
-// rather than rebuilt from the project URLs in Settings.
-//
-// Everything after the project number — the view id, which columns are visible,
-// what the rows are grouped by and which field is summed — is view state that a
-// project URL simply does not carry. Reconstructing a link from
-// "orgs/<org>/projects/9" would open the default view with the default columns,
-// which is not the view the mail is about. The dates and the owner in the
-// filter are the only parts that change week to week, and those are the only
-// parts rewritten.
-var boardViewURLs = []string{
-	"https://github.com/orgs/bigledger/projects/9/views/19?filterQuery=%22worklog-owner-%28blg-xxxx%29%22%3Ablg-elden+%22worklog-%28date%29%22%3A%3E%3D2026-08-17+%22worklog-%28date%29%22%3A%3C%3D2026-08-23&visibleFields=%5B%22Parent+issue%22%2C%22Title%22%2C208086921%2C%22Assignees%22%2C%22Status%22%2C209221222%2C210708320%2C209219619%5D",
-	"https://github.com/orgs/BigLedger-Support/projects/1/views/66?reload=1&filterQuery=%22worklog-owner-%28blg-xxxx%29%22%3Ablg-elden+%22worklog-%28date%29%22%3A%3E%3D2026-08-17+%22worklog-%28date%29%22%3A%3C%3D2026-08-23&groupedBy%5BcolumnId%5D=362969068&sumFields=%5B362969103%5D&hideItemsCount=false&sortedBy%5Bdirection%5D=desc&sortedBy%5BcolumnId%5D=362969068",
-}
-
 // weekBoardLinks points each saved view at one week and one owner.
 //
 // Only the filterQuery is touched. It is rewritten wholesale from
@@ -41,7 +26,11 @@ var boardViewURLs = []string{
 // A link that cannot be parsed is passed through as it stands. It is a link to
 // paste in an email, and a broken one the reader can still see beats a silently
 // missing board.
-func weekBoardLinks(owner, fromDate, toDate string) []string {
+func weekBoardLinks(cfg Config, owner, fromDate, toDate string) []string {
+	boardViewURLs := cfg.BoardViewURLs
+	if len(boardViewURLs) == 0 {
+		boardViewURLs = projectURLs(cfg)
+	}
 	out := make([]string, 0, len(boardViewURLs))
 	for _, raw := range boardViewURLs {
 		u, err := url.Parse(raw)
@@ -50,7 +39,7 @@ func weekBoardLinks(owner, fromDate, toDate string) []string {
 			continue
 		}
 		q := u.Query()
-		q.Set("filterQuery", worklogProjectFilter(orDefault(owner, "blg-elden"), fromDate, toDate))
+		q.Set("filterQuery", worklogProjectFilter(strings.TrimSpace(owner), fromDate, toDate))
 		u.RawQuery = q.Encode()
 		out = append(out, u.String())
 	}
@@ -186,12 +175,12 @@ func tsvCell(s string) string {
 //
 // The TSV is not in here. It goes in the attached file, where a spreadsheet can
 // open it; pasted into a mail body it is a wall of tab-separated remarks.
-func weekMailText(owner, fromDate, toDate string, items []WorklogItem, tsvPath string) string {
+func weekMailText(cfg Config, owner, fromDate, toDate string, items []WorklogItem, tsvPath string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Worklog %s to %s — %s\n\n", fromDate, toDate, orDefault(owner, "blg-elden"))
+	fmt.Fprintf(&b, "Worklog %s to %s — %s\n\n", fromDate, toDate, strings.TrimSpace(owner))
 
 	b.WriteString("Boards:\n")
-	for _, link := range weekBoardLinks(owner, fromDate, toDate) {
+	for _, link := range weekBoardLinks(cfg, owner, fromDate, toDate) {
 		b.WriteString("  " + link + "\n")
 	}
 
@@ -244,10 +233,10 @@ func downloadsDir(fallback string) string {
 
 // exportWeek writes the week's TSV and builds the mail text that goes with it.
 // It returns the path written, the number of entries in it, and that text.
-func exportWeek(dir, owner, fromDate, toDate string, items []WorklogItem) (string, int, string, error) {
+func exportWeek(cfg Config, dir, owner, fromDate, toDate string, items []WorklogItem) (string, int, string, error) {
 	path := filepath.Join(dir, fmt.Sprintf("worklog-%s-to-%s.tsv", fromDate, toDate))
 	if err := os.WriteFile(path, []byte(weekTSV(items)), 0o644); err != nil {
 		return "", 0, "", err
 	}
-	return path, len(items), weekMailText(owner, fromDate, toDate, items, path), nil
+	return path, len(items), weekMailText(cfg, owner, fromDate, toDate, items, path), nil
 }

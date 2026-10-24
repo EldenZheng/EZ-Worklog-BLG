@@ -33,7 +33,7 @@ func TestProbe(t *testing.T) {
 		}
 	}()
 	store := newStore(t.TempDir())
-	cfg := Config{Repos: []string{"bigledger"}, LookbackDays: 7}
+	cfg := Config{Repos: []string{"exampleorg"}, LookbackDays: 7}
 	res, err := store.FetchPending(cfg)
 	if err != nil {
 		t.Logf("FetchPending error: %v", err)
@@ -51,8 +51,8 @@ func TestProbe(t *testing.T) {
 // Read a month back off the project board and total it per day, which is what
 // the Status calendar is drawn from.
 func TestProj(t *testing.T) {
-	cfg := Config{ProjectURL: "https://github.com/orgs/bigledger/projects/9"}
-	items, err := FetchProjectWorklogs(cfg, "blg-elden", "2026-07-01", "2026-07-31")
+	cfg := Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
+	items, err := FetchProjectWorklogs(cfg, "team-alex", "2026-07-01", "2026-07-31")
 	if err != nil {
 		t.Fatalf("error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestProj(t *testing.T) {
 // Live check against the sub-issue a failed push left behind: a retry must find
 // it instead of creating a second one.
 func TestFindSubIssueLive(t *testing.T) {
-	_, _, _, node, err := getIssueContext("bigledger/blg-int-general-task#6511")
+	_, _, _, node, err := getIssueContext("exampleorg/sample-general-tasks#6511")
 	if err != nil {
 		t.Skipf("gh unavailable: %v", err)
 	}

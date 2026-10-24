@@ -29,7 +29,7 @@ func pendingUI(t *testing.T) *UI {
 	t.Helper()
 	w := test.NewApp().NewWindow("t")
 	ui := &UI{store: newStore(t.TempDir()), win: w, calMonth: thisMonth(), repMonth: thisMonth()}
-	ui.cfg = Config{Repos: []string{"bigledger"}}
+	ui.cfg = Config{Repos: []string{"exampleorg"}}
 	w.SetContent(ui.buildLogTab())
 	return ui
 }
@@ -41,11 +41,11 @@ func TestPendingBubbleLeadsWithTheIssueTitle(t *testing.T) {
 	ui := pendingUI(t)
 	defer fyne.CurrentApp().Quit()
 
-	g := Group{Date: "2026-08-10", Issue: "bigledger/blg-intranet#42",
-		Commits: []Commit{{Sha: "abc1234", Repo: "bigledger/blg-intranet",
+	g := Group{Date: "2026-08-10", Issue: "exampleorg/sample-intranet#42",
+		Commits: []Commit{{Sha: "abc1234", Repo: "exampleorg/sample-intranet",
 			Message: "cap the dropdown", Full: "cap the dropdown"}}}
 	ui.issueInfo = map[string]IssueInfo{
-		"bigledger/blg-intranet#42": {Org: "bigledger", Repo: "blg-intranet", Number: 42,
+		"exampleorg/sample-intranet#42": {Org: "exampleorg", Repo: "sample-intranet", Number: 42,
 			Title: "Category dropdown capped at 100 rows"},
 	}
 
@@ -61,13 +61,13 @@ func TestPendingBubbleLeadsWithTheIssueTitle(t *testing.T) {
 	// the heading and then being replaced a moment later.
 	ui.issueInfo = map[string]IssueInfo{}
 	got = labels(ui.groupBubble(g, false))
-	if !contains(got, "bigledger/blg-intranet#42") {
+	if !contains(got, "exampleorg/sample-intranet#42") {
 		t.Fatalf("with no title the ref should lead: %v", got)
 	}
 
 	// No issue at all: the commit is the only thing that can name the tile.
 	bare := Group{Date: "2026-08-10", Commits: []Commit{
-		{Sha: "def5678", Repo: "bigledger/other", Message: "tidy imports", Full: "tidy imports"}}}
+		{Sha: "def5678", Repo: "exampleorg/other", Message: "tidy imports", Full: "tidy imports"}}}
 	if got = labels(ui.groupBubble(bare, false)); !contains(got, "tidy imports") {
 		t.Fatalf("a commit with no issue must still name itself: %v", got)
 	}
@@ -82,10 +82,10 @@ func TestIgnoreAndRestoreAPendingCommit(t *testing.T) {
 	ui.pending = PendingResult{
 		Count: 2, Range: []string{"2026-08-04", "2026-08-10"},
 		Groups: []Group{
-			{Date: "2026-08-10", Issue: "bigledger/repo#1",
-				Commits: []Commit{{Sha: "aaa1111", Repo: "bigledger/repo", Message: "keep me"}}},
-			{Date: "2026-08-09", Issue: "bigledger/repo#2",
-				Commits: []Commit{{Sha: "bbb2222", Repo: "bigledger/repo", Message: "skip me"}}},
+			{Date: "2026-08-10", Issue: "exampleorg/repo#1",
+				Commits: []Commit{{Sha: "aaa1111", Repo: "exampleorg/repo", Message: "keep me"}}},
+			{Date: "2026-08-09", Issue: "exampleorg/repo#2",
+				Commits: []Commit{{Sha: "bbb2222", Repo: "exampleorg/repo", Message: "skip me"}}},
 		},
 	}
 	ui.renderPending()
@@ -143,8 +143,8 @@ func TestIgnoreAndRestoreAPendingCommit(t *testing.T) {
 // the list can offer it back without another round trip to GitHub.
 func TestGroupPendingMarksIgnoredWithoutDropping(t *testing.T) {
 	commits := []Commit{
-		{Sha: "aaa1111", Date: "2026-08-09", Issue: "bigledger/repo#1", Message: "keep"},
-		{Sha: "bbb2222", Date: "2026-08-09", Issue: "bigledger/repo#2", Message: "skip"},
+		{Sha: "aaa1111", Date: "2026-08-09", Issue: "exampleorg/repo#1", Message: "keep"},
+		{Sha: "bbb2222", Date: "2026-08-09", Issue: "exampleorg/repo#2", Message: "skip"},
 	}
 	groups := groupPending(commits, map[string]bool{}, map[string]bool{"bbb2222": true})
 	if len(groups) != 2 {

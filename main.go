@@ -360,7 +360,7 @@ func (ui *UI) loadPending(force bool) {
 	}
 	if len(ui.cfg.Repos) == 0 {
 		ui.pendingBox.Objects = []fyne.CanvasObject{
-			widget.NewLabel("Add a repo or org to scan in Settings (e.g. bigledger)."),
+			widget.NewLabel("Add a repo or org to scan in Settings (e.g. exampleorg)."),
 		}
 		ui.pendingBox.Refresh()
 		relayout(ui.logBody)
@@ -487,7 +487,7 @@ func (ui *UI) ensureWeekCommitCache() {
 }
 
 // loadCommitIssueInfos resolves the parent-issue titles behind the fetched
-// commits, so a bubble labelled "bigledger/blg-intranet#42" gains its title.
+// commits, so a bubble labelled "exampleorg/sample-intranet#42" gains its title.
 // Piggybacks the same issueInfo cache pendings use, so an issue seen on both
 // tabs only fetches once. Rides on the caller's composer as its final phase.
 func (ui *UI) loadCommitIssueInfos(commits []Commit, week string, composer *progressComposer, weight float64, finish func()) {
@@ -1019,9 +1019,6 @@ func main() {
 	if !has {
 		ui.tabs.SelectIndex(settingsTabIndex) // Settings first run
 	}
-	if os.Getenv("WORKLOG_AUTOFETCH") == "1" {
-		ui.cfg.Repos = []string{"bigledger"} // smoke-test override
-	}
 	// "Log Work" is the tab shown at startup, so OnSelected never fires for it.
 	// Kick the first fetch off here, after a beat, so the window is up before
 	// the list starts changing under it.
@@ -1263,7 +1260,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 
 	// "Worklog": an issue that already exists.
 	mIssue := widget.NewEntry()
-	mIssue.SetPlaceHolder("https://github.com/bigledger/repo/issues/123  or  bigledger/repo#123")
+	mIssue.SetPlaceHolder("https://github.com/exampleorg/repo/issues/123  or  exampleorg/repo#123")
 	otherRow := labeled("Issue link", mIssue)
 	otherRow.Hide()
 
@@ -1271,7 +1268,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	// The linked issue is resolved from GitHub's metadata or the PR's Refs text;
 	// a direct issue link remains accepted when a PR names none or several.
 	mReviewPR := widget.NewEntry()
-	mReviewPR.SetPlaceHolder("https://github.com/bigledger/repo/pull/123  (or paste the issue link directly)")
+	mReviewPR.SetPlaceHolder("https://github.com/exampleorg/repo/pull/123  (or paste the issue link directly)")
 	mReviewTarget := widget.NewLabel("")
 	mReviewTarget.Wrapping = fyne.TextWrapWord
 	reviewLookupVersion := 0
@@ -1415,7 +1412,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		input := &bulkReviewInput{
 			pr: widget.NewEntry(), mins: widget.NewEntry(), issue: widget.NewLabel(""),
 		}
-		input.pr.SetPlaceHolder("https://github.com/bigledger/repo/pull/123")
+		input.pr.SetPlaceHolder("https://github.com/exampleorg/repo/pull/123")
 		input.mins.SetPlaceHolder("10")
 		input.issue.Wrapping = fyne.TextWrapWord
 		input.pr.OnChanged = func(source string) {
@@ -1501,8 +1498,11 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		return "Worklog: " + iso
 	}
 	bulkReviewFilingHint := func(iso string) string {
+		if !validRepo(ui.cfg.BulkCodeReviewRepo) {
+			return "Set the bulk review repository in Settings before pushing."
+		}
 		return fmt.Sprintf("Creates/reuses its own issue in %s: %s.",
-			bulkCodeReviewRepo, dailyCodeReviewTitle(ui.cfg, iso))
+			ui.cfg.BulkCodeReviewRepo, dailyCodeReviewTitle(ui.cfg, iso))
 	}
 
 	// Both buttons share this closure. push=false saves a draft (like the popup
@@ -1924,7 +1924,7 @@ func (ui *UI) renderPending() {
 	// second round trip. They just do not belong in the count of work to do.
 	//
 	// The key counts every commit fetched, including the orgs switched off: it
-	// is how they get switched back on, and "bigledger (0)" beside a list that
+	// is how they get switched back on, and "exampleorg (0)" beside a list that
 	// is only hiding them would be wrong twice over.
 	byOrg := map[string]int{}
 	var live, hidden []Group
@@ -2265,7 +2265,7 @@ func (ui *UI) groupBubble(g Group, underHeading bool) fyne.CanvasObject {
 }
 
 // shortIssueLabel drops the org from a ref. Every repo in view belongs to the
-// same org, so "blg-int-general-task #6511" says the same as the full label in
+// same org, so "sample-general-tasks #6511" says the same as the full label in
 // half the tile width.
 func shortIssueLabel(info IssueInfo, ref string) string {
 	if info.Repo != "" {
@@ -2576,7 +2576,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	issE.SetPlaceHolder("owner/repo#123")
 	parentRepoE := widget.NewEntry()
 	parentRepoE.SetText(r["parent_repo"])
-	parentRepoE.SetPlaceHolder("bigledger/repository")
+	parentRepoE.SetPlaceHolder("exampleorg/repository")
 	parentTitleE := widget.NewEntry()
 	parentTitleE.SetText(r["parent_title"])
 	parentTitleE.SetPlaceHolder("Title for the standalone task")
@@ -4022,7 +4022,7 @@ func (ui *UI) drawReport() {
 	// so a period never gets paid for work an earlier report already paid for.
 	carried := weekendSupportIssues(ui.shownItems(runUp)) % supportSetSize
 	supportIssues := weekendSupportIssues(items)
-	supportSets, supportBonus := weekendSupportBonus(carried, supportIssues)
+	supportSets, supportBonus := weekendSupportBonus(carried, supportIssues, ui.cfg.SupportSetPay)
 	totalReceivable := rep.Receivable + supportBonus
 
 	// Projected receivable is what the period would pay once every draft on
@@ -4073,6 +4073,9 @@ func (ui *UI) drawReport() {
 		supportDetail += fmt.Sprintf(", %d carry to next", left)
 	}
 	supportNote := "Weekend support bonus (" + supportDetail + ")"
+	if ui.cfg.SupportSetPay == 0 {
+		supportNote += " — set the support payment in Settings"
+	}
 
 	// The yellow "projected" tile sits beside the settled one so the two
 	// figures read as a pair — this-is-yours-now next to this-is-yours-once-
@@ -4274,14 +4277,22 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	user := widget.NewEntry()
 	user.SetPlaceHolder("auto-detected from gh — leave blank")
 	owner := widget.NewEntry()
-	owner.SetPlaceHolder("blg-elden")
+	owner.SetPlaceHolder("team-alex")
 	// The name a meeting issue is titled with. Left blank it comes off the
 	// worklog owner, which is right for a handle that is a name.
 	dispName := widget.NewEntry()
 	repos := widget.NewMultiLineEntry()
 	repos.SetMinRowsVisible(3)
-	repos.SetPlaceHolder("bigledger  (whole org)\nbigledger/blg-intranet\none per line, or comma-separated")
+	repos.SetPlaceHolder("exampleorg  (whole org)\nexampleorg/repository\none per line, or comma-separated")
 	sal := widget.NewEntry()
+	supportPay := widget.NewEntry()
+	meetingDest := widget.NewEntry()
+	meetingDest.SetPlaceHolder("owner/repository")
+	reviewDest := widget.NewEntry()
+	reviewDest.SetPlaceHolder("owner/repository")
+	boardViews := widget.NewMultiLineEntry()
+	boardViews.SetMinRowsVisible(2)
+	boardViews.SetPlaceHolder("https://github.com/orgs/exampleorg/projects/1/views/1")
 	cur := widget.NewEntry()
 	cur.SetPlaceHolder("RM")
 	disp := widget.NewEntry()
@@ -4294,7 +4305,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	// them, so work logged against a second org's project still counts.
 	projURL := widget.NewMultiLineEntry()
 	projURL.SetMinRowsVisible(3)
-	projURL.SetPlaceHolder("https://github.com/orgs/bigledger/projects/9")
+	projURL.SetPlaceHolder("https://github.com/orgs/exampleorg/projects/9")
 	msg := widget.NewLabel("")
 
 	// preload
@@ -4319,7 +4330,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	}
 	owner.SetText(c.WorklogOwner)
 	dispName.SetText(c.DisplayName)
-	dispName.SetPlaceHolder(orDefault(displayName(c), "Elden") + "  — from your worklog owner")
+	dispName.SetPlaceHolder(orDefault(displayName(c), "Your name") + "  — from your worklog owner")
 	repos.SetText(strings.Join(c.Repos, "\n"))
 	// Left blank when unset rather than pre-filled with a number: a figure
 	// already in the box is a figure that gets saved without being read, and
@@ -4327,6 +4338,12 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	if c.BaseSalary != 0 {
 		sal.SetText(strconv.FormatFloat(c.BaseSalary, 'f', -1, 64))
 	}
+	if c.SupportSetPay != 0 {
+		supportPay.SetText(strconv.FormatFloat(c.SupportSetPay, 'f', -1, 64))
+	}
+	meetingDest.SetText(c.MeetingRepo)
+	reviewDest.SetText(c.BulkCodeReviewRepo)
+	boardViews.SetText(strings.Join(c.BoardViewURLs, "\n"))
 	cur.SetText(orDefault(c.Currency, "RM"))
 	disp.SetText(orDefault(c.DisplayCurrency, "USD"))
 	if c.LookbackDays > 0 {
@@ -4365,7 +4382,31 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	refreshRateReadout()
 
 	save := widget.NewButton("Save settings", func() {
-		salF, _ := strconv.ParseFloat(strings.TrimSpace(sal.Text), 64)
+		salF, err := parsePaySetting(sal.Text)
+		if err != nil {
+			msg.SetText("Base salary: " + err.Error())
+			return
+		}
+		supportF, err := parsePaySetting(supportPay.Text)
+		if err != nil {
+			msg.SetText("Support payment: " + err.Error())
+			return
+		}
+		for _, field := range []struct{ name, value string }{
+			{"Meeting repository", meetingDest.Text}, {"Bulk review repository", reviewDest.Text},
+		} {
+			if strings.TrimSpace(field.value) != "" && !validRepo(field.value) {
+				msg.SetText(field.name + ": enter owner/repo, or leave blank.")
+				return
+			}
+		}
+		views := configuredLines(boardViews.Text)
+		for _, view := range views {
+			if _, err := parseProjectRef(view); err != nil {
+				msg.SetText("Board view URLs: enter a GitHub project or saved view URL on each line.")
+				return
+			}
+		}
 		backN, _ := strconv.Atoi(strings.TrimSpace(back.Text))
 		if backN < 1 {
 			backN = 7
@@ -4388,6 +4429,10 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		newCfg.DisplayName = strings.TrimSpace(dispName.Text)
 		newCfg.Repos = repoList
 		newCfg.BaseSalary = salF
+		newCfg.SupportSetPay = supportF
+		newCfg.MeetingRepo = strings.TrimSpace(meetingDest.Text)
+		newCfg.BulkCodeReviewRepo = strings.TrimSpace(reviewDest.Text)
+		newCfg.BoardViewURLs = views
 		newCfg.Currency = orDefault(strings.TrimSpace(cur.Text), "RM")
 		newCfg.DisplayCurrency = strings.ToUpper(strings.TrimSpace(disp.Text))
 		newCfg.LookbackDays = backN
@@ -4537,6 +4582,11 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	fieldsCol := container.NewVBox(
 		labeledHint("Repos and orgs", "One per line, or comma-separated. A bare org name scans every repo it owns.", repos),
 		labeledHint("Project board URLs", "One per line. Status and Report read every board on the list, filtered to the worklog owner above.", projURL),
+		labeledHint("Board view URLs", "Optional saved views for weekly links. Blank uses the project boards above.", boardViews),
+		container.NewGridWithColumns(2,
+			labeledHint("Meeting repository", "Destination for daily meeting issues (owner/repo).", meetingDest),
+			labeledHint("Bulk review repository", "Destination for daily bulk review issues (owner/repo).", reviewDest),
+		),
 	)
 	legendCol := container.NewVBox(
 		widget.NewLabelWithStyle("Orgs", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -4553,6 +4603,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 			labeledHint("Currency", "Currency the salary is paid in.", cur),
 			labeledHint("Display in", "Also show pay in this currency.", disp),
 		),
+		labeledHint("Support payment per set", "Paid per seven qualifying support issues, in the salary currency. Blank means unset.", supportPay),
 	)
 	worklogSection := container.NewVBox(
 		sectionTitle("Worklog"),

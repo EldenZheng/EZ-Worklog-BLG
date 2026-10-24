@@ -77,7 +77,7 @@ func (ui *UI) drawCommitList() {
 
 	if len(ui.cfg.Repos) == 0 {
 		ui.commitBox.Objects = []fyne.CanvasObject{
-			widget.NewLabel("Add a repo or org to scan in Settings (e.g. bigledger)."),
+			widget.NewLabel("Add a repo or org to scan in Settings (e.g. exampleorg)."),
 		}
 		ui.commitBox.Refresh()
 		relayout(ui.commitBody)
