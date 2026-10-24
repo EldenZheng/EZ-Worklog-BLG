@@ -17,6 +17,7 @@ import (
 type loadingIndicator struct {
 	bar         *widget.ProgressBarInfinite
 	percent     *widget.ProgressBar
+	bars        *container.ThemeOverride
 	caption     *widget.Label
 	percentText *widget.Label
 	view        *fyne.Container
@@ -74,7 +75,7 @@ func newLoadingIndicator() *loadingIndicator {
 
 	view := container.NewVBox(bars, captionRow)
 	view.Hide()
-	return &loadingIndicator{bar: bar, percent: percent, caption: caption, percentText: percentText, view: view}
+	return &loadingIndicator{bar: bar, percent: percent, bars: bars, caption: caption, percentText: percentText, view: view}
 }
 
 func (p *loadingIndicator) setActive(active bool) bool {
@@ -85,6 +86,11 @@ func (p *loadingIndicator) setActive(active bool) bool {
 		p.view.Show()
 		p.percent.Hide()
 		p.percentText.SetText("")
+		// While hidden, Fyne's cache expires the bars' renderers and drops the
+		// theme override with them. Showing the bar first would rebuild it in
+		// stock blue, and a running infinite bar never repaints its colour, so
+		// re-apply the override while the bar is still stopped.
+		p.bars.Refresh()
 		p.bar.Show()
 		p.bar.Start()
 	} else {
@@ -149,6 +155,9 @@ func (p *loadingIndicator) showProgress(active bool, state fetchProgress) bool {
 		p.percentText.SetText(fmt.Sprintf("%d%%", int(frac*100+0.5)))
 	} else {
 		p.percent.Hide()
+		if !p.bar.Visible() {
+			p.bars.Refresh() // same expired-override repaint as setActive
+		}
 		p.bar.Show()
 		p.bar.Start()
 		p.animCurrent = 0
