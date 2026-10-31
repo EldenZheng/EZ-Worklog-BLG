@@ -129,7 +129,7 @@ func (compactPushLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 }
 
 func goldChoice(control fyne.CanvasObject) fyne.CanvasObject {
-	return container.NewThemeOverride(control, radioTheme{Theme: theme.Current()})
+	return container.NewThemeOverride(animatedChoice(control), radioTheme{Theme: theme.Current()})
 }
 
 func (t pillTheme) Size(name fyne.ThemeSizeName) float32 {
@@ -179,6 +179,7 @@ func newPillTabs(items ...*container.TabItem) *pillTabs {
 	t := &pillTabs{Items: items}
 	t.ExtendBaseWidget(t)
 	row := container.NewHBox()
+	right := container.NewHBox()
 	var settings fyne.CanvasObject
 	for i, item := range items {
 		i := i
@@ -189,7 +190,11 @@ func newPillTabs(items ...*container.TabItem) *pillTabs {
 			button.SetText("")
 			settings = container.NewCenter(button)
 		} else {
-			row.Add(button)
+			if item.Text == kanbanTabName || item.Text == plannerTabName {
+				right.Add(button)
+			} else {
+				row.Add(button)
+			}
 		}
 		item.Content.Hide()
 	}
@@ -199,7 +204,10 @@ func newPillTabs(items ...*container.TabItem) *pillTabs {
 		t.page.Add(items[0].Content)
 	}
 	// Keep every page reachable on a narrow window without compressing labels.
-	bar := container.NewBorder(nil, nil, nil, settings, container.NewHScroll(row))
+	if settings != nil {
+		right.Add(settings)
+	}
+	bar := container.NewBorder(nil, nil, nil, right, container.NewHScroll(row))
 	header := container.NewPadded(container.NewThemeOverride(bar, pillTheme{Theme: goldTheme{Theme: theme.DefaultTheme()}}))
 	t.body = container.NewBorder(header, nil, nil, nil, t.page)
 	return t

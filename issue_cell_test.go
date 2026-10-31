@@ -217,16 +217,16 @@ func TestRowTileShowsRawMinutes(t *testing.T) {
 	}
 }
 
-func TestDeleteConfirmationUsesWideCompactPopup(t *testing.T) {
+func TestDeleteConfirmationUsesCompactPopup(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
 	w.Resize(fyne.NewSize(1200, 800))
 	ui := &UI{store: newStore(t.TempDir()), win: w}
 
-	sz := ui.compactPopupSize(widget.NewLabel("Delete this entry?"))
-	if sz.Width < 700 || sz.Height >= 400 {
-		t.Fatalf("delete confirmation should request a wide but compact size, got %v", sz)
+	sz := ui.removalPopupSize(widget.NewLabel("Delete this entry?"))
+	if sz.Width > 640 || sz.Width < 400 || sz.Height >= 400 {
+		t.Fatalf("delete confirmation should use a compact size, got %v", sz)
 	}
 	ui.confirmDelete(Row{"id": "1"}, func() {})
 	if w.Canvas().Overlays().Top() == nil {

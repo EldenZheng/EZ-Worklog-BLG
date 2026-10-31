@@ -2133,10 +2133,14 @@ func lastLine(s string) string {
 // standard "Worklog: <date>"; code-review entries pass "Code Review: <date>"
 // so the sub-issue is named for what it is on the board.
 //
+// issueBody is the sub-issue's description when it differs from the remarks.
+// Empty means the remarks are the description too, cut to remarkCap as they
+// always were.
+//
 // The variadic progress callbacks receive fetchProgress events at each named
 // step, so a push spinner can render "Creating sub-issue — 40%" instead of
 // a bare wheel. done is out of 100 in every emit — the caller need not scale.
-func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, resume, subTitleBase string, progress ...func(fetchProgress)) (PushResult, error) {
+func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBody, mode, resume, subTitleBase string, progress ...func(fetchProgress)) (PushResult, error) {
 	emit := func(done int, stage string) {
 		p := fetchProgress{Done: done, Total: 100, Stage: stage}
 		for _, f := range progress {
@@ -2160,6 +2164,12 @@ func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, mode, re
 	body := remarks
 	if len(body) > remarkCap {
 		body = body[:remarkCap]
+	}
+	if strings.TrimSpace(issueBody) != "" {
+		body = issueBody
+		if len(body) > bodyCap {
+			body = body[:bodyCap]
+		}
 	}
 
 	if mode == "subissue" {

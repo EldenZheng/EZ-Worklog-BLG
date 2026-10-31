@@ -126,10 +126,16 @@ type meterMotion struct {
 }
 
 func (ui *UI) progressBar(slot, identity string, byOrg, draft map[string]int, goal int, height float32) fyne.CanvasObject {
+	return ui.progressBarWithConfig(ui.cfg, slot, identity, byOrg, draft, goal, height)
+}
+
+func (ui *UI) progressBarWithConfig(cfg Config, slot, identity string, byOrg, draft map[string]int, goal int, height float32) fyne.CanvasObject {
+	return ui.progressBarParts(slot, identity, meterParts(cfg, byOrg, draft, goal), height)
+}
+func (ui *UI) progressBarParts(slot, identity string, parts []meterPart, height float32) fyne.CanvasObject {
 	if ui.meters == nil {
 		ui.meters = map[string]*meterMotion{}
 	}
-	parts := meterParts(ui.cfg, byOrg, draft, goal)
 	m := ui.meters[slot]
 	if m == nil || m.identity != identity {
 		if m != nil {
@@ -155,6 +161,9 @@ func (ui *UI) progressBar(slot, identity string, byOrg, draft map[string]int, go
 		owner := logListTabName
 		if strings.HasPrefix(slot, "strip/") {
 			owner = logWorkTabName
+		}
+		if strings.HasPrefix(slot, "planner/") {
+			owner = plannerTabName
 		}
 		if slot == "detail" {
 			owner = statusTabName

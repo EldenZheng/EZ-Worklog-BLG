@@ -18,6 +18,9 @@ const (
 	target    = 480  // payable minutes per day
 	divisor   = 21   // base salary covers this many working days
 	remarkCap = 1024 // GitHub project text field cutoff
+	// bodyCap is GitHub's own limit on an issue body, the only ceiling a
+	// description split off from the remarks still has.
+	bodyCap = 65536
 )
 
 // fieldOrder is the exact CSV column order, matching the Python version.
@@ -25,32 +28,37 @@ const (
 // issue it belongs under does not exist yet, and is created on the first push
 // rather than when the entry is saved. Nothing reaches GitHub until you push,
 // which is the rest of the app's bargain too.
+//
+// issue_body is the sub-issue's description when it was split off from the
+// worklog remarks. Empty means the two are one text, which is every row
+// written before the split existed and every row that never outgrew remarkCap.
 var fieldOrder = []string{
 	"id", "date", "minutes", "type", "description", "refs", "issue",
 	"owner", "remarks", "mode", "issue_url", "item_id", "pushed_at", "logged_at",
-	"parent_repo", "parent_title", "issue_title",
+	"parent_repo", "parent_title", "issue_body", "issue_title",
 }
 
 // Config mirrors config.json so data carries over from the Python app.
 type Config struct {
-	GithubAuthor       string   `json:"github_author"`
-	Repos              []string `json:"repos"`
-	BaseSalary         float64  `json:"base_salary_per_21_days"`
-	SupportSetPay      float64  `json:"support_set_pay"`
-	MeetingRepo        string   `json:"meeting_repo"`
-	BulkCodeReviewRepo string   `json:"bulk_code_review_repo"`
-	BoardViewURLs      []string `json:"board_view_urls"`
-	Currency           string   `json:"currency"`
-	DisplayCurrency    string   `json:"display_currency"`
-	FxRate             float64  `json:"fx_rate"`
-	FxUpdated          string   `json:"fx_updated"`
-	LookbackDays       int      `json:"lookback_days"`
-	WorklogOwner       string   `json:"worklog_owner"`
-	DefaultMode        string   `json:"default_mode"`
-	AnthropicAPIKey    string   `json:"anthropic_api_key"`
-	AnthropicModel     string   `json:"anthropic_model"`
-	ProjectURL         string   `json:"project_url"`
-	ExtraProjectURLs   []string `json:"extra_project_urls"`
+	GithubAuthor       string         `json:"github_author"`
+	Repos              []string       `json:"repos"`
+	BaseSalary         float64        `json:"base_salary_per_21_days"`
+	SupportSetPay      float64        `json:"support_set_pay"`
+	MeetingRepo        string         `json:"meeting_repo"`
+	BulkCodeReviewRepo string         `json:"bulk_code_review_repo"`
+	BoardViewURLs      []string       `json:"board_view_urls"`
+	KanbanBoards       []kanbanSource `json:"kanban_boards"`
+	Currency           string         `json:"currency"`
+	DisplayCurrency    string         `json:"display_currency"`
+	FxRate             float64        `json:"fx_rate"`
+	FxUpdated          string         `json:"fx_updated"`
+	LookbackDays       int            `json:"lookback_days"`
+	WorklogOwner       string         `json:"worklog_owner"`
+	DefaultMode        string         `json:"default_mode"`
+	AnthropicAPIKey    string         `json:"anthropic_api_key"`
+	AnthropicModel     string         `json:"anthropic_model"`
+	ProjectURL         string         `json:"project_url"`
+	ExtraProjectURLs   []string       `json:"extra_project_urls"`
 	// DisplayName is the name a meeting issue is titled with — "Alex" in
 	// "Alex Meeting & ad hocs: 2026-08-25". Blank means derive it from the
 	// worklog owner; see displayName.

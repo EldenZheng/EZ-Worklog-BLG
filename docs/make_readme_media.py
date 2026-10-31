@@ -1,13 +1,14 @@
 """Finish the README media from the captures readme_demo_test.go writes.
 
     python docs/make_readme_media.py docs/screenshots <frames dir> docs
+    python docs/make_readme_media.py docs/screenshots <frames dir> docs --only kanban planner
 
 Crops the logging popup stills to the popup, draws the callout on the minutes
 field, and stitches each recorded walkthrough into a GIF with a drawn pointer —
 the off-screen renderer has no mouse of its own.
 """
+import argparse
 import json
-import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
@@ -16,7 +17,12 @@ GIF_WIDTH = 1160  # a little over the README column, so text stays crisp on hi-d
 GOLD = (232, 182, 58)
 
 # Each recording in the frames dir, and the GIF it becomes.
-RECORDINGS = {"popup": "demo.gif", "drag": "drag-drop.gif"}
+RECORDINGS = {
+    "popup": "demo.gif",
+    "drag": "drag-drop.gif",
+    "kanban": "kanban.gif",
+    "planner": "sprint-calendar.gif",
+}
 
 
 def font(size):
@@ -102,6 +108,17 @@ def gif(frames_dir, dst):
 
 
 if __name__ == "__main__":
-    shots, frames, docs = (Path(a) for a in sys.argv[1:4])
-    crops = {name: gif(frames / name, docs / out) for name, out in RECORDINGS.items()}
-    stills(shots, crops["popup"])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("screenshots", type=Path)
+    parser.add_argument("frames", type=Path)
+    parser.add_argument("docs", type=Path)
+    parser.add_argument("--only", nargs="+", choices=RECORDINGS)
+    args = parser.parse_args()
+    args.docs.mkdir(parents=True, exist_ok=True)
+    crops = {}
+    for name in args.only or RECORDINGS:
+        dst = args.docs / RECORDINGS[name]
+        crops[name] = gif(args.frames / name, dst)
+        print(f"{dst}: {dst.stat().st_size:,} bytes")
+    if "popup" in crops:
+        stills(args.screenshots, crops["popup"])

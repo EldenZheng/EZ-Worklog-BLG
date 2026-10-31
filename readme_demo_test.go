@@ -6,7 +6,7 @@ package main
 // screenshots and the frames of its animations. Nothing here reaches GitHub
 // and nothing personal is drawn.
 //
-//	DEMO_OUT=docs/screenshots DEMO_FRAMES=<scratch dir> go test -tags demo -run TestReadmeDemoFrames .
+//	DEMO_OUT=docs/screenshots DEMO_FRAMES=<scratch dir> go test -tags 'ci,demo' -run '^TestReadme(Demo|PlannerDemo)Frames$' .
 //	python docs/make_readme_media.py docs/screenshots <scratch dir> docs
 
 import (

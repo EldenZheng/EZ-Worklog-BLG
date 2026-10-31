@@ -57,10 +57,12 @@ func (t *tappable) Tapped(_ *fyne.PointEvent) {
 // ---- app state ----
 
 type UI struct {
-	store  *Store
-	cfg    Config
-	hasCfg bool
-	win    fyne.Window
+	logSearch string
+	kanban    *kanbanUI
+	store     *Store
+	cfg       Config
+	hasCfg    bool
+	win       fyne.Window
 
 	calMonth string // YYYY-MM
 	repMonth string
@@ -988,9 +990,17 @@ func main() {
 	// step: renaming "Log work" to "Log Work" quietly stopped the commit list
 	// refreshing when its tab was opened, because nothing matched any more.
 	ui.tabs.OnSelected = func(ti *container.TabItem) {
+		if ui.kanban != nil {
+			ui.kanban.calendarActive = ti.Text == plannerTabName
+		}
 		ui.finishProgress()
 		ui.syncLoading()
 		switch ti.Text {
+		case kanbanTabName:
+			ui.kanban.load(false)
+		case plannerTabName:
+			ui.kanban.load(false)
+			ui.kanban.draw()
 		case logWorkTabName:
 			ui.loadPending(false)
 		case logListTabName:
@@ -1093,6 +1103,8 @@ func (ui *UI) buildAllTabs() {
 		container.NewTabItem(statusTabName, ui.buildStatusTab()),
 		container.NewTabItem(reportTabName, ui.buildReportTab()),
 		container.NewTabItemWithIcon(settingsTabName, theme.SettingsIcon(), ui.buildSettingsTab()),
+		container.NewTabItem(kanbanTabName, ui.buildKanbanTab()),
+		container.NewTabItem(plannerTabName, ui.buildPlannerTab()),
 	)
 }
 
@@ -1188,8 +1200,18 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 	ui.pendingBox = container.NewVBox(
 		widget.NewLabel("Loading your commits from GitHub…"),
 	)
+	search := widget.NewEntry()
+	search.SetPlaceHolder("Search issues, titles or commits")
+	search.SetText(ui.logSearch)
+	search.OnChanged = func(value string) {
+		ui.logSearch = value
+		if ui.pendingLoaded {
+			ui.renderPending()
+		}
+		ui.drawRecent()
+	}
 	commitPane := container.NewVBox(
-		container.NewHBox(layout.NewSpacer(), fetchBtn), ui.pendingBox)
+		container.NewBorder(nil, nil, nil, fetchBtn, search), ui.pendingBox)
 
 	// The list loads itself on first open; this button is the manual refresh.
 	// Both halves of this tab come from GitHub — the commits waiting here, and
@@ -1641,7 +1663,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 			}
 			saved = resolved
 			res, perr = PushEntry(ui.cfg, saved["issue"], saved["date"], saved["owner"],
-				mins, body, orDefault(saved["mode"], "issue"), saved["issue_url"],
+				mins, body, saved["issue_body"], orDefault(saved["mode"], "issue"), saved["issue_url"],
 				subTitleBaseFor(saved), pushProgress)
 			return nil
 		}, func() {
@@ -1836,7 +1858,7 @@ func (ui *UI) buildLogTab() fyne.CanvasObject {
 		ui.draftSort = selected
 		ui.drawRecent()
 	}
-	draftSortControl := container.NewBorder(nil, nil, ui.showPushed,
+	draftSortControl := container.NewBorder(nil, nil, goldChoice(ui.showPushed),
 		container.NewHBox(widget.NewLabel("Sort bubbles"),
 			container.New(layout.NewGridWrapLayout(fyne.NewSize(190, draftSortPick.MinSize().Height)), draftSortPick)))
 	choices := container.NewThemeOverride(withPointerCursor(seg), radioTheme{Theme: theme.Current()})
@@ -1932,6 +1954,9 @@ func (ui *UI) renderPending() {
 	for _, g := range res.Groups {
 		org := strings.ToLower(orgOf(g.Issue))
 		byOrg[org] += len(g.Commits)
+		if !ui.pendingMatchesSearch(g) {
+			continue
+		}
 		if !ui.orgShown(org) {
 			filteredOut += len(g.Commits)
 			continue
@@ -1960,6 +1985,8 @@ func (ui *UI) renderPending() {
 	// nothing to log, while the key at the foot of the tab counts commits
 	// waiting under an org that was switched off, is the tab contradicting
 	// itself.
+	case strings.TrimSpace(ui.logSearch) != "":
+		objs = append(objs, widget.NewLabel("No pending commits match this search."))
 	case filteredOut > 0:
 		objs = append(objs, widget.NewLabel(fmt.Sprintf(
 			"%d unlogged commit(s) hidden by the filter at the bottom of this tab.",
@@ -2463,6 +2490,152 @@ func (ui *UI) remarksEditor(text string, msg *widget.Label) (*widget.Entry, fyne
 	return remE, pane, aiBtn
 }
 
+// commitText is the text pane of a commit entry. Until the text outgrows
+// remarkCap it is the one box it always was: what goes in it is both the
+// sub-issue's description and the Worklog remarks field. Past remarkCap a
+// "Separate worklog remarks" tick appears; ticking it keeps the first box as
+// the description, free up to bodyCap, and opens a second box beside it for
+// the remarks, with a count of its own against remarkCap. That way a long
+// commit write-up lands on the issue in full instead of being cut or
+// compacted to fit a project field.
+type commitText struct {
+	desc     *widget.Entry
+	remarks  *widget.Entry
+	separate *widget.Check
+	pane     fyne.CanvasObject
+	aiBtn    *widget.Button
+}
+
+// split reports whether the remarks are their own text.
+func (t *commitText) split() bool { return t.separate.Checked }
+
+// values returns the remarks and the issue body as the row stores them. The
+// body is empty unless split, which keeps the two as one text on the row.
+func (t *commitText) values() (remarks, body string) {
+	if !t.split() {
+		return strings.TrimSpace(t.desc.Text), ""
+	}
+	return strings.TrimSpace(t.remarks.Text), strings.TrimSpace(t.desc.Text)
+}
+
+// check returns why the text cannot be saved, or "" when it can.
+func (t *commitText) check() string {
+	remarks, body := t.values()
+	if !t.split() {
+		if len(remarks) > remarkCap {
+			return fmt.Sprintf("Remarks are %d chars — trim to %d, or tick Separate worklog remarks.", len(remarks), remarkCap)
+		}
+		return ""
+	}
+	switch {
+	case remarks == "":
+		return "Worklog remarks are empty — write them or untick Separate worklog remarks."
+	case len(remarks) > remarkCap:
+		return fmt.Sprintf("Worklog remarks are %d chars — trim to %d first.", len(remarks), remarkCap)
+	case len(body) > bodyCap:
+		return fmt.Sprintf("Description is %d chars — trim to %d first.", len(body), bodyCap)
+	}
+	return ""
+}
+
+func (ui *UI) commitTextEditor(remarks, body string, msg *widget.Label) *commitText {
+	t := &commitText{}
+	descE := widget.NewMultiLineEntry()
+	descE.SetMinRowsVisible(6)
+	descE.Wrapping = fyne.TextWrapWord
+	remE := widget.NewMultiLineEntry()
+	remE.SetMinRowsVisible(6)
+	remE.Wrapping = fyne.TextWrapWord
+	t.desc, t.remarks = descE, remE
+
+	descCaption := widget.NewLabel("Worklog remarks")
+	descCount := widget.NewLabel("")
+	remCount := widget.NewLabel("")
+	remPane := container.NewBorder(
+		container.NewHBox(widget.NewLabel("Worklog remarks"), remCount),
+		nil, nil, nil, remE)
+	t.separate = widget.NewCheck("Separate worklog remarks", nil)
+	separateSlot := container.NewStack()
+	descPane := container.NewBorder(
+		container.NewHBox(descCaption, descCount, separateSlot),
+		nil, nil, nil, descE)
+	// Beside, not under: the pane is the foot of the popup, and halving its
+	// width costs less than halving a height already shared with the fields.
+	// The host swaps between the lone box and the pair rather than hiding a
+	// grid column, which would still hold its half of the width.
+	pair := container.NewGridWithColumns(2)
+	host := container.NewStack(descPane)
+
+	update := func() {
+		if t.split() {
+			descCaption.SetText("Issue description")
+			descCount.SetText(fmt.Sprintf("%d / %d", len(descE.Text), bodyCap))
+		} else {
+			descCaption.SetText("Worklog remarks")
+			descCount.SetText(fmt.Sprintf("%d / %d", len(descE.Text), remarkCap))
+		}
+		remCount.SetText(fmt.Sprintf("%d / %d", len(remE.Text), remarkCap))
+		// Offered once the text reaches the cap, and kept on screen while
+		// ticked so it can be unticked after the description is trimmed.
+		showIf(t.separate, t.split() || len(descE.Text) >= remarkCap)
+		want := fyne.CanvasObject(descPane)
+		if t.split() {
+			want = pair
+		}
+		if len(host.Objects) != 1 || host.Objects[0] != want {
+			pair.Objects = nil
+			if t.split() {
+				pair.Objects = []fyne.CanvasObject{descPane, remPane}
+			}
+			host.Objects = []fyne.CanvasObject{want}
+			host.Refresh()
+		}
+	}
+	t.separate.OnChanged = func(on bool) {
+		// The remarks box starts from the description cut to fit, a bullet
+		// at a time, so there is something to edit rather than a blank box.
+		if on && strings.TrimSpace(remE.Text) == "" {
+			remE.SetText(compactLocally(strings.Split(strings.TrimSpace(descE.Text), "\n")))
+		}
+		update()
+	}
+	separateSlot.Add(goldChoice(t.separate))
+	descE.OnChanged = func(string) { update() }
+	remE.OnChanged = func(string) { update() }
+	if strings.TrimSpace(body) != "" {
+		descE.SetText(body)
+		remE.SetText(remarks)
+		t.separate.SetChecked(true)
+	} else {
+		descE.SetText(remarks)
+	}
+	update()
+
+	// Split, the AI writes the remarks from the description and leaves the
+	// description alone; otherwise it compacts the one box as before.
+	t.aiBtn = widget.NewButton("Compact with AI", func() {
+		src := descE.Text
+		dst := descE
+		if t.split() {
+			dst = remE
+		}
+		before := len(src)
+		msg.SetText("Compacting…")
+		var out string
+		ui.async(func() error {
+			o, err := aiCompact(ui.cfg, src)
+			out = o
+			return err
+		}, func() {
+			dst.SetText(out)
+			msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", before, len(out)))
+		})
+	})
+
+	t.pane = host
+	return t
+}
+
 // resolveForPush fills in the issue a row goes to, for the kinds whose issue is
 // only decided when it is pushed: a meeting's day issue, and the parent an
 // independent entry needs created.
@@ -2586,7 +2759,18 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 	msg := widget.NewLabel("")
 	// A manual entry carries its text in description and has no remarks yet;
 	// seeding from it beats handing over an empty box that pushes as nothing.
-	remE, remPane, aiBtn := ui.remarksEditor(orDefault(r["remarks"], r["description"]), msg)
+	// A commit entry gets the pane that can split the issue description off
+	// from the remarks; the other kinds keep the single box.
+	var text *commitText
+	var remE *widget.Entry
+	var remPane fyne.CanvasObject
+	var aiBtn *widget.Button
+	if r["type"] == "commit" {
+		text = ui.commitTextEditor(r["remarks"], r["issue_body"], msg)
+		remPane, aiBtn = text.pane, text.aiBtn
+	} else {
+		remE, remPane, aiBtn = ui.remarksEditor(orDefault(r["remarks"], r["description"]), msg)
+	}
 
 	modeSel := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
 	if r["mode"] == "issue" {
@@ -2613,10 +2797,19 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			msg.SetText("Pick a worklog date.")
 			return
 		}
-		remarks := strings.TrimSpace(remE.Text)
-		if len(remarks) > remarkCap {
-			msg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarks), remarkCap))
-			return
+		var remarks, issueBody string
+		if text != nil {
+			if why := text.check(); why != "" {
+				msg.SetText(why)
+				return
+			}
+			remarks, issueBody = text.values()
+		} else {
+			remarks = strings.TrimSpace(remE.Text)
+			if len(remarks) > remarkCap {
+				msg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarks), remarkCap))
+				return
+			}
 		}
 		mins, _ := strconv.Atoi(strings.TrimSpace(minE.Text))
 		if push && mins <= 0 {
@@ -2629,6 +2822,9 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			"issue":       strings.TrimSpace(issE.Text),
 			"owner":       strings.TrimSpace(ownE.Text),
 			"remarks":     remarks, "mode": modeVal(),
+		}
+		if text != nil {
+			patch["issue_body"] = issueBody
 		}
 		if isIndependent {
 			patch["parent_repo"] = strings.TrimSpace(parentRepoE.Text)
@@ -2676,7 +2872,7 @@ func (ui *UI) rowEditor(r Row, refresh func(), onFinished func()) editorForm {
 			}
 			r = resolved
 			res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-				mins, body, orDefault(r["mode"], "issue"), r["issue_url"],
+				mins, body, r["issue_body"], orDefault(r["mode"], "issue"), r["issue_url"],
 				subTitleBaseFor(r), pushProgress)
 			return nil // handle the push error inline so the edit is not lost
 		}, func() {
@@ -2795,7 +2991,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 		chk.SetChecked(true)
 		checks[i] = chk
 		row := container.NewBorder(nil, nil,
-			container.NewHBox(chk, commitHyperlink(c)),
+			container.NewHBox(goldChoice(chk), commitHyperlink(c)),
 			widget.NewLabel(c.Repo),
 			widget.NewLabel(truncate(c.Message, 70)))
 		commitRows = append(commitRows, row)
@@ -2811,7 +3007,8 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 	issE.SetPlaceHolder("owner/repo#123")
 
 	msg := widget.NewLabel("")
-	remE, remPane, aiBtn := ui.remarksEditor(g.Remarks, msg)
+	text := ui.commitTextEditor(g.Remarks, "", msg)
+	remE, remPane, aiBtn := text.desc, text.pane, text.aiBtn
 
 	modeSel := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
 	if ui.cfg.DefaultMode == "issue" {
@@ -2842,19 +3039,18 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 			msg.SetText("Tick at least one commit.")
 			return
 		}
-		remarks := strings.TrimSpace(remE.Text)
-		if remarks == "" {
-			remarks = buildRemarks(picked)
-			remE.SetText(remarks)
+		if strings.TrimSpace(remE.Text) == "" {
+			remE.SetText(buildRemarks(picked))
 		}
-		if remarks == "" {
+		if strings.TrimSpace(remE.Text) == "" {
 			msg.SetText("Could not build remarks from the selected commit messages.")
 			return
 		}
-		if len(remarks) > remarkCap {
-			msg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarks), remarkCap))
+		if why := text.check(); why != "" {
+			msg.SetText(why)
 			return
 		}
+		remarks, issueBody := text.values()
 		date := dateE.ISO()
 		if date == "" {
 			msg.SetText("Pick a worklog date.")
@@ -2876,7 +3072,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 			"date": date, "minutes": strconv.Itoa(mins), "type": "commit",
 			"description": desc, "refs": strings.Join(shas, ","),
 			"issue": strings.TrimSpace(issE.Text), "owner": ownE.Text,
-			"remarks": remarks, "mode": modeVal(),
+			"remarks": remarks, "issue_body": issueBody, "mode": modeVal(),
 		}})
 		if err != nil {
 			ui.errf(err)
@@ -2910,7 +3106,7 @@ func (ui *UI) groupEditor(g Group, onLogged func([]Commit), onFinished func()) e
 		var perr error
 		ui.async(func() error {
 			res, perr = PushEntry(ui.cfg, row["issue"], row["date"], row["owner"], mins,
-				row["remarks"], row["mode"], row["issue_url"],
+				row["remarks"], row["issue_body"], row["mode"], row["issue_url"],
 				subTitleBaseFor(row), pushProgress)
 			return nil // handle push error inline so the saved row is not lost
 		}, func() {
@@ -3031,6 +3227,9 @@ func (ui *UI) drawRecent() {
 	// saved entries — a drop, a push, an edit — changes what the week shows.
 	ui.refreshLoggedShas()
 	ui.drawWeekStrip()
+	if ui.kanban != nil && ui.kanban.calendarActive && !ui.kanban.calendarResizing && ui.kanban.calendarDrag == nil {
+		ui.kanban.draw()
+	}
 	if ui.recentBox == nil {
 		return
 	}
@@ -3045,6 +3244,15 @@ func (ui *UI) drawRecent() {
 	// above it: filtering the pending tiles to one employer and then listing the
 	// other's saved entries underneath would defeat the point of filtering.
 	rows = ui.shownRows(rows)
+	if strings.TrimSpace(ui.logSearch) != "" {
+		var matching []Row
+		for _, r := range rows {
+			if ui.rowMatchesSearch(r) {
+				matching = append(matching, r)
+			}
+		}
+		rows = matching
+	}
 	localToday, localWaiting := 0, 0
 	for _, r := range rows {
 		if r["date"] != today() {
@@ -3437,8 +3645,7 @@ func (ui *UI) rowActions(r Row, refresh func()) (push, edit, del *widget.Button)
 }
 
 // confirmDelete puts up the two-button "really delete this?" popup for a saved
-// row. Its own dialog rather than dialog.ShowConfirm so the confirm button
-// wears the app's gold rather than the default primary blue.
+// row, using the same red action and gold Cancel as Sprint Calendar Clear.
 func (ui *UI) confirmDelete(r Row, refresh func()) {
 	body := widget.NewLabel(
 		"Delete this entry? Its commits become pending again. (Anything already pushed to GitHub stays there.)")
@@ -3454,21 +3661,14 @@ func (ui *UI) confirmDelete(r Row, refresh func()) {
 		}
 		refresh()
 	})
-	confirm.Importance = widget.HighImportance
-
-	buttons := container.NewHBox(layout.NewSpacer(), cancel, container.NewThemeOverride(
-		withPointerCursor(confirm), pillTheme{Theme: theme.Current()}))
-	content := container.NewVBox(
-		widget.NewLabelWithStyle("Delete entry", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		body, buttons,
-	)
+	buttons := container.NewHBox(layout.NewSpacer(), removalButton(cancel, false), removalButton(confirm, true))
+	content := container.NewBorder(container.NewVBox(widget.NewLabelWithStyle("Delete entry", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), body), buttons, nil, nil, nil)
 	padded := container.NewPadded(content)
 	pop = widget.NewModalPopUp(padded, ui.win.Canvas())
-	sz := ui.compactPopupSize(padded)
+	sz := ui.removalPopupSize(padded)
 	pop.Resize(sz)
 	pop.Show()
-	// Resizing a popup keeps its old top-left position. Re-centre it so the wider
-	// confirmation expands evenly instead of running toward one window edge.
+	// Resizing keeps the old top-left position, so centre the compact confirmation.
 	canvasSize := ui.win.Canvas().Size()
 	pop.Move(fyne.NewPos(
 		(canvasSize.Width-sz.Width)/2,
@@ -3492,7 +3692,7 @@ func (ui *UI) pushRow(r Row, refresh func()) {
 		}
 		r = resolved
 		res, perr = PushEntry(ui.cfg, r["issue"], r["date"], r["owner"],
-			r.Minutes(), remarks, orDefault(r["mode"], "issue"), r["issue_url"],
+			r.Minutes(), remarks, r["issue_body"], orDefault(r["mode"], "issue"), r["issue_url"],
 			subTitleBaseFor(r), pushProgress)
 		// Reported here rather than handed to async: a failure has to take the
 		// spinner down with it, and async skips its done func on an error.
@@ -4274,6 +4474,8 @@ func (ui *UI) exportCSV() {
 // ============================ Settings ============================
 
 func (ui *UI) buildSettingsTab() fyne.CanvasObject {
+	toast := newSettingsToast()
+	var redrawBubbles func()
 	user := widget.NewEntry()
 	user.SetPlaceHolder("auto-detected from gh — leave blank")
 	owner := widget.NewEntry()
@@ -4293,6 +4495,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	boardViews := widget.NewMultiLineEntry()
 	boardViews.SetMinRowsVisible(2)
 	boardViews.SetPlaceHolder("https://github.com/orgs/exampleorg/projects/1/views/1")
+	kanbanFields, readKanbanSources := kanbanSourceEditor(kanbanSources(ui.cfg))
 	cur := widget.NewEntry()
 	cur.SetPlaceHolder("RM")
 	disp := widget.NewEntry()
@@ -4401,6 +4604,11 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 			}
 		}
 		views := configuredLines(boardViews.Text)
+		kanbanBoards, kanbanErr := readKanbanSources()
+		if kanbanErr != nil {
+			msg.SetText(kanbanErr.Error())
+			return
+		}
 		for _, view := range views {
 			if _, err := parseProjectRef(view); err != nil {
 				msg.SetText("Board view URLs: enter a GitHub project or saved view URL on each line.")
@@ -4433,6 +4641,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		newCfg.MeetingRepo = strings.TrimSpace(meetingDest.Text)
 		newCfg.BulkCodeReviewRepo = strings.TrimSpace(reviewDest.Text)
 		newCfg.BoardViewURLs = views
+		newCfg.KanbanBoards = kanbanBoards
 		newCfg.Currency = orDefault(strings.TrimSpace(cur.Text), "RM")
 		newCfg.DisplayCurrency = strings.ToUpper(strings.TrimSpace(disp.Text))
 		newCfg.LookbackDays = backN
@@ -4460,11 +4669,18 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 			return
 		}
 		ui.cfg = newCfg
+		if ui.kanban != nil {
+			ui.kanban.sourcesChanged()
+		}
 		ui.hasCfg = true
 		ui.projItems = nil // reload against the saved project and owner
 		ui.ensureProjectCache()
 		refreshRateReadout()
-		msg.SetText("Saved.")
+		msg.SetText("")
+		if redrawBubbles != nil {
+			redrawBubbles()
+		}
+		toast.show("Settings saved")
 	})
 	save.Importance = widget.HighImportance
 
@@ -4526,14 +4742,9 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		labeled("Name on meeting issues (optional)", dispName),
 	)
 
-	// Org bubbles panel: one coloured chip per configured org, click to cycle
-	// the palette so a colour clash between two employers is fixable without
-	// hand-editing a hex code. Repos parsed live from the textarea so the
-	// chips update as soon as an org is added or removed. Vertical list —
-	// the panel sits alongside the Repos + Project-board textareas as a
-	// legend for whichever org each line belongs to.
+	// Color chips share the app's org mapping. Their three-dot controls open
+	// the picker; clicking the chip never changes its color accidentally.
 	bubbleBox := container.NewVBox()
-	var redrawBubbles func()
 	redrawBubbles = func() {
 		bubbleBox.Objects = nil
 		var entries []string
@@ -4546,6 +4757,13 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		}
 		tmp := ui.cfg
 		tmp.Repos = entries
+		tmp.ExtraProjectURLs = append([]string{}, tmp.ExtraProjectURLs...)
+		tmp.ExtraProjectURLs = append(tmp.ExtraProjectURLs, configuredLines(projURL.Text)...)
+		if sources, err := readKanbanSources(); err == nil {
+			for _, source := range sources {
+				tmp.ExtraProjectURLs = append(tmp.ExtraProjectURLs, source.URL)
+			}
+		}
 		orgs := orgOrder(tmp)
 		if len(orgs) == 0 {
 			bubbleBox.Add(widget.NewLabelWithStyle(
@@ -4555,19 +4773,13 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		for _, org := range orgs {
 			org := org
 			bubbleBox.Add(settingsOrgChip(org, orgColor(tmp, org), func() {
-				cur := orgColor(ui.cfg, org)
-				next := nextOrgPaletteColor(cur)
-				if ui.cfg.OrgColors == nil {
-					ui.cfg.OrgColors = map[string]string{}
-				}
-				ui.cfg.OrgColors[strings.ToLower(org)] = hexColor(next)
-				_ = ui.store.SaveConfig(ui.cfg)
-				redrawBubbles()
+				ui.orgColorPicker(org, orgColor(tmp, org), func() { redrawBubbles(); toast.show("Color saved") })
 			}))
 		}
 		bubbleBox.Refresh()
 	}
 	repos.OnChanged = func(string) { redrawBubbles() }
+	projURL.OnChanged = func(string) { redrawBubbles() }
 	redrawBubbles()
 
 	// Section-based layout: each section has a gold heading, a divider under
@@ -4583,6 +4795,7 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 		labeledHint("Repos and orgs", "One per line, or comma-separated. A bare org name scans every repo it owns.", repos),
 		labeledHint("Project board URLs", "One per line. Status and Report read every board on the list, filtered to the worklog owner above.", projURL),
 		labeledHint("Board view URLs", "Optional saved views for weekly links. Blank uses the project boards above.", boardViews),
+		labeledHint("Kanban boards and filters", "Project URLs are read directly; shared view changes do not affect these filters. Applies to Kanban and Sprint Calendar.", kanbanFields),
 		container.NewGridWithColumns(2,
 			labeledHint("Meeting repository", "Destination for daily meeting issues (owner/repo).", meetingDest),
 			labeledHint("Bulk review repository", "Destination for daily bulk review issues (owner/repo).", reviewDest),
@@ -4633,13 +4846,13 @@ func (ui *UI) buildSettingsTab() fyne.CanvasObject {
 	// two cards on top of ratioRow's own inter-column spacing.
 	body := container.New(newRatioRow(0.2, 0.8),
 		container.NewPadded(sidebarContent),
-		container.NewPadded(mainBubble),
+		container.NewVScroll(container.NewPadded(mainBubble)),
 	)
 	top := container.NewVBox(header, ui.settingsProgress.view)
 	// Border pins the header on top and hands every remaining pixel to the
 	// body — the Settings tab now fills to the bottom of the window instead
 	// of hugging its natural content height.
-	return container.NewBorder(top, nil, nil, nil, container.NewVScroll(body))
+	return container.NewStack(container.NewBorder(top, nil, nil, nil, body), toast.layer)
 }
 
 // roundedPanel draws content inside a rounded rectangle so a group of fields
@@ -4698,18 +4911,16 @@ func (t chunkySettingsTheme) Size(name fyne.ThemeSizeName) float32 {
 	return t.Theme.Size(name)
 }
 
-// settingsOrgChip is one org's colour chip on the Settings tab: a rounded
-// filled rectangle with the org name inside. Tapping it cycles the fill
-// through orgPalette so the two orgs sitting next to each other on a report
-// can be told apart without editing a hex value by hand.
-func settingsOrgChip(name string, fill color.NRGBA, onTap func()) fyne.CanvasObject {
+// settingsOrgChip uses an explicit menu control to open the color picker.
+func settingsOrgChip(name string, fill color.NRGBA, onPick func()) fyne.CanvasObject {
 	bg := canvas.NewRectangle(fill)
 	bg.CornerRadius = 12
 	label := canvas.NewText(name, color.White)
 	label.TextSize = theme.TextSize()
 	label.TextStyle = fyne.TextStyle{Bold: true}
-	body := container.NewStack(bg, container.NewPadded(container.NewCenter(label)))
-	return newTappable(body, onTap)
+	more := widget.NewButton("...", onPick)
+	more.Importance = widget.LowImportance
+	return container.NewStack(bg, container.NewPadded(container.NewBorder(nil, nil, nil, more, container.NewCenter(label))))
 }
 
 // nextOrgPaletteColor advances the current colour to the next slot in the

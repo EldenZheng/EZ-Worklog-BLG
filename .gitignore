@@ -13,3 +13,4 @@ config.json
 worklog.csv
 worklog-*.tsv
 ignored.json
+sprint-planner.json

@@ -275,6 +275,17 @@ func (ui *UI) drawWeekStrip() {
 	}
 	days := weekDates(ui.weekStart)
 	byDay, state := ui.weekWorklogs(days)
+	if ui.logSearch != "" {
+		filtered := map[string][]WorklogItem{}
+		for date, items := range byDay {
+			for _, it := range items {
+				if ui.worklogMatchesSearch(it) {
+					filtered[date] = append(filtered[date], it)
+				}
+			}
+		}
+		byDay = filtered
+	}
 
 	// Everything still on this machine, whatever week it was filed under: the
 	// entries that can be dragged are the ones drawn hollow on their day.
@@ -282,6 +293,9 @@ func (ui *UI) drawWeekStrip() {
 	waiting := 0
 	if rows, err := ui.store.ReadRows(); err == nil {
 		for _, r := range ui.shownRows(rows) {
+			if !ui.rowMatchesSearch(r) {
+				continue
+			}
 			if r["pushed_at"] != "" {
 				continue
 			}
