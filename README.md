@@ -232,16 +232,16 @@ The screenshots and the animations are rendered off screen from made-up data —
 no GitHub access, no real worklog. To regenerate them after a UI change:
 
 ```
-DEMO_OUT=docs/screenshots DEMO_FRAMES=/tmp/worklog-frames go test -tags 'ci,demo' -run '^TestReadme(Demo|PlannerDemo)Frames$' .
+DEMO_OUT=$PWD/docs/screenshots DEMO_FRAMES=/tmp/worklog-frames go test -tags 'ci,demo' -run '^TestReadme(Demo|PlannerDemo)Frames$' ./tests
 python docs/make_readme_media.py docs/screenshots /tmp/worklog-frames docs
 ```
 
 To regenerate just the Kanban and Sprint Calendar media in PowerShell:
 
 ```powershell
-$env:DEMO_OUT = 'docs/screenshots'
-$env:DEMO_FRAMES = '.build/readme-frames'
-go test -tags 'ci,demo' -run '^TestReadmePlannerDemoFrames$' -count=1
+$env:DEMO_OUT = "$PWD/docs/screenshots"
+$env:DEMO_FRAMES = "$PWD/.build/readme-frames"
+go test -tags 'ci,demo' -run '^TestReadmePlannerDemoFrames$' -count=1 ./tests
 python docs/make_readme_media.py docs/screenshots .build/readme-frames docs --only kanban planner
 ```
 
@@ -290,8 +290,8 @@ The script builds a private copy of the pinned Fyne version under `.build`;
 it does not modify the shared module cache or the project's dependencies.
 A plain `go build` uses Fyne's default cursors and button foreground colours.
 
-> **Use `go build`, not `go run .`** — the app keeps its data in the directory
-> the binary sits in, and `go run` builds into a temporary directory that is
+> **Use `go build`, not `go run .`** — the app keeps its data in a `data`
+> folder beside the binary, and `go run` builds into a temporary directory that is
 > deleted afterwards, so everything you log is thrown away on exit. If you want
 > `go run` for development, set `WORKLOG_DIR` first (see below).
 
@@ -300,10 +300,12 @@ A plain `go build` uses Fyne's default cursors and button foreground colours.
 In order of preference:
 
 1. `$WORKLOG_DIR`, if it is set
-2. the directory the executable is in
-3. the current working directory
+2. a `data` folder beside the executable (created on first run)
+3. the executable's own folder, for installs from before the `data` folder
+   that still keep `worklog.csv` or `config.json` there
 
-Three files are created there on first use. All three are in `.gitignore` and
+Report exports go to an `exports` folder inside it, and a crash leaves
+`crash.log` there. Three files are created there on first use. All three are in `.gitignore` and
 none of them belong in a commit:
 
 | File | Contents |
@@ -354,13 +356,40 @@ local entry pushed.
 Without those fields an entry still pushes, and the app says which ones it could
 not write.
 
+## Code layout
+
+Each menu has its own package; anything two menus share lives under `shared`.
+
+| Folder | What is in it |
+| --- | --- |
+| `main.go` | starts the app |
+| `internal/assemble` | builds the tabs and connects the menus to the shared code |
+| `internal/menus/logwork` | Log Work: pending commits, the week strip, entry editors |
+| `internal/menus/loglist` | Log List |
+| `internal/menus/commitlist` | Commit List |
+| `internal/menus/meeting` | Meeting update |
+| `internal/menus/status` | Status calendar and day panel |
+| `internal/menus/report` | Report, its chart and CSV export |
+| `internal/menus/settings` | Settings |
+| `internal/menus/kanban` | Kanban board |
+| `internal/menus/sprintcalendar` | Sprint Calendar and plan upkeep |
+| `internal/shared/shell` | the window state (`UI`), tabs, loading, and components used by several menus (commit calendar, week columns, colours, popups) |
+| `internal/shared/widgets` | small Fyne widgets with no app state |
+| `internal/shared/backend` | storage, GitHub, sprint planning model, exports |
+| `tests` | the test suite |
+
+Shared code never imports a menu. Where it has to call one (redrawing Log
+Work after a push, say) it goes through `shell.Hooks`, which
+`assemble.WireHooks` fills in at start-up.
+
 ## Tests
 
 ```
 go test ./...
 ```
 
-104 tests, all offline — nothing reaches GitHub, so a fresh clone runs green in
+The tests live in `tests/` and drive the app through its packages. They are
+all offline — nothing reaches GitHub, so a fresh clone runs green in
 under a second. On Windows, if `gcc` is not the first one on `PATH`, point cgo
 at the right one:
 
@@ -368,13 +397,13 @@ at the right one:
 CC=C:/mingw64/bin/gcc.exe go test ./...
 ```
 
-`live_probes_test.go` is the exception, and is behind a build tag for that
+`tests/live_probes_test.go` is the exception, and is behind a build tag for that
 reason: it calls real GitHub with whichever org, project and issue were being
 worked on at the time. Edit the refs to something on your own account before
 running it.
 
 ```
-go test -tags live -run Probe -v
+go test -tags live -run Probe -v ./tests
 ```
 
 `ld.exe: .rsrc merge failure: multiple non-default manifests` during a Windows

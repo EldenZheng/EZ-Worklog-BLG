@@ -1,0 +1,219 @@
+package tests
+
+import (
+	"image/color"
+	"testing"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/test"
+)
+
+// Colours follow configuration order: the first org is blue, the second red.
+// The mapping must not shift when a day happens to hold only one of them.
+func TestOrgColoursFollowConfigOrder(t *testing.T) {
+	cfg := backend.Config{
+		Repos:            []string{"exampleorg", "Example-Support"},
+		ProjectURL:       "https://github.com/orgs/exampleorg/projects/9",
+		ExtraProjectURLs: []string{"https://github.com/orgs/Example-Support/projects/1"},
+	}
+	if got := shell.OrgColor(cfg, "exampleorg"); got != shell.OrgPalette[0] {
+		t.Fatalf("first org should take the first colour, got %v", got)
+	}
+	// Case is not part of the identity: refs say "Example-Support", the
+	// config may say "example-support".
+	if got := shell.OrgColor(cfg, "example-support"); got != shell.OrgPalette[1] {
+		t.Fatalf("second org should take the second colour, got %v", got)
+	}
+	if got := shell.OrgColor(cfg, "someone-else"); got != shell.OrgUnknown {
+		t.Fatalf("an unconfigured org must not borrow a palette colour, got %v", got)
+	}
+
+	// A board-only org still gets a colour, after the ones typed in Repos.
+	boardOnly := backend.Config{
+		Repos:            []string{"exampleorg"},
+		ProjectURL:       "https://github.com/orgs/exampleorg/projects/9",
+		ExtraProjectURLs: []string{"https://github.com/orgs/Example-Support/projects/1"},
+	}
+	if got := shell.OrgColor(boardOnly, "Example-Support"); got != shell.OrgPalette[1] {
+		t.Fatalf("board-only org should still be coloured, got %v", got)
+	}
+}
+
+func TestIndependentWorkRowsKeepTheirPurpleAccent(t *testing.T) {
+	cfg := backend.Config{Repos: []string{"exampleorg", "Example-Support"}}
+	for name, row := range map[string]backend.Row{
+		"independent draft":  {"type": backend.KindIndependent},
+		"pushed independent": {"type": backend.KindIndependent, "issue": "exampleorg/repo#7"},
+		"meeting":            {"type": backend.KindMeeting},
+		"bulk review":        {"type": backend.KindBulkReview, "description": "Alex Code Review: 2026-09-23"},
+	} {
+		if got := shell.RowAccentColor(cfg, row); got != shell.IndependentWorkAccent {
+			t.Fatalf("%s accent = %v, want purple %v", name, got, shell.IndependentWorkAccent)
+		}
+	}
+	if got := shell.RowAccentColor(cfg, backend.Row{"type": backend.KindCodeReview, "issue": "exampleorg/repo#7"}); got != shell.OrgPalette[0] {
+		t.Fatalf("issue-backed code review should keep its org colour, got %v", got)
+	}
+	if got := shell.RowAccentColor(cfg, backend.Row{"type": backend.KindOther, "issue": "exampleorg/repo#8"}); got != shell.OrgPalette[0] {
+		t.Fatalf("parent-backed Worklog should keep its org colour, got %v", got)
+	}
+}
+
+func TestOrgOf(t *testing.T) {
+	cases := map[string]string{
+		"https://github.com/exampleorg/sample-intranet/issues/42": "exampleorg",
+		"https://github.com/orgs/Example-Support/projects/1":      "Example-Support",
+		"exampleorg/sample-general-tasks#6511":                    "exampleorg",
+		"exampleorg/repo":                                         "exampleorg",
+		"":                                                        "",
+	}
+	for in, want := range cases {
+		if got := shell.OrgOf(in); got != want {
+			t.Fatalf("orgOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A day's minutes split by org, so the calendar cell can colour its bar.
+func TestMinutesByOrgSplitsTheDay(t *testing.T) {
+	items := []backend.WorklogItem{
+		{URL: "https://github.com/exampleorg/repo/issues/1", Minutes: 300},
+		{URL: "https://github.com/Example-Support/help/issues/9", Minutes: 180},
+		{URL: "https://github.com/exampleorg/other/issues/2", Minutes: 60},
+		// No URL of its own: fall back to the parent it hangs off.
+		{ParentURL: "https://github.com/exampleorg/repo/issues/7", Minutes: 30},
+	}
+	got := shell.MinutesByOrg(items)
+	if got["exampleorg"] != 390 {
+		t.Fatalf("exampleorg minutes = %d, want 390", got["exampleorg"])
+	}
+	if got["example-support"] != 180 {
+		t.Fatalf("support minutes = %d, want 180", got["example-support"])
+	}
+
+	cfg := backend.Config{Repos: []string{"exampleorg", "Example-Support"}}
+	if order := shell.OrgsByShare(cfg, got); order[0] != "exampleorg" || order[1] != "example-support" {
+		t.Fatalf("configured order should hold, got %v", order)
+	}
+}
+
+// The meter is a picture of the day: segments in org colours over a track, and
+// never wider than the track even when the day ran past target.
+func TestMeterBarStaysInsideItsTrack(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+
+	cfg := backend.Config{Repos: []string{"exampleorg", "Example-Support"}}
+	byOrg := map[string]int{"exampleorg": 300, "example-support": 180}
+
+	bar := shell.MeterBar(cfg, byOrg, backend.Target, 8)
+	bar.Resize(fyne.NewSize(480, 8))
+	filled := meterFilled(bar)
+	if filled < 470 || filled > 481 {
+		t.Fatalf("480 of 480 minutes should fill the bar, filled %g of 480", filled)
+	}
+
+	half := shell.MeterBar(cfg, map[string]int{"exampleorg": 240}, backend.Target, 8)
+	half.Resize(fyne.NewSize(480, 8))
+	if f := meterFilled(half); f < 230 || f > 250 {
+		t.Fatalf("half a day should fill half the bar, filled %g of 480", f)
+	}
+
+	over := shell.MeterBar(cfg, map[string]int{"exampleorg": 600, "example-support": 600}, backend.Target, 8)
+	over.Resize(fyne.NewSize(480, 8))
+	if f := meterFilled(over); f > 481 {
+		t.Fatalf("an over-target day must not paint past its track, filled %g", f)
+	}
+}
+
+// meterFilled totals the width of the coloured segments in a meter, ignoring
+// the track they sit on and the transparent remainder beside them.
+func meterFilled(o fyne.CanvasObject) float32 {
+	isOrgColour := func(c color.Color) bool {
+		for _, p := range append(append([]color.NRGBA{}, shell.OrgPalette...), shell.OrgUnknown) {
+			if c == color.Color(p) {
+				return true
+			}
+		}
+		return false
+	}
+	total := float32(0)
+	walk(o, func(c fyne.CanvasObject) {
+		if r, ok := c.(*canvas.Rectangle); ok && isOrgColour(r.FillColor) {
+			total += r.Size().Width
+		}
+	})
+	return total
+}
+
+// The calendar cell fills from the bottom: the first org is the base of the
+// stack and the empty part at the top is the day still owed.
+func TestVMeterFillsFromTheBottom(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+
+	cfg := backend.Config{Repos: []string{"exampleorg", "Example-Support"}}
+	fill := shell.VMeterFill(cfg, map[string]int{"exampleorg": 240, "example-support": 120}, 0, backend.Target, shell.CellCornerRadius)
+	fill.Resize(fyne.NewSize(80, 100)) // 100px tall cell, 480 target
+
+	segs := []*canvas.Rectangle{}
+	walk(fill, func(c fyne.CanvasObject) {
+		if r, ok := c.(*canvas.Rectangle); ok {
+			segs = append(segs, r)
+		}
+	})
+	if len(segs) != 2 {
+		t.Fatalf("two orgs should draw two segments, got %d", len(segs))
+	}
+	// 240/480 of 100px, plus the overlap it reaches up behind the segment
+	// above so the rounded seam between them reads solid.
+	if h := segs[0].Size().Height; h < 49 || h > 51+shell.CellCornerRadius {
+		t.Fatalf("half a day should fill half the cell, got %g of 100", h)
+	}
+	if segs[0].CornerRadius != shell.CellCornerRadius {
+		t.Fatalf("the fill must be rounded like the cell, radius %g", segs[0].CornerRadius)
+	}
+	if segs[0].Position().Y <= segs[1].Position().Y {
+		t.Fatalf("the first org must be the base of the stack: %v then %v",
+			segs[0].Position(), segs[1].Position())
+	}
+	bottom := segs[0].Position().Y + segs[0].Size().Height
+	if bottom < 99 || bottom > 101 {
+		t.Fatalf("the fill should sit on the floor of the cell, ends at %g", bottom)
+	}
+	// Washed out towards the background so the day's number reads on top of
+	// it, but opaque: the lower segment reaches up behind the one above, and
+	// two half-transparent colours blended there into a band of a third colour
+	// — a purple stripe where blue met red.
+	base := segs[0].FillColor.(color.NRGBA)
+	if base.A != 0xff {
+		t.Fatalf("a see-through segment blends with the one it overlaps: %v", base)
+	}
+	if base == shell.OrgColor(cfg, "exampleorg") {
+		t.Fatal("the fill must be paler than the org's own colour, or the day number is lost in it")
+	}
+	// The seam is where the blending showed, so both sides of it are checked.
+	if top := segs[1].FillColor.(color.NRGBA); top.A != 0xff || top == base {
+		t.Fatalf("the second org's segment should be opaque and its own colour: %v", top)
+	}
+	if overlap := segs[1].Position().Y + segs[1].Size().Height - segs[0].Position().Y; overlap <= 0 {
+		t.Fatalf("the segments should still overlap so the seam reads solid, gap of %g", -overlap)
+	}
+
+	// A day past target fills the cell and no further.
+	over := shell.VMeterFill(cfg, map[string]int{"exampleorg": 900}, 0, backend.Target, shell.CellCornerRadius)
+	over.Resize(fyne.NewSize(80, 100))
+	tall := float32(0)
+	walk(over, func(c fyne.CanvasObject) {
+		if r, ok := c.(*canvas.Rectangle); ok {
+			tall += r.Size().Height
+		}
+	})
+	// One org means one segment, so no overlap is added to it.
+	if tall > 101 {
+		t.Fatalf("an over-target day must not paint past the cell, filled %g of 100", tall)
+	}
+}

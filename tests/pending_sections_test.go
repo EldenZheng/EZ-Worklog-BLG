@@ -1,0 +1,117 @@
+package tests
+
+import (
+	"testing"
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/widget"
+)
+
+// separators counts the rules drawn in a tree — one between each section.
+func separators(o fyne.CanvasObject) int {
+	n := 0
+	walk(o, func(c fyne.CanvasObject) {
+		if _, ok := c.(*widget.Separator); ok {
+			n++
+		}
+	})
+	return n
+}
+
+// Several commits on one issue are drawn as their own block: the issue title
+// once above them, the tiles under it, and a rule before whatever follows. The
+// tiles are not merged — three commits are still three tiles, each with its own
+// remarks and its own minutes.
+func TestPendingListGroupsTilesUnderTheIssue(t *testing.T) {
+	ui := pendingUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	const issue = "exampleorg/sample-intranet#42"
+	ui.IssueInfo = map[string]backend.IssueInfo{
+		issue: {Org: "exampleorg", Repo: "sample-intranet", Number: 42,
+			Title: "DOC ITEM ENHANCEMENT"},
+		"exampleorg/sample-intranet#9": {Org: "exampleorg", Repo: "sample-intranet", Number: 9,
+			Title: "Lone piece of work"},
+	}
+	commit := func(sha, msg string) []backend.Commit {
+		return []backend.Commit{{Sha: sha, Repo: "exampleorg/sample-intranet", Message: msg, Full: msg}}
+	}
+	ui.Pending = backend.PendingResult{Count: 4, Groups: []backend.Group{
+		{Date: "2026-08-11", Issue: issue, Commits: commit("aaa1111", "cap the dropdown")},
+		{Date: "2026-08-10", Issue: issue, Commits: commit("bbb2222", "widen the picker")},
+		{Date: "2026-08-09", Issue: issue, Commits: commit("ccc3333", "fix the tooltip")},
+		{Date: "2026-08-09", Issue: "exampleorg/sample-intranet#9",
+			Commits: commit("ddd4444", "tidy imports")},
+	}}
+	logwork.RenderPending(ui)
+
+	got := labels(ui.PendingBox)
+	count := 0
+	for _, l := range got {
+		if l == "DOC ITEM ENHANCEMENT" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("the issue title should be the heading and nothing else, found %d: %v", count, got)
+	}
+	// Under a heading the commit is what tells the tiles apart, so each one
+	// leads with its own subject.
+	for _, want := range []string{"cap the dropdown", "widen the picker", "fix the tooltip"} {
+		if !contains(got, want) {
+			t.Fatalf("tile %q is missing from the section: %v", want, got)
+		}
+	}
+	if !contains(got, "3 commits") {
+		t.Fatalf("the heading should tally its tiles: %v", got)
+	}
+
+	// The lone tile keeps the issue title it is filed against, since no heading
+	// above it is saying so — but the block it sits in is named, so it does not
+	// read as more of the section above.
+	if !contains(got, "Lone piece of work") {
+		t.Fatalf("an unheaded tile still names its issue: %v", got)
+	}
+	if !contains(got, "Other commits") {
+		t.Fatalf("the loose tiles need a heading of their own: %v", got)
+	}
+
+	// Two blocks: the headed issue and the loose tiles, one rule between them.
+	if n := len(flowGrids(ui.PendingBox)); n != 2 {
+		t.Fatalf("expected a grid per section, got %d", n)
+	}
+	if n := separators(ui.PendingBox); n != 1 {
+		t.Fatalf("expected one rule between the two sections, got %d", n)
+	}
+}
+
+// Nothing shares an issue: no headings at all, not even "Other commits" — with
+// one section there is no other for it to be other than.
+func TestPendingListSkipsHeadingsWithNothingToGroup(t *testing.T) {
+	ui := pendingUI(t)
+	defer fyne.CurrentApp().Quit()
+
+	ui.Pending = backend.PendingResult{Count: 2, Groups: []backend.Group{
+		{Date: "2026-08-11", Issue: "exampleorg/repo#1",
+			Commits: []backend.Commit{{Sha: "aaa1111", Message: "one", Full: "one"}}},
+		{Date: "2026-08-10", Issue: "exampleorg/repo#2",
+			Commits: []backend.Commit{{Sha: "bbb2222", Message: "two", Full: "two"}}},
+	}}
+	logwork.RenderPending(ui)
+
+	if n := separators(ui.PendingBox); n != 0 {
+		t.Fatalf("a list with nothing to group needs no rules, got %d", n)
+	}
+	if got := labels(ui.PendingBox); contains(got, "Other commits") {
+		t.Fatalf("the only section should carry no heading: %v", got)
+	}
+	if n := len(flowGrids(ui.PendingBox)); n != 1 {
+		t.Fatalf("expected a single block of tiles, got %d", n)
+	}
+	// With no heading above them the tiles are named after their issue refs.
+	if got := labels(ui.PendingBox); !contains(got, "exampleorg/repo#1") {
+		t.Fatalf("an unheaded tile should still name its issue: %v", got)
+	}
+}
