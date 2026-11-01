@@ -8,6 +8,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -45,7 +46,8 @@ func (k *kanbanUI) visibleItemType(it sprintItem) bool {
 }
 
 func (k *kanbanUI) itemTypeControls() fyne.CanvasObject {
-	row := container.NewHBox()
+	// A wide gap keeps the two filters reading as separate toggles.
+	row := container.New(layout.NewCustomPaddedHBoxLayout(theme.Padding() * 8))
 	for _, kind := range []string{kanbanIssues, kanbanPullRequests} {
 		kind := kind
 		it := sprintItem{Kind: "Issue"}
@@ -54,7 +56,7 @@ func (k *kanbanUI) itemTypeControls() fyne.CanvasObject {
 			it.Kind = "PullRequest"
 			label = "Pull Request"
 		}
-		ink := theme.Color(theme.ColorNameForeground)
+		ink := color.Color(logoGold)
 		if !k.visibleItemType(it) {
 			ink = theme.Color(theme.ColorNamePlaceHolder)
 		}

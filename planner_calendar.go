@@ -447,6 +447,10 @@ func (k *kanbanUI) plannerCardWithScale(c sprintCandidate, index int, scale *pla
 	if finished {
 		caption = "Completed · " + caption
 	}
+	// The meeting in the sidebar is a template, not a task: its title is enough.
+	if index < 0 && c.Key == plannerMeetingKey {
+		caption = ""
+	}
 	content := k.bubble(b, it, caption, compact)
 	card := &plannerDragCard{k: k, candidate: c, index: index, content: content}
 	if compact && index < len(t.Blocks) {

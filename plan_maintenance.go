@@ -158,12 +158,16 @@ func (k *kanbanUI) startPlannedToday() {
 		return
 	}
 	k.busy = true
-	k.setMessage(fmt.Sprintf("Moving %d issue(s) planned for today to %s…", len(todo), plannerInProgressStatus))
+	for _, c := range todo {
+		k.setPending(c.board, c.item, "status", plannerInProgressStatus)
+	}
+	k.setMessage(fmt.Sprintf("Moving %d issue(s) planned for today to %s on GitHub…", len(todo), plannerInProgressStatus))
+	k.draw()
 	go func() {
 		var moved []plannerStartCandidate
 		var failures []string
 		for _, c := range todo {
-			if err := updateSprintItem(c.board, c.item, "status", plannerInProgressStatus); err != nil {
+			if err := pushSprintItem(c.board, c.item, "status", plannerInProgressStatus); err != nil {
 				failures = append(failures, c.item.Title+": "+err.Error())
 				continue
 			}
@@ -171,6 +175,9 @@ func (k *kanbanUI) startPlannedToday() {
 		}
 		fyne.Do(func() {
 			k.busy = false
+			for _, c := range todo {
+				k.clearPending(c.board, c.item)
+			}
 			for _, c := range moved {
 				for bi := range k.plan.Boards {
 					if k.plan.Boards[bi].ID != c.board.ID {

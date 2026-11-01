@@ -310,4 +310,7 @@ func (ui *UI) syncLoading() {
 			relayout(page.body)
 		}
 	}
+	if ui.kanban != nil {
+		ui.kanban.syncActivity()
+	}
 }

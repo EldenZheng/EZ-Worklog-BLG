@@ -50,6 +50,13 @@ type kanbanUI struct {
 	calendarOffsets                     map[string]fyne.Position
 	autoStarted                         map[string]bool // issues already auto-started this session
 	autoStartPending                    bool            // next board fetch should start today's planned issues
+	pending                             map[string]kanbanPending
+	columnCards                         map[string][]*sprintDragCard // status value: cards as drawn
+	hoverSlot                           kanbanSlot
+	dropLine                            *canvas.Rectangle
+	activity, calendarActivity          *loadingIndicator
+	calendarPage                        *fyne.Container
+	refreshButtons                      []*widget.Button
 	calendarDrag                        *plannerDragCard
 	calendarResizing                    bool
 	calendarActive                      bool
@@ -89,8 +96,11 @@ func (ui *UI) buildKanbanTab() fyne.CanvasObject {
 	search := widget.NewEntry()
 	search.SetPlaceHolder("Search issues or project")
 	search.OnChanged = func(s string) { k.search = strings.ToLower(s); k.draw() }
-	top := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Kanban", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), func() { k.load(true) }), search)
-	k.root = container.NewBorder(container.NewVBox(top, k.message), nil, nil, nil, container.NewStack(k.body, k.ghostLayer))
+	refresh := widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), func() { k.load(true) })
+	k.refreshButtons = append(k.refreshButtons, refresh)
+	k.activity = newLoadingIndicator()
+	top := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Kanban", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), refresh, search)
+	k.root = container.NewBorder(container.NewVBox(top, k.activity.view, k.message), nil, nil, nil, container.NewStack(k.body, k.ghostLayer))
 	k.draw()
 	return k.root
 }
@@ -117,6 +127,7 @@ func (k *kanbanUI) load(force bool) {
 		return
 	}
 	k.loading = true
+	k.syncActivity()
 	k.setMessage("Loading configured project boards… You can use the saved local calendar while loading.")
 	previousBoards := append([]sprintBoard{}, k.plan.Boards...)
 	sources := append([]kanbanSource{}, kanbanSources(k.ui.cfg)...)
@@ -236,8 +247,12 @@ func (ui *UI) buildPlannerTab() fyne.CanvasObject {
 	heading := widget.NewLabelWithStyle("Sprint Calendar · local planning", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	note := widget.NewLabel("Select a sprint, then drag bubbles onto highlighted dates. Drag a scheduled bubble's bottom edge to resize its local duration.")
 	note.Wrapping = fyne.TextWrapWord
-	top := container.NewBorder(nil, nil, heading, widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), k.refreshCalendarSources), nil)
-	page := container.NewBorder(container.NewVBox(top, note, k.calendarMessage), nil, nil, nil, container.NewStack(k.calendarBody, k.calendarGhost))
+	refresh := widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), k.refreshCalendarSources)
+	k.refreshButtons = append(k.refreshButtons, refresh)
+	k.calendarActivity = newLoadingIndicator()
+	top := container.NewBorder(nil, nil, heading, refresh, nil)
+	page := container.NewBorder(container.NewVBox(top, note, k.calendarActivity.view, k.calendarMessage), nil, nil, nil, container.NewStack(k.calendarBody, k.calendarGhost))
+	k.calendarPage = page
 	k.draw()
 	return page
 }
@@ -252,8 +267,10 @@ func (k *kanbanUI) draw() {
 	if k.calendarClip != nil {
 		k.calendarOffsets[k.calendarDrawnMode] = scrollOffset(k.calendarClip)
 	}
+	k.syncActivity()
 	k.targets = nil
 	k.hover = nil
+	k.columnCards = map[string][]*sprintDragCard{}
 	k.body.Objects = []fyne.CanvasObject{k.boardView()}
 	k.body.Refresh()
 	restoreScroll(k.sideClip, sideOffset)
@@ -296,11 +313,15 @@ func (k *kanbanUI) boardView() fyne.CanvasObject {
 		count := 0
 		for _, b := range k.plan.Boards {
 			for _, it := range b.Items {
-				if it.Status != value || !k.matches(b, it) {
+				if k.pendingStatus(b, it) != value || !k.matches(b, it) {
 					continue
 				}
 				count++
-				cards.Add(k.card(b, it))
+				card := k.card(b, it)
+				if d, ok := card.(*sprintDragCard); ok {
+					k.columnCards[value] = append(k.columnCards[value], d)
+				}
+				cards.Add(card)
 			}
 		}
 		header := widget.NewLabelWithStyle(status, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -347,6 +368,13 @@ func (k *kanbanUI) accent(b sprintBoard, it sprintItem) color.NRGBA {
 func (k *kanbanUI) bubble(b sprintBoard, it sprintItem, caption string, compact bool) fyne.CanvasObject {
 	title := widget.NewLabelWithStyle(it.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapWord
+	if caption == "" {
+		body := container.NewVBox(title)
+		if it.URL != "" {
+			body.Add(githubHyperlink("Open issue", it.URL))
+		}
+		return k.bubbleSurface(b, it, body)
+	}
 	foot := widget.NewLabel(caption)
 	foot.Wrapping = fyne.TextWrapWord
 	return k.bubbleSurface(b, it, k.bubbleContents(title, foot, it.URL))
@@ -365,7 +393,11 @@ func (k *kanbanUI) bubbleSurface(b sprintBoard, it sprintItem, body fyne.CanvasO
 }
 
 func (k *kanbanUI) card(b sprintBoard, it sprintItem) fyne.CanvasObject {
-	d := &sprintDragCard{k: k, board: b, item: it, content: k.bubbleSurface(b, it, k.cardContents(b, it))}
+	content := k.bubbleSurface(b, it, k.cardContents(b, it))
+	if p, ok := k.pending[it.key(b.ID)]; ok {
+		content = savingOverlay(content, p)
+	}
+	d := &sprintDragCard{k: k, board: b, item: it, content: content}
 	d.ExtendBaseWidget(d)
 	return d
 }
@@ -391,9 +423,17 @@ func sprintSummary(s sprintIteration) string {
 }
 
 func (k *kanbanUI) move(b sprintBoard, it sprintItem, kind, value string) {
+	k.moveThen(b, it, kind, value, nil, nil)
+}
+
+// moveThen saves a status or sprint change to GitHub. While it runs the card
+// shows the change in progress and the activity bar runs; done, if given, is
+// called on the UI thread with the outcome, and start, if given, just before
+// the request goes out. It reports whether a save started.
+func (k *kanbanUI) moveThen(b sprintBoard, it sprintItem, kind, value string, start func(), done func(error)) bool {
 	if k.busy || k.loading {
 		k.setMessage("Wait for the GitHub request to finish before moving an issue.")
-		return
+		return false
 	}
 	for _, latestBoard := range k.plan.Boards {
 		if latestBoard.ID == b.ID {
@@ -405,16 +445,31 @@ func (k *kanbanUI) move(b sprintBoard, it sprintItem, kind, value string) {
 		}
 	}
 	if kind == "status" && it.Status == value || kind == "sprint" && it.SprintID == value {
-		return
+		return false
 	}
 	k.busy = true
-	k.setMessage("Saving " + it.Title + " to GitHub…")
+	k.setPending(b, it, kind, value)
+	p := k.pending[it.key(b.ID)]
+	what := "status"
+	if kind == "sprint" {
+		what = "sprint"
+	}
+	k.setMessage(fmt.Sprintf("Saving %q to GitHub: %s %s…", it.Title, what, p.label))
+	k.draw()
+	if start != nil {
+		start()
+	}
 	go func() {
-		err := updateSprintItem(b, it, kind, value)
+		err := pushSprintItem(b, it, kind, value)
 		fyne.Do(func() {
 			k.busy = false
+			k.clearPending(b, it)
+			if done != nil {
+				defer done(err)
+			}
 			if err != nil {
-				k.setMessage("GitHub update failed: " + err.Error())
+				k.setMessage(moveResult(it, p, err))
+				k.draw()
 				k.ui.errf(err)
 				return
 			}
@@ -433,10 +488,11 @@ func (k *kanbanUI) move(b sprintBoard, it sprintItem, kind, value string) {
 				}
 			}
 			k.save(k.plan)
-			k.setMessage("Saved to the source GitHub project.")
+			k.setMessage(moveResult(it, p, nil))
 			k.draw()
 		})
 	}()
+	return true
 }
 
 func pointIn(obj fyne.CanvasObject, p fyne.Position) bool {
@@ -473,7 +529,8 @@ func (c *sprintDragCard) Dragged(e *fyne.DragEvent) {
 		bg.CornerRadius = 8
 		ghost := container.NewStack(bg, container.NewPadded(widget.NewLabel(truncate(c.item.Title, 38))))
 		ghost.Resize(ghost.MinSize())
-		k.ghostLayer.Objects = []fyne.CanvasObject{ghost}
+		k.dropLine = newDropLine()
+		k.ghostLayer.Objects = []fyne.CanvasObject{ghost, k.dropLine}
 	}
 	if len(k.ghostLayer.Objects) > 0 {
 		k.ghostLayer.Objects[0].Move(e.AbsolutePosition.Subtract(fyne.CurrentApp().Driver().AbsolutePositionForObject(k.ghostLayer)).Add(fyne.NewPos(12, 12)))
@@ -503,6 +560,7 @@ func (c *sprintDragCard) Dragged(e *fyne.DragEvent) {
 		}
 		t.frame.Refresh()
 	}
+	k.showDropSlot(c, k.hover, e.AbsolutePosition)
 }
 func (c *sprintDragCard) DragEnd() {
 	if !c.lifted {
@@ -514,6 +572,9 @@ func (c *sprintDragCard) DragEnd() {
 	k.ghostLayer.Refresh()
 	t := k.hover
 	k.hover = nil
+	slot := k.hoverSlot
+	k.hoverSlot = kanbanSlot{}
+	k.dropLine = nil
 	for _, target := range k.targets {
 		target.frame.StrokeWidth = target.strokeWidth
 		target.frame.StrokeColor = target.strokeColor
@@ -523,6 +584,10 @@ func (c *sprintDragCard) DragEnd() {
 		value := t.value
 		if t.kind == "sprint" && value != "" {
 			value = c.board.sprintByKey(value).ID
+		}
+		if t.kind == "status" {
+			k.place(c.board, c.item, value, slot)
+			return
 		}
 		k.move(c.board, c.item, t.kind, value)
 	}
@@ -626,18 +691,59 @@ func (k *kanbanUI) editorFor(b sprintBoard, it sprintItem, localOnly bool) {
 			sprint.SetSelectedIndex(i)
 		}
 	}
-	remote := container.NewVBox(widget.NewLabel("GitHub fields · each Apply saves to the source project"), container.NewBorder(nil, nil, nil, widget.NewButton("Apply status", func() {
+	// The popup covers the page message, so a save started here reports in
+	// the popup too: bar running and buttons off while it is in flight.
+	applyProgress := newLoadingIndicator()
+	applyState := widget.NewLabel("")
+	applyState.Wrapping = fyne.TextWrapWord
+	applyState.Hide()
+	var applyStatus, applySprint *widget.Button
+	apply := func(kind, value string) {
+		started := k.moveThen(b, it, kind, value, func() {
+			applyState.Hide()
+			applyProgress.showProgress(true, fetchProgress{Stage: "Saving " + kind + " to GitHub: " + fieldValueLabel(b, kind, value)})
+			applyStatus.Disable()
+			applySprint.Disable()
+		}, func(err error) {
+			applyProgress.setActive(false)
+			applyState.Show()
+			applyStatus.Enable()
+			applySprint.Enable()
+			if err == nil {
+				if kind == "status" {
+					it.Status = value
+				} else {
+					it.SprintID = value
+				}
+			}
+			applyState.SetText(moveResult(it, kanbanPending{kind: kind, label: fieldValueLabel(b, kind, value)}, err))
+		})
+		switch {
+		case started:
+		case k.busy || k.loading:
+			applyState.SetText("Wait for the GitHub request to finish.")
+			applyState.Show()
+		default:
+			applyState.SetText("Already " + fieldValueLabel(b, kind, value) + " on GitHub.")
+			applyState.Show()
+		}
+	}
+	applyStatus = widget.NewButton("Apply status", func() {
 		v := status.Selected
 		if v == "No status" {
 			v = ""
 		}
-		k.move(b, it, "status", v)
-	}), status), container.NewBorder(nil, nil, nil, widget.NewButton("Apply sprint", func() {
-		i := sprint.SelectedIndex()
-		if i >= 0 {
-			k.move(b, it, "sprint", ids[i])
+		apply("status", v)
+	})
+	applySprint = widget.NewButton("Apply sprint", func() {
+		if i := sprint.SelectedIndex(); i >= 0 {
+			apply("sprint", ids[i])
 		}
-	}), sprint))
+	})
+	remote := container.NewVBox(widget.NewLabel("GitHub fields · each Apply saves to the source project"),
+		container.NewBorder(nil, nil, nil, applyStatus, status),
+		container.NewBorder(nil, nil, nil, applySprint, sprint),
+		applyProgress.view, applyState)
 	title := widget.NewLabelWithStyle(it.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapWord
 	subtitle := container.NewBorder(nil, nil, nil, githubHyperlink("Open issue", it.URL), widget.NewLabel(fmt.Sprintf("Project estimate: %dm | Local changes stay on this computer", sprintEstimate(it, sprintTask{}))))
