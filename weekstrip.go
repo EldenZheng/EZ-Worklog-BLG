@@ -275,6 +275,7 @@ func (ui *UI) drawWeekStrip() {
 	}
 	days := weekDates(ui.weekStart)
 	byDay, state := ui.weekWorklogs(days)
+	ui.dropLoggedSupportWeek(ui.weekStart, byDay, state)
 	if ui.logSearch != "" {
 		filtered := map[string][]WorklogItem{}
 		for date, items := range byDay {
@@ -304,12 +305,10 @@ func (ui *UI) drawWeekStrip() {
 		}
 	}
 
-	// Walking to another week clears the placeholder. It is a sketch of *this*
-	// week's unlogged rota, and carrying it forward would quietly add three
-	// hours a day to a week nobody asked about.
+	// The placeholder is saved per week: walking shows the arrived-at week's own
+	// setting, so one week's shift is never carried into another.
 	walkTo := func(start string) {
 		ui.weekStart = start
-		ui.supportPlaceholder = false
 		ui.drawWeekStrip()
 	}
 	prev := widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
@@ -358,16 +357,16 @@ func (ui *UI) drawWeekStrip() {
 		ui.refreshTodayScore()
 	})
 
-	// Display only, and it says so: nothing is written, nothing is pushed, and
-	// it is off again the moment the week changes.
+	// Display only, and it says so: nothing is pushed. The tick is remembered
+	// for this week alone (support-weeks.json) until its Friday passes.
 	support := widget.NewCheck(
 		fmt.Sprintf("+%d min weekday support (display only)", supportPlaceholderMins), nil)
 	// Seeded before the handler is attached. SetChecked fires OnChanged, and a
 	// handler that redraws the strip would build a fresh checkbox, seed that
 	// one, and go round again until the stack ran out.
-	support.SetChecked(ui.supportPlaceholder)
+	support.SetChecked(ui.supportOn(ui.weekStart))
 	support.OnChanged = func(on bool) {
-		ui.supportPlaceholder = on
+		ui.setSupport(on, ui.weekStart)
 		ui.drawWeekStrip()
 	}
 
@@ -558,11 +557,12 @@ func (ui *UI) weekColumn(ds string, items []WorklogItem, local []Row) *dayColumn
 	// The support shift pencilled in, if the placeholder is on and this day has
 	// not already got the real thing. It rides in the same yellow as the drafts,
 	// which is the right colour for it: neither is on the board.
-	placeholder := supportPlaceholderFor(ui.cfg, ui.supportPlaceholder, ds, items)
+	placeholder := supportPlaceholderFor(ui.cfg, ui.supportOn(ds), ds, items)
 	if placeholder > 0 {
 		draftByOrg[strings.ToLower(orgOf(ui.cfg.WorklogOwner))] += placeholder
 		waiting += placeholder
 	}
+	planned := ui.plannedMinutes(ds, items, local)
 
 	name := fmt.Sprintf("%s %d", t.Format("Mon"), t.Day())
 	if ds == today() {
@@ -590,7 +590,7 @@ func (ui *UI) weekColumn(ds string, items []WorklogItem, local []Row) *dayColumn
 	}
 	body := []fyne.CanvasObject{
 		head,
-		ui.progressBar("strip/"+t.Format("Mon"), ds, byOrg, draftByOrg, target, 8),
+		ui.progressBarParts("strip/"+t.Format("Mon"), ds, plannedBarParts(ui.cfg, byOrg, draftByOrg, planned), 8),
 		container.New(splitCaption{}, weekCaption(banked), weekCaption(projected)),
 	}
 
@@ -613,7 +613,11 @@ func (ui *UI) weekColumn(ds string, items []WorklogItem, local []Row) *dayColumn
 	col := newDayColumn(ui, ds, container.NewStack(floor, frame,
 		container.NewPadded(container.NewVBox(body...))), frame)
 	col.mins, col.waiting = mins, waiting
-	col.baseFill = dayFill(mins, waiting)
+	// The day turns green once logged + drafts + planned reach the target, as
+	// on the Sprint Calendar. Planned time only colours the day; the captions
+	// still read logged and drafts alone.
+	col.planned = planned
+	col.baseFill = dayFill(mins, waiting+col.planned)
 	frame.FillColor = col.baseFill
 	return col
 }
@@ -855,6 +859,7 @@ type dayColumn struct {
 
 	mins     int // already on GitHub
 	waiting  int // saved here, standing on this day
+	planned  int // Sprint Calendar time not yet logged or drafted
 	baseFill color.Color
 	pulse    *fyne.Animation // running only while a card hovers this day
 }
@@ -924,7 +929,7 @@ func (c *dayColumn) startPulse(dropping int) {
 	// still lifts, towards the accent rather than towards done — a card has to
 	// look like it can land somewhere even when landing there settles nothing.
 	to := blendColor(bg, theme.Color(theme.ColorNamePrimary), weekDraftTint)
-	if c.mins+c.waiting+dropping >= target {
+	if c.mins+c.waiting+c.planned+dropping >= target {
 		to = blendColor(bg, theme.Color(theme.ColorNameSuccess), weekDoneTint)
 	}
 	c.pulse = canvas.NewColorRGBAAnimation(c.baseFill, to, pulsePeriod, func(col color.Color) {

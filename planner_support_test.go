@@ -165,9 +165,12 @@ func TestSprintWeekdaySupportIsDisplayOnlyAndSkipsRealSupport(t *testing.T) {
 			todayButton = b
 		}
 	})
+	if !ui.supportOn(k.week) || ui.supportOn(addDays(k.week, 7)) {
+		t.Fatal("ticking the calendar should save support for the shown week only")
+	}
 	test.Tap(todayButton)
-	if k.calendarSupport {
-		t.Fatal("period navigation should reset temporary support like Log Work")
+	if !ui.supportOn(k.week) {
+		t.Fatal("support is saved per week and survives navigation")
 	}
 }
 

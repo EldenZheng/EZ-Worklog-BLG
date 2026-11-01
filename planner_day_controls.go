@@ -6,7 +6,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -80,12 +79,14 @@ func newPlannerDayClear(k *kanbanUI, date string, day *plannerDayHover) *planner
 	return b
 }
 func (k *kanbanUI) confirmClearDay(date string) {
-	_, count := clearPlannerDay(k.plan, k.uniqueCurrentItems(), date)
+	// The day's bin clears what the day shows: every visible issue's blocks,
+	// whichever sprint the issue belongs to.
+	_, count := clearPlannerDay(k.plan, k.scheduledItems(), date)
 	if count == 0 {
 		return
 	}
-	k.confirmClear("Clear "+date, fmt.Sprintf("Remove %d local time blocks from %s for the visible sprint issues?", count, date), func() {
-		p, _ := clearPlannerDay(k.plan, k.uniqueCurrentItems(), date)
+	k.confirmClear("Clear "+date, fmt.Sprintf("Remove %d local time blocks from %s for the visible project issues?", count, date), func() {
+		p, _ := clearPlannerDay(k.plan, k.scheduledItems(), date)
 		if k.save(p) {
 			k.setMessage("Local schedule cleared for " + date + ".")
 			k.draw()
@@ -100,8 +101,8 @@ func (k *kanbanUI) confirmClear(title, message string, apply func()) {
 	var popup *widget.PopUp
 	cancel := widget.NewButton("Cancel", func() { popup.Hide() })
 	confirm := widget.NewButton("Clear", func() { popup.Hide(); apply() })
-	buttons := container.NewHBox(layout.NewSpacer(), removalButton(cancel, false), removalButton(confirm, true))
-	content := container.NewPadded(container.NewBorder(container.NewVBox(widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), body), buttons, nil, nil, nil))
+	buttons := removalButtons(cancel, confirm)
+	content := removalPopupContent(container.NewBorder(container.NewVBox(widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), body), buttons, nil, nil, nil))
 	popup = widget.NewModalPopUp(content, k.ui.win.Canvas())
 	size := k.ui.removalPopupSize(content)
 	popup.Resize(size)

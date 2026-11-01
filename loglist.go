@@ -44,11 +44,10 @@ func (ui *UI) issueLink(issue, title string) fyne.CanvasObject {
 // between them the point rather than something to work out.
 
 func (ui *UI) buildLogListTab() fyne.CanvasObject {
-	// Walking off this week clears the placeholder the same way the strip does:
-	// it is a sketch of one week's unlogged rota, not a rolling default.
+	// The support placeholder is saved per week, so walking shows whatever the
+	// week arrived at has ticked rather than carrying one week's into another.
 	walkTo := func(start string) {
 		ui.weekStart = start
-		ui.supportPlaceholder = false
 		ui.drawWeekStrip() // shared week: the strip on Log work follows this
 	}
 	prev := widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
@@ -73,9 +72,9 @@ func (ui *UI) buildLogListTab() fyne.CanvasObject {
 	// piece of state shared between tabs, so ticking either one lights up both.
 	support := widget.NewCheck(
 		fmt.Sprintf("+%d min weekday support (display only)", supportPlaceholderMins), nil)
-	support.SetChecked(ui.supportPlaceholder)
+	support.SetChecked(ui.supportOn(orDefault(ui.weekStart, weekStartOf(today()))))
 	support.OnChanged = func(on bool) {
-		ui.supportPlaceholder = on
+		ui.setSupport(on, orDefault(ui.weekStart, weekStartOf(today())))
 		ui.drawWeekStrip()
 	}
 	ui.listSupport = support
@@ -113,10 +112,10 @@ func (ui *UI) drawLogList() {
 	// Mirror the flag onto this tab's checkbox when the change came from the
 	// other one. The handler is unhooked around SetChecked because it would
 	// otherwise fire drawWeekStrip and loop back through here.
-	if ui.listSupport != nil && ui.listSupport.Checked != ui.supportPlaceholder {
+	if on := ui.supportOn(weekStart); ui.listSupport != nil && ui.listSupport.Checked != on {
 		prev := ui.listSupport.OnChanged
 		ui.listSupport.OnChanged = nil
-		ui.listSupport.SetChecked(ui.supportPlaceholder)
+		ui.listSupport.SetChecked(on)
 		ui.listSupport.OnChanged = prev
 	}
 
@@ -193,7 +192,7 @@ func (ui *UI) listDayColumn(ds string, items []WorklogItem, local []Row) fyne.Ca
 	// The support shift pencilled in — same rule as the strip, same yellow: neither
 	// this nor the drafts are on the board yet, and both should count the same way
 	// against the day's score.
-	placeholder := supportPlaceholderFor(ui.cfg, ui.supportPlaceholder, ds, items)
+	placeholder := supportPlaceholderFor(ui.cfg, ui.supportOn(ds), ds, items)
 	if placeholder > 0 {
 		draftByOrg[strings.ToLower(orgOf(ui.cfg.WorklogOwner))] += placeholder
 		waiting += placeholder
@@ -239,7 +238,7 @@ func (ui *UI) listDayColumn(ds string, items []WorklogItem, local []Row) fyne.Ca
 
 	body := container.NewVBox(
 		head,
-		ui.progressBar("list/"+t.Format("Mon"), ds, byOrg, draftByOrg, target, 8),
+		ui.progressBarParts("list/"+t.Format("Mon"), ds, plannedBarParts(ui.cfg, byOrg, draftByOrg, ui.plannedMinutes(ds, items, local)), 8),
 		container.New(splitCaption{}, weekCaption(banked), weekCaption(projected)),
 	)
 	return container.NewStack(floor, frame, container.NewPadded(body))
@@ -283,7 +282,7 @@ func (ui *UI) weekProgressPanel(days []string, byDay map[string][]WorklogItem, i
 	// into it.
 	placeholder := 0
 	for _, d := range days {
-		if m := supportPlaceholderFor(ui.cfg, ui.supportPlaceholder, d, byDay[d]); m > 0 {
+		if m := supportPlaceholderFor(ui.cfg, ui.supportOn(d), d, byDay[d]); m > 0 {
 			placeholder += m
 			draftByOrg[strings.ToLower(orgOf(ui.cfg.WorklogOwner))] += m
 		}

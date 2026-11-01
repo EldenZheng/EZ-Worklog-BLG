@@ -27,6 +27,55 @@ type plannerDateTarget struct {
 
 var plannerAvailableBlue = color.NRGBA{R: 106, G: 186, B: 236, A: 255}
 
+// The MEETING bubble is a local-only item that sits in the tray whatever sprint
+// is selected, so time can be set aside for meetings on any date. It belongs to
+// no board and no sprint, and nothing about it is sent to GitHub.
+const plannerMeetingKey = "local/meeting"
+
+var plannerMeetingBoard = sprintBoard{ID: "local", Title: "Meeting"}
+
+func plannerMeetingCandidate() sprintCandidate {
+	return sprintCandidate{
+		Key:  plannerMeetingKey,
+		Item: sprintItem{ID: "meeting", Title: "MEETING", Effort: 60},
+		// Any date is inside the meeting's "sprint".
+		Sprint: sprintIteration{ID: "meeting", Title: "Meeting", StartDate: "2000-01-01", Duration: 100 * 366},
+	}
+}
+
+// scheduledItems is every issue the calendar draws bubbles for: the selected
+// sprint's issues plus any issue on a visible board with a planned block, in
+// whatever sprint it sits. Switching sprints changes the tray, not which plans
+// can be seen on the dates. Each keeps its own sprint, so a drag still only
+// lands inside that issue's sprint.
+func (k *kanbanUI) scheduledItems() []sprintCandidate {
+	out := append(k.uniqueCurrentItems(), plannerMeetingCandidate())
+	seen := map[string]bool{}
+	for _, c := range out {
+		seen[c.Key] = true
+	}
+	for _, b := range k.plan.Boards {
+		if !k.visibleBoard(b) {
+			continue
+		}
+		for _, it := range b.Items {
+			key := it.key(b.ID)
+			if seen[key] || len(k.plan.Tasks[key].Blocks) == 0 {
+				continue
+			}
+			seen[key] = true
+			var sprint sprintIteration
+			for _, s := range b.iterations() {
+				if s.ID == it.SprintID {
+					sprint = s
+				}
+			}
+			out = append(out, sprintCandidate{key, it, sprint})
+		}
+	}
+	return out
+}
+
 func (k *kanbanUI) uniqueCurrentItems() []sprintCandidate {
 	seen := map[string]bool{}
 	var out []sprintCandidate
@@ -73,7 +122,6 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 					return
 				}
 				k.calendarSprint = keys[i]
-				k.calendarSupport = false
 				for _, g := range groups {
 					if g.Key == keys[i] {
 						k.week = weekStartOf(g.Sprint.StartDate)
@@ -118,7 +166,6 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 		} else {
 			k.week = addDays(k.week, step*7)
 		}
-		k.calendarSupport = false
 		k.draw()
 	}
 	period := k.week + " – " + addDays(k.week, 6)
@@ -136,7 +183,7 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 	if selected := k.selectedCalendarSprint(); selected.ID != "" && selected.contains(today()) {
 		sprintControl = container.NewThemeOverride(sprintSelect, dropdownTheme{Theme: theme.Current(), current: true})
 	}
-	header := container.NewHBox(container.NewThemeOverride(mode, dropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(360, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), widget.NewButton("Today", func() { k.week = weekStartOf(today()); k.month = thisMonth(); k.calendarSupport = false; k.draw() }))
+	header := container.NewHBox(container.NewThemeOverride(mode, dropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(360, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), widget.NewButton("Today", func() { k.week = weekStartOf(today()); k.month = thisMonth(); k.draw() }))
 	auto := widget.NewButton("Allocate unscheduled", func() {
 		p := k.plan
 		var unplaced []string
@@ -150,6 +197,7 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 		}
 	})
 	items := k.uniqueCurrentItems()
+	scheduled := k.scheduledItems()
 	clear := widget.NewButtonWithIcon("Clear", theme.DeleteIcon(), func() {
 		_, count := clearSprintSchedule(k.plan, items)
 		if count == 0 {
@@ -192,17 +240,17 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 				if outside {
 					row.Add(widget.NewLabel(""))
 				} else {
-					row.Add(k.calendarDay(day, items, scale, work.days[day]))
+					row.Add(k.calendarDay(day, scheduled, scale, work.days[day]))
 				}
 			}
 			weeks.Add(newPlannerWeek(row, scale, false))
 		}
 		if k.calendarMode == "Month" {
-			scroll := newPlannerFastScroll(weeks)
+			scroll := newPlannerFastScroll(plannerScrollInset(weeks))
 			dates = scroll
 			k.calendarClip = scroll
 		} else {
-			scroll := container.NewVScroll(weeks)
+			scroll := container.NewVScroll(plannerScrollInset(weeks))
 			dates = scroll
 			k.calendarClip = scroll
 		}
@@ -211,9 +259,9 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 		row := container.NewGridWithColumns(7)
 		for d := 0; d < 7; d++ {
 			day := addDays(k.week, d)
-			row.Add(k.calendarDay(day, items, scale, work.days[day]))
+			row.Add(k.calendarDay(day, scheduled, scale, work.days[day]))
 		}
-		scroll := container.NewVScroll(newPlannerWeek(row, scale, true))
+		scroll := container.NewVScroll(plannerScrollInset(newPlannerWeek(row, scale, true)))
 		dates = scroll
 		k.calendarClip = scroll
 	}
@@ -224,11 +272,13 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 	axisSpacer := canvas.NewRectangle(color.Transparent)
 	axisSpacer.SetMinSize(fyne.NewSize(plannerRulerWidth, 0))
 	dates = container.NewBorder(container.NewBorder(nil, nil, axisSpacer, nil, weekdays), nil, nil, nil, dates)
-	var unscheduled []fyne.CanvasObject
+	unscheduled := []fyne.CanvasObject{k.plannerCard(plannerMeetingCandidate(), -1)}
+	issues := 0
 	for _, c := range items {
 		t := k.plan.Tasks[c.Key]
 		if !plannerIssueFinished(c.Item, t) {
 			unscheduled = append(unscheduled, k.plannerCard(c, -1))
+			issues++
 		}
 	}
 	grid := container.NewVBox(unscheduled...)
@@ -236,12 +286,12 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 	trayScroll.SetMinSize(fyne.NewSize(250, 0))
 	k.calendarIssueClip = trayScroll
 	var tray fyne.CanvasObject = trayScroll
-	if len(unscheduled) == 0 {
+	if issues == 0 {
 		empty := widget.NewLabel("No active issues in the selected sprint.")
 		empty.Wrapping = fyne.TextWrapWord
-		trayScroll.Content = empty
+		grid.Add(empty)
 	}
-	trayTitle := widget.NewLabelWithStyle(fmt.Sprintf("Sprint issues (%d)", len(unscheduled)), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	trayTitle := widget.NewLabelWithStyle(fmt.Sprintf("Sprint issues (%d)", issues), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	trayNote := widget.NewLabel("Drag again to plan another day")
 	trayNote.Wrapping = fyne.TextWrapWord
 	sidebar := container.NewBorder(container.NewVBox(trayTitle, trayNote), nil, nil, nil, tray)
@@ -272,8 +322,19 @@ func (k *kanbanUI) calendar() fyne.CanvasObject {
 	}
 	periodNote.Wrapping = fyne.TextWrapWord
 	support := widget.NewCheck(fmt.Sprintf("+%d min weekday support (display only)", supportPlaceholderMins), nil)
-	support.SetChecked(k.calendarSupport)
-	support.OnChanged = func(on bool) { k.calendarSupport = on; k.draw() }
+	// Saved per week, shared with Log Work: ticked when every week shown is on,
+	// and ticking it sets every week in the shown period.
+	supportWeeks := supportDates(k.calendarRange())
+	allOn := len(supportWeeks) > 0
+	for _, w := range supportWeeks {
+		allOn = allOn && k.ui.supportOn(w)
+	}
+	support.SetChecked(allOn)
+	support.OnChanged = func(on bool) {
+		k.ui.setSupport(on, supportWeeks...)
+		k.ui.drawWeekStrip()
+		k.draw()
+	}
 	noteRow := container.NewBorder(nil, nil, nil, goldChoice(support), periodNote)
 	legend := container.NewBorder(nil, nil, nil, weekCaption("Projects: GitHub · Gold: drafts/support · Purple: plans"), k.projectLegend(true))
 	return container.NewBorder(container.NewVBox(toolbar, noteRow), legend, sidebar, nil, dates)
@@ -350,6 +411,9 @@ func (k *kanbanUI) calendarDay(date string, items []sprintCandidate, scale *plan
 }
 
 func (k *kanbanUI) boardItem(c sprintCandidate) (sprintBoard, sprintItem, bool) {
+	if c.Key == plannerMeetingKey {
+		return plannerMeetingBoard, plannerMeetingCandidate().Item, true
+	}
 	for _, b := range k.plan.Boards {
 		for _, it := range b.Items {
 			if it.key(b.ID) == c.Key {

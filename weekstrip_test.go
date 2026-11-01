@@ -2,6 +2,8 @@ package main
 
 import (
 	"image/color"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -156,14 +158,16 @@ func TestSupportPlaceholderCoversWeekdaysWithoutOne(t *testing.T) {
 	}
 }
 
-// It is a sketch of this week, so it does not follow you to the next one.
-func TestSupportPlaceholderClearsWhenTheWeekChanges(t *testing.T) {
+// It is saved for its own week: it does not follow you to another week, and it
+// is still there when you walk back or reopen the app.
+func TestSupportPlaceholderIsSavedPerWeek(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
+	week := ui.weekStart
 
-	ui.supportPlaceholder = true
+	ui.setSupport(true, week)
 	ui.drawWeekStrip()
-	if !ui.supportPlaceholder {
+	if !ui.supportOn(week) {
 		t.Fatal("drawing the strip should not clear it")
 	}
 
@@ -172,8 +176,18 @@ func TestSupportPlaceholderClearsWhenTheWeekChanges(t *testing.T) {
 		t.Fatalf("the strip needs a way home: %v", labels(ui.weekBox))
 	}
 	next.OnTapped()
-	if ui.supportPlaceholder {
-		t.Fatal("walking to another week should take the placeholder off")
+	if ui.supportOn(ui.weekStart) {
+		t.Fatal("another week should not inherit the placeholder")
+	}
+	if !ui.supportOn(week) {
+		t.Fatal("walking away should not forget the week it was ticked for")
+	}
+	if !ui.store.loadSupportWeeks()[week] {
+		t.Fatal("the ticked week was not saved")
+	}
+	ui.setSupport(false, week)
+	if _, err := os.Stat(filepath.Join(ui.store.dir, supportWeeksFile)); !os.IsNotExist(err) {
+		t.Fatal("an empty support file should be removed", err)
 	}
 }
 
@@ -191,7 +205,7 @@ func TestSupportPlaceholderShowsOnTheStrip(t *testing.T) {
 	}
 	ui.projLoaded[key] = true
 
-	ui.supportPlaceholder = true
+	ui.setSupport(true, ui.weekStart)
 	ui.drawRecent()
 
 	got := labels(ui.weekBox)

@@ -56,7 +56,7 @@ func TestSprintIssueCanBePlannedOnMultipleDays(t *testing.T) {
 	ui.kanban.draw()
 	trayCards := 0
 	walkCanvas(ui.kanban.calendarBody, func(o fyne.CanvasObject) {
-		if card, ok := o.(*plannerDragCard); ok && card.index == -1 {
+		if card, ok := o.(*plannerDragCard); ok && card.index == -1 && card.candidate.Key != plannerMeetingKey {
 			trayCards++
 		}
 	})

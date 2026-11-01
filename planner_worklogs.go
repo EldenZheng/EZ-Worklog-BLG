@@ -63,6 +63,7 @@ func (k *kanbanUI) loadCalendarWorklogs(force bool) {
 	}
 }
 func (k *kanbanUI) refreshCalendarSources() {
+	k.autoStartPending = !k.busy // see maintain
 	k.load(true)
 	k.loadCalendarWorklogs(true)
 	k.draw()
@@ -207,7 +208,7 @@ func (k *kanbanUI) dayTotals(date string, candidates []sprintCandidate, work pla
 			credited[ref] -= covered
 		}
 	}
-	t.support = supportPlaceholderFor(k.ui.cfg, k.calendarSupport, date, supportItems)
+	t.support = supportPlaceholderFor(k.ui.cfg, k.ui.supportOn(date), date, supportItems)
 	if t.support > 0 {
 		t.draftByOrg[strings.ToLower(orgOf(k.ui.cfg.WorklogOwner))] += t.support
 	}
@@ -223,6 +224,37 @@ func (t plannerDayTotals) parts(cfg Config) []meterPart {
 		parts = append(parts, meterPart{key: "@plan", fill: plannerPlanColor, weight: float32(t.planned) / float32(denominator)})
 	}
 	return parts
+}
+
+// plannedMinutes is the Sprint Calendar's purple figure for a day: planned
+// blocks not yet covered by work logged or drafted against the same issue.
+func (ui *UI) plannedMinutes(date string, logged []WorklogItem, drafts []Row) int {
+	k := ui.kanban
+	if k == nil {
+		return 0
+	}
+	return k.dayTotals(date, k.scheduledItems(), plannerDayWork{logged: logged, drafts: drafts}).planned
+}
+
+// plannedBarParts is a day bar with the planned time in purple after the
+// logged and drafted parts: the bar only, the captions are left alone.
+func plannedBarParts(cfg Config, byOrg, draft map[string]int, planned int) []meterPart {
+	if planned <= 0 {
+		return meterParts(cfg, byOrg, draft, target)
+	}
+	denominator := target
+	total := planned
+	for _, m := range byOrg {
+		total += m
+	}
+	for _, m := range draft {
+		total += m
+	}
+	if total > denominator {
+		denominator = total
+	}
+	return append(meterParts(cfg, byOrg, draft, denominator),
+		meterPart{key: "@plan", fill: plannerPlanColor, weight: float32(planned) / float32(denominator)})
 }
 
 // Keep range traversal finite if a malformed persisted date reaches the UI.

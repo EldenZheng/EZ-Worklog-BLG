@@ -5,11 +5,19 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 )
 
 func (k *kanbanUI) drawKeepingCalendarScroll() {
 	k.draw()
+}
+
+// plannerScrollInset keeps the day frames' top edge inside the scroll: a frame
+// drawn at y=0 loses the outer half of its stroke (and all of a 4px drop
+// highlight) to the scroll's clip.
+func plannerScrollInset(o fyne.CanvasObject) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(4, 0, 0, 0), o)
 }
 
 func plannerScroll(o fyne.CanvasObject) *container.Scroll {

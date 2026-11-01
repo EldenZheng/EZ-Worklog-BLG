@@ -171,10 +171,10 @@ type UI struct {
 	savedTitlesLoading bool
 	showIgnored        bool
 
-	// supportPlaceholder pencils an unlogged weekday support shift onto the week
-	// strip. Held in memory only and cleared whenever the week changes — it is a
-	// sketch, not an entry, and nothing is written for it.
-	supportPlaceholder bool
+	// supportWeeks are the weeks (by Monday) the weekday support placeholder is
+	// ticked for. Saved in support-weeks.json, pruned once a week's Friday has
+	// passed or its weekdays all hold logged support. Never pushed anywhere.
+	supportWeeks map[string]bool
 
 	// Organisations tapped out of the colour key, lowercased. One filter for the
 	// whole app rather than one per tab: hiding an employer is a decision about
@@ -997,13 +997,25 @@ func main() {
 		ui.syncLoading()
 		switch ti.Text {
 		case kanbanTabName:
+			ui.pruneSupportWeeks()
+			ui.kanban.prunePlan()
 			ui.kanban.load(false)
 		case plannerTabName:
+			ui.pruneSupportWeeks()
+			ui.kanban.maintain()
 			ui.kanban.load(false)
 			ui.kanban.draw()
 		case logWorkTabName:
+			// Both week tabs carry the support checkbox: drop finished weeks
+			// before it is read, and redraw if one went.
+			if ui.pruneSupportWeeks() {
+				ui.drawWeekStrip()
+			}
 			ui.loadPending(false)
 		case logListTabName:
+			if ui.pruneSupportWeeks() {
+				ui.drawWeekStrip()
+			}
 			ui.loadPending(false)
 			ui.drawLogList()
 		case commitListTabName:
@@ -1037,6 +1049,12 @@ func main() {
 		fyne.Do(func() {
 			ui.loadSavedIssueInfos()
 			ui.loadPending(false)
+			if ui.pruneSupportWeeks() {
+				ui.drawWeekStrip()
+			}
+			if ui.kanban != nil {
+				ui.kanban.maintain()
+			}
 		})
 	}()
 	// Maximise once the window is up. fyne 2.8 has no Maximise method, so this
@@ -3661,9 +3679,9 @@ func (ui *UI) confirmDelete(r Row, refresh func()) {
 		}
 		refresh()
 	})
-	buttons := container.NewHBox(layout.NewSpacer(), removalButton(cancel, false), removalButton(confirm, true))
+	buttons := removalButtons(cancel, confirm)
 	content := container.NewBorder(container.NewVBox(widget.NewLabelWithStyle("Delete entry", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), body), buttons, nil, nil, nil)
-	padded := container.NewPadded(content)
+	padded := removalPopupContent(content)
 	pop = widget.NewModalPopUp(padded, ui.win.Canvas())
 	sz := ui.removalPopupSize(padded)
 	pop.Resize(sz)

@@ -32,7 +32,8 @@ func TestSprintWeekExpandsScaleButMonthKeepsNaturalHeight(t *testing.T) {
 	if math.Abs(float64(face.Size().Height-120*l.pixels())) > 0.1 {
 		t.Fatal("expanded bubble does not follow ruler")
 	}
-	week := plannerScroll(k.calendarClip).Content.(*fyne.Container)
+	// The week sits inside the top inset that keeps day frames off the clip.
+	week := plannerScroll(k.calendarClip).Content.(*fyne.Container).Objects[0].(*fyne.Container)
 	ruler := week.Objects[0].(*durationRuler)
 	if ruler.scale.pixels() != l.pixels() {
 		t.Fatal("ruler and bubble scales differ")

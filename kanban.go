@@ -48,7 +48,8 @@ type kanbanUI struct {
 	calendarIssueClip                   fyne.CanvasObject
 	calendarDrawnMode                   string
 	calendarOffsets                     map[string]fyne.Position
-	calendarSupport                     bool
+	autoStarted                         map[string]bool // issues already auto-started this session
+	autoStartPending                    bool            // next board fetch should start today's planned issues
 	calendarDrag                        *plannerDragCard
 	calendarResizing                    bool
 	calendarActive                      bool
@@ -104,6 +105,10 @@ func (k *kanbanUI) save(p sprintPlan) bool {
 		return false
 	}
 	k.plan = p
+	// Log Work's day bars show the planned time; keep them in step.
+	if k.ui.weekBox != nil {
+		k.ui.drawWeekStrip()
+	}
 	return true
 }
 
@@ -147,6 +152,15 @@ func (k *kanbanUI) load(force bool) {
 				k.setMessage("")
 				if len(errors) > 0 {
 					k.setMessage("Refresh incomplete; saved data retained for unavailable boards. " + strings.Join(errors, "; "))
+				}
+				// Fresh statuses: drop plans for issues that have left the
+				// boards. Today's planned issues are started only when the
+				// fetch came from the Sprint Calendar or app start, never from
+				// Kanban, where status changes are made by dragging.
+				k.prunePlan()
+				if k.autoStartPending {
+					k.autoStartPending = false
+					k.startPlannedToday()
 				}
 			}
 			k.draw()
