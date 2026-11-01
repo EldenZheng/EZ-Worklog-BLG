@@ -2,13 +2,14 @@ package tests
 
 import (
 	"testing"
-	"worklog/internal/menus/loglist"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/menus/loglist"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 func logListUI(t *testing.T) *shell.UI {

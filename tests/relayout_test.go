@@ -3,13 +3,14 @@ package tests
 import (
 	"fmt"
 	"testing"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // A refresh that finds work has to make room for it.

@@ -2,15 +2,16 @@ package tests
 
 import (
 	"testing"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // Tiles must use the whole row. A fixed cell width leaves a strip of dead space

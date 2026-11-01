@@ -6,9 +6,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -16,6 +13,10 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // ScheduledItems is every issue the calendar draws bubbles for: the selected

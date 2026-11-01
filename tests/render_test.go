@@ -2,11 +2,12 @@ package tests
 
 import (
 	"testing"
+
+	"fyne.io/fyne/v2/test"
+
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2/test"
 )
 
 // Run: go test -run Render -v

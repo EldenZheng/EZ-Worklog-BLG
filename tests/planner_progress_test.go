@@ -6,17 +6,18 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"worklog/internal/menus/kanban"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/menus/sprintcalendar"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/kanban"
+	"worklog/internal/menus/logwork"
+	"worklog/internal/menus/sprintcalendar"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 type plannerRefreshCanvas struct {

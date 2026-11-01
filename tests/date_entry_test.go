@@ -7,15 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 func TestPickerProgressUsesOrgAndDraftColours(t *testing.T) {

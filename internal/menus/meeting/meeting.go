@@ -6,14 +6,15 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // MeetingWeekDates lists the eight days of a meeting window, previous Thursday

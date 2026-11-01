@@ -11,6 +11,15 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
+
 	"worklog/internal/assemble"
 	"worklog/internal/menus/commitlist"
 	"worklog/internal/menus/loglist"
@@ -20,14 +29,6 @@ import (
 	"worklog/internal/menus/status"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/test"
-	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 )
 
 // darkGold pins the app's own theme to its dark variant: the test app reports

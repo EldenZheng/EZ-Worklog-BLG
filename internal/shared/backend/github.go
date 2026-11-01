@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,18 +22,28 @@ func (e *GhError) Error() string { return e.msg }
 
 func GhErr(f string, a ...any) *GhError { return &GhError{fmt.Sprintf(f, a...)} }
 
+// GhTimeout bounds one gh invocation. A stalled connection then fails the
+// call instead of hanging whatever waits on it, such as the Kanban save
+// queue. Generous, because a paginated board fetch is one invocation.
+var GhTimeout = 3 * time.Minute
+
 // Gh runs the gh CLI and returns stdout, or a GhError.
 func Gh(args []string, extraHeaders ...string) (string, error) {
 	full := append([]string{}, args...)
 	for _, h := range extraHeaders {
 		full = append(full, "-H", h)
 	}
-	cmd := exec.Command("gh", full...)
+	ctx, cancel := context.WithTimeout(context.Background(), GhTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "gh", full...)
 	hideConsole(cmd) // stop a console window flashing per call on Windows
 	var out, errb strings.Builder
 	cmd.Stdout = &out
 	cmd.Stderr = &errb
 	err := cmd.Run()
+	if ctx.Err() == context.DeadlineExceeded {
+		return "", GhErr("GitHub did not answer within %s; try again.", GhTimeout)
+	}
 	if err != nil {
 		var ee *exec.Error
 		if errors.As(err, &ee) {

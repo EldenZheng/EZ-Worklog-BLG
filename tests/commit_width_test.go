@@ -2,11 +2,12 @@ package tests
 
 import (
 	"testing"
+
+	"fyne.io/fyne/v2/test"
+
 	"worklog/internal/menus/meeting"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2/test"
 )
 
 // A long owner/repo#number used to set the width of its whole day column, so

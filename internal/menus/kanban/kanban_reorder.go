@@ -1,12 +1,11 @@
 package kanban
 
 import (
-	"fmt"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // ---- reordering cards, as on a GitHub project board ----
@@ -150,100 +149,14 @@ func PlaceThen(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 		MoveThen(k, b, it, "status", status, nil, done)
 		return
 	}
-	if k.Busy || k.Loading {
-		k.SetMessage("Wait for the GitHub request to finish before moving an issue.")
+	b, latest, ok := latestItem(k, b.ID, it.ID)
+	if !ok {
 		return
 	}
-	bi := -1
-	for i := range k.Plan.Boards {
-		if k.Plan.Boards[i].ID == b.ID {
-			bi = i
-			for _, latest := range k.Plan.Boards[i].Items {
-				if latest.ID == it.ID {
-					it = latest
-				}
-			}
-		}
-	}
-	if bi < 0 {
+	if expectedState(k, latest.Key(b.ID), nil).status == status && slot.Unchanged() {
 		return
 	}
-	statusChange := it.Status != status
-	if !statusChange && slot.Unchanged() {
-		return
-	}
-	k.Busy = true
-	before := k.Plan.Boards[bi].Items
-	k.Plan.Boards[bi].Items = ReorderItems(before, it.ID, slot.AfterID)
-	if statusChange {
-		k.SetPending(b, it, "status", status)
-	} else {
-		k.SetPending(b, it, "position", "")
-	}
-	p := k.Pending[it.Key(b.ID)]
-	k.SetMessage(fmt.Sprintf("Saving %q to GitHub: %s…", it.Title, placeWhat(p)))
-	Draw(k)
-	go func() {
-		var statusErr, posErr error
-		if statusChange {
-			statusErr = backend.PushSprintItem(b, it, "status", status)
-		}
-		if statusErr == nil {
-			posErr = PushItemPosition(b, it, slot.AfterID)
-		}
-		fyne.Do(func() {
-			k.Busy = false
-			k.ClearPending(b, it)
-			if done != nil {
-				defer func() { done(firstErr(statusErr, posErr)) }()
-			}
-			for i := range k.Plan.Boards {
-				if k.Plan.Boards[i].ID != b.ID {
-					continue
-				}
-				if statusErr != nil || posErr != nil {
-					// Back to the order GitHub still has.
-					k.Plan.Boards[i].Items = before
-				}
-				if statusErr == nil && statusChange {
-					for ii := range k.Plan.Boards[i].Items {
-						if k.Plan.Boards[i].Items[ii].ID == it.ID {
-							k.Plan.Boards[i].Items[ii].Status = status
-						}
-					}
-				}
-			}
-			switch {
-			case statusErr != nil:
-				k.SetMessage(moveResult(it, p, statusErr))
-			case posErr != nil:
-				msg := fmt.Sprintf("Could not reorder %q on GitHub: %v", it.Title, posErr)
-				if statusChange {
-					k.Save(k.Plan)
-					msg = fmt.Sprintf("Saved %q: status is now %s, but the new order failed: %v", it.Title, p.Label, posErr)
-				}
-				k.SetMessage(msg)
-			default:
-				k.Save(k.Plan)
-				if statusChange {
-					k.SetMessage(moveResult(it, p, nil))
-				} else {
-					k.SetMessage(fmt.Sprintf("Saved %q: new order is on GitHub.", it.Title))
-				}
-			}
-			Draw(k)
-			if err := firstErr(statusErr, posErr); err != nil {
-				k.Ui.Errf(err)
-			}
-		})
-	}()
-}
-
-func placeWhat(p shell.KanbanPending) string {
-	if p.Kind == "status" {
-		return "status " + p.Label + " and order"
-	}
-	return "order"
+	enqueue(k, b, latest, "place", status, slot.AfterID, nil, done)
 }
 
 func firstErr(errs ...error) error {

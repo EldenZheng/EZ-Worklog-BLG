@@ -3,9 +3,6 @@ package kanban
 import (
 	"fmt"
 	"image/color"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -13,18 +10,31 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // PendingStatus is the column a card is drawn in: where it is being moved
 // while that save runs, otherwise its board status.
 func PendingStatus(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem) string {
-	if p, ok := k.Pending[it.Key(b.ID)]; ok && p.Kind == "status" {
-		return p.Value
+	if p, ok := k.Pending[it.Key(b.ID)]; ok && p.HasStatus {
+		return p.Status
 	}
 	return it.Status
 }
 
 func savingText(p shell.KanbanPending) string {
+	if p.Queued {
+		switch p.Kind {
+		case "position":
+			return "Queued: new order"
+		case "status":
+			return "Queued: to " + p.Label
+		}
+		return "Queued: move to " + p.Label
+	}
 	if p.Kind == "position" {
 		return "Saving order…"
 	}

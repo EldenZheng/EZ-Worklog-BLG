@@ -3,15 +3,16 @@ package tests
 import (
 	"image/color"
 	"testing"
-	"worklog/internal/menus/report"
-	"worklog/internal/menus/status"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/menus/report"
+	"worklog/internal/menus/status"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // A day cell holds three lines now, so the floor has to leave room for them.

@@ -3,12 +3,13 @@ package tests
 import (
 	"strings"
 	"testing"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // Under the cap the box is one text: it is the remarks, the row stores no

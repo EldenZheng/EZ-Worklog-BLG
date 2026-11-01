@@ -6,9 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -17,6 +14,10 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func BuildKanbanTab(ui *shell.UI) fyne.CanvasObject {
@@ -123,6 +124,7 @@ func BuildPlannerTab(ui *shell.UI) fyne.CanvasObject {
 }
 
 func Draw(k *shell.KanbanUI) {
+	k.RedrawPending = false
 	sideOffset := shell.ScrollOffset(k.SideClip)
 	boardOffset := shell.ScrollOffset(k.BoardClip)
 	issuesOffset := shell.ScrollOffset(k.CalendarIssueClip)
@@ -244,73 +246,12 @@ func Move(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, kind,
 	MoveThen(k, b, it, kind, value, nil, nil)
 }
 
-// MoveThen saves a status or sprint change to GitHub. While it runs the card
-// shows the change in progress and the activity bar runs; done, if given, is
-// called on the UI thread with the outcome, and start, if given, just before
-// the request goes out. It reports whether a save started.
+// MoveThen queues a status or sprint change for GitHub (see kanban_queue.go).
+// The card shows the change at once; start, if given, runs on the UI thread
+// just before the request goes out, and done with the outcome. It reports
+// whether a change was queued: false when the card is already there.
 func MoveThen(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, kind, value string, start func(), done func(error)) bool {
-	if k.Busy || k.Loading {
-		k.SetMessage("Wait for the GitHub request to finish before moving an issue.")
-		return false
-	}
-	for _, latestBoard := range k.Plan.Boards {
-		if latestBoard.ID == b.ID {
-			for _, latestItem := range latestBoard.Items {
-				if latestItem.ID == it.ID {
-					it = latestItem
-				}
-			}
-		}
-	}
-	if kind == "status" && it.Status == value || kind == "sprint" && it.SprintID == value {
-		return false
-	}
-	k.Busy = true
-	k.SetPending(b, it, kind, value)
-	p := k.Pending[it.Key(b.ID)]
-	what := "status"
-	if kind == "sprint" {
-		what = "sprint"
-	}
-	k.SetMessage(fmt.Sprintf("Saving %q to GitHub: %s %s…", it.Title, what, p.Label))
-	Draw(k)
-	if start != nil {
-		start()
-	}
-	go func() {
-		err := backend.PushSprintItem(b, it, kind, value)
-		fyne.Do(func() {
-			k.Busy = false
-			k.ClearPending(b, it)
-			if done != nil {
-				defer done(err)
-			}
-			if err != nil {
-				k.SetMessage(moveResult(it, p, err))
-				Draw(k)
-				k.Ui.Errf(err)
-				return
-			}
-			for bi := range k.Plan.Boards {
-				if k.Plan.Boards[bi].ID == b.ID {
-					for ii := range k.Plan.Boards[bi].Items {
-						i := &k.Plan.Boards[bi].Items[ii]
-						if i.ID == it.ID {
-							if kind == "status" {
-								i.Status = value
-							} else {
-								i.SprintID = value
-							}
-						}
-					}
-				}
-			}
-			k.Save(k.Plan)
-			k.SetMessage(moveResult(it, p, nil))
-			Draw(k)
-		})
-	}()
-	return true
+	return enqueue(k, b, it, kind, value, "", start, done)
 }
 
 func OpenCandidate(k *shell.KanbanUI, c backend.SprintCandidate) {
@@ -441,10 +382,10 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 			applyState.SetText(moveResult(it, shell.KanbanPending{Kind: kind, Label: backend.FieldValueLabel(b, kind, value)}, err))
 		})
 		switch {
-		case started:
-		case k.Busy || k.Loading:
-			applyState.SetText("Wait for the GitHub request to finish.")
+		case started && k.Running != nil && k.Running.Item.ID != it.ID:
+			applyState.SetText("Queued: it is saved after the changes ahead of it.")
 			applyState.Show()
+		case started:
 		default:
 			applyState.SetText("Already " + backend.FieldValueLabel(b, kind, value) + " on GitHub.")
 			applyState.Show()

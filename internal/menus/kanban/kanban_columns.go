@@ -3,12 +3,13 @@ package kanban
 import (
 	"image/color"
 	"strings"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 var PrimaryKanbanStatuses = []string{"Created", "Analysis - Investigation", "In Progress", "Pending Customer Feedback", "Pending Test", "Server Update Required", "In Review", "Done"}

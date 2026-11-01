@@ -5,14 +5,15 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"worklog/internal/menus/settings"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/settings"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 func TestPrivateSettingsStartEmpty(t *testing.T) {

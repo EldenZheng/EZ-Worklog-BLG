@@ -5,14 +5,15 @@ import (
 	"image/color"
 	"sort"
 	"strings"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/widgets"
 )
 
 // OrgPalette hands each organisation a colour in configuration order: the first

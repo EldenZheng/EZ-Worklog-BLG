@@ -5,16 +5,17 @@ import (
 	"image/color"
 	"strings"
 	"testing"
-	"worklog/internal/menus/kanban"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/kanban"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // stubPush replaces the GitHub write with one that waits for release.

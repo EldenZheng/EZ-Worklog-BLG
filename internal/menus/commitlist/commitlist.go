@@ -1,14 +1,14 @@
 package commitlist
 
 import (
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // The Commit List tab is the week read from the other end. Log List asks "what

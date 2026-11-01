@@ -3,13 +3,14 @@ package tests
 import (
 	"strings"
 	"testing"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/test"
+
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/test"
 )
 
 // flowGrids collects every wrapping grid in a tree, in order: the pending list

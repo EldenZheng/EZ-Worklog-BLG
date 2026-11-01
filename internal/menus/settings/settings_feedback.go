@@ -4,7 +4,6 @@ import (
 	"image/color"
 	"strings"
 	"time"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -12,6 +11,8 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/shell"
 )
 
 // A canvas overlay leaves the page interactive; it is not a modal dialog.

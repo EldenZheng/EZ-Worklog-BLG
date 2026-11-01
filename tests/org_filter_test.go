@@ -5,15 +5,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
+
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/report"
 	"worklog/internal/menus/status"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/test"
-	"fyne.io/fyne/v2/theme"
 )
 
 // The Report tab opens on the period today is being worked into. A period runs

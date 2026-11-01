@@ -2,7 +2,15 @@ package main
 
 import (
 	_ "embed"
+	"fmt"
 	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
+
 	"worklog/internal/assemble"
 	"worklog/internal/menus/commitlist"
 	"worklog/internal/menus/kanban"
@@ -15,11 +23,6 @@ import (
 	"worklog/internal/menus/status"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
 )
 
 func main() {
@@ -94,6 +97,25 @@ func main() {
 		}
 	}
 	w.SetContent(ui.Tabs)
+	// Kanban changes still queued for GitHub are lost if the app quits, so
+	// ask first.
+	w.SetCloseIntercept(func() {
+		n := 0
+		if ui.Kanban != nil {
+			n = ui.Kanban.PendingWrites()
+		}
+		if n == 0 {
+			w.Close()
+			return
+		}
+		dialog.ShowConfirm("Changes still saving",
+			fmt.Sprintf("%d Kanban change(s) have not reached GitHub yet. Close anyway and lose them?", n),
+			func(close bool) {
+				if close {
+					w.Close()
+				}
+			}, w)
+	})
 
 	logwork.DrawRecent(ui)
 	if !has {

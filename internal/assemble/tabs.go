@@ -2,6 +2,10 @@ package assemble
 
 import (
 	_ "embed"
+
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/theme"
+
 	"worklog/internal/menus/commitlist"
 	"worklog/internal/menus/kanban"
 	"worklog/internal/menus/loglist"
@@ -11,9 +15,6 @@ import (
 	"worklog/internal/menus/settings"
 	"worklog/internal/menus/status"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
 )
 
 // BuildAllTabs assembles the tab bar. Kept apart from main so the wiring

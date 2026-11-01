@@ -2,13 +2,14 @@ package shell
 
 import (
 	"image/color"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/widgets"
 )
 
 // Keep semantic colours (orgs, drafts, success and warnings) separate from

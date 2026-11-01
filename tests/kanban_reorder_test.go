@@ -4,12 +4,13 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"fyne.io/fyne/v2"
+
 	"worklog/internal/menus/kanban"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
-
-	"fyne.io/fyne/v2"
 )
 
 func itemIDs(items []backend.SprintItem) string {

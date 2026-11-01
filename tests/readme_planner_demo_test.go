@@ -7,16 +7,17 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"worklog/internal/assemble"
-	"worklog/internal/menus/kanban"
-	"worklog/internal/menus/sprintcalendar"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/assemble"
+	"worklog/internal/menus/kanban"
+	"worklog/internal/menus/sprintcalendar"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 func TestReadmePlannerDemoFrames(t *testing.T) {

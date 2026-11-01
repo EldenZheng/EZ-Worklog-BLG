@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -15,6 +13,9 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/widgets"
 )
 
 type KanbanTarget struct {
@@ -49,22 +50,29 @@ type KanbanUI struct {
 	AutoStarted                         map[string]bool // issues already auto-started this session
 	AutoStartPending                    bool            // next board fetch should start today's planned issues
 	Pending                             map[string]KanbanPending
-	ColumnCards                         map[string][]*SprintDragCard // status value: cards as drawn
-	HoverSlot                           KanbanSlot
-	DropLine                            *canvas.Rectangle
-	Activity, CalendarActivity          *loadingIndicator
-	CalendarPage                        *fyne.Container
-	RefreshButtons                      []*widget.Button
-	CalendarDrag                        *PlannerDragCard
-	CalendarResizing                    bool
-	CalendarActive                      bool
-	ProjectOff                          map[string]bool
-	SourceVersion                       int
-	CalendarSprint                      string
-	ExtraStatuses                       map[string]bool
-	StatusChoices                       *widget.CheckGroup
-	StatusChoiceView                    fyne.CanvasObject
-	TypeChoiceView                      fyne.CanvasObject
+	// Queue holds GitHub writes waiting their turn; Running is the one in
+	// flight. Writes go one at a time, in the order they were made.
+	Queue                      []*KanbanJob
+	Running                    *KanbanJob
+	ReloadAfterQueue           bool                         // a board refresh was asked for while writes were queued
+	Dragging                   bool                         // a Kanban card is being dragged
+	RedrawPending              bool                         // a redraw was held back until the drag ends
+	ColumnCards                map[string][]*SprintDragCard // status value: cards as drawn
+	HoverSlot                  KanbanSlot
+	DropLine                   *canvas.Rectangle
+	Activity, CalendarActivity *loadingIndicator
+	CalendarPage               *fyne.Container
+	RefreshButtons             []*widget.Button
+	CalendarDrag               *PlannerDragCard
+	CalendarResizing           bool
+	CalendarActive             bool
+	ProjectOff                 map[string]bool
+	SourceVersion              int
+	CalendarSprint             string
+	ExtraStatuses              map[string]bool
+	StatusChoices              *widget.CheckGroup
+	StatusChoiceView           fyne.CanvasObject
+	TypeChoiceView             fyne.CanvasObject
 }
 
 func (k *KanbanUI) Save(p backend.SprintPlan) bool {
@@ -85,7 +93,15 @@ func (k *KanbanUI) Save(p backend.SprintPlan) bool {
 }
 
 func (k *KanbanUI) Load(force bool) {
-	if k.Loading || k.Busy || (k.Loaded && !force) {
+	if k.Busy || len(k.Queue) > 0 {
+		// Never refresh under queued writes: the fresh boards would race
+		// them. Refresh once the queue is empty instead.
+		if force || !k.Loaded {
+			k.ReloadAfterQueue = true
+		}
+		return
+	}
+	if k.Loading || (k.Loaded && !force) {
 		return
 	}
 	k.Loading = true
@@ -137,6 +153,8 @@ func (k *KanbanUI) Load(force bool) {
 				}
 			}
 			Hooks.KanbanUIDraw(k)
+			// Writes made while the boards loaded can go now.
+			Hooks.KanbanKick(k)
 		})
 	}()
 }
@@ -220,11 +238,14 @@ func (c *SprintDragCard) Tapped(*fyne.PointEvent) { Hooks.KanbanUIEditor(c.K, c.
 
 func (c *SprintDragCard) Dragged(e *fyne.DragEvent) {
 	k := c.K
-	if k.Busy || k.Loading {
+	// Saves in flight do not block a drag: the drop joins the queue. Only a
+	// board refresh does, because it replaces every card.
+	if k.Loading && !c.lifted {
 		return
 	}
 	if !c.lifted {
 		c.lifted = true
+		k.Dragging = true
 		bg := canvas.NewRectangle(theme.Color(theme.ColorNameOverlayBackground))
 		bg.CornerRadius = 8
 		ghost := container.NewStack(bg, container.NewPadded(widget.NewLabel(Truncate(c.Item.Title, 38))))
@@ -269,6 +290,14 @@ func (c *SprintDragCard) DragEnd() {
 	}
 	c.lifted = false
 	k := c.K
+	k.Dragging = false
+	// A save that finished mid-drag held its redraw back; do it now unless
+	// the drop below redraws anyway.
+	defer func() {
+		if k.RedrawPending {
+			Hooks.KanbanUIDraw(k)
+		}
+	}()
 	k.GhostLayer.Objects = nil
 	k.GhostLayer.Refresh()
 	t := k.Hover
@@ -343,17 +372,36 @@ func newDropLine() *canvas.Rectangle {
 type KanbanPending struct {
 	Kind, Value string
 	Label       string // "In Progress", "Sprint 5", "No status"
+	// Status is the column the card is headed for once every queued write
+	// for it lands; HasStatus says whether any of them changes the status.
+	Status    string
+	HasStatus bool
+	Queued    bool // waiting behind another card's save, not yet sent
 }
 
-func (k *KanbanUI) SetPending(b backend.SprintBoard, it backend.SprintItem, kind, value string) {
-	if k.Pending == nil {
-		k.Pending = map[string]KanbanPending{}
+// KanbanJob is one write to GitHub: a status, a sprint, or a drop into a
+// column at a position ("place").
+type KanbanJob struct {
+	Board     backend.SprintBoard
+	Item      backend.SprintItem
+	Kind      string // "status", "sprint" or "place"
+	Value     string // the status or sprint; for place, the status
+	AfterID   string // place: the card it goes after ("" for the top)
+	PrevAfter string // place: the card it was after, to put it back on failure
+	Start     []func()
+	Done      []func(error)
+}
+
+func (j *KanbanJob) Key() string { return j.Item.Key(j.Board.ID) }
+
+// PendingWrites counts the writes not yet on GitHub, the one in flight
+// included.
+func (k *KanbanUI) PendingWrites() int {
+	n := len(k.Queue)
+	if k.Running != nil {
+		n++
 	}
-	k.Pending[it.Key(b.ID)] = KanbanPending{Kind: kind, Value: value, Label: backend.FieldValueLabel(b, kind, value)}
-}
-
-func (k *KanbanUI) ClearPending(b backend.SprintBoard, it backend.SprintItem) {
-	delete(k.Pending, it.Key(b.ID))
+	return n
 }
 
 // SyncActivity runs the app's loading strip on Kanban and Sprint Calendar

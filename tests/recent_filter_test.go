@@ -5,16 +5,17 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // labels flattens every label/text string in a widget tree.

@@ -3,12 +3,13 @@ package tests
 import (
 	"image/color"
 	"testing"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // Colours follow configuration order: the first org is blue, the second red.

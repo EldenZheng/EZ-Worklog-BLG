@@ -4,13 +4,14 @@ import (
 	"image/color"
 	"math"
 	"testing"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // Fyne's test driver completes animations immediately. Keep them pending here

@@ -2,11 +2,12 @@ package tests
 
 import (
 	"testing"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
 )
 
 // separators counts the rules drawn in a tree — one between each section.

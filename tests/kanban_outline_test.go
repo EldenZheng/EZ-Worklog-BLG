@@ -3,17 +3,18 @@ package tests
 import (
 	"strings"
 	"testing"
-	"worklog/internal/menus/kanban"
-	"worklog/internal/menus/sprintcalendar"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/kanban"
+	"worklog/internal/menus/sprintcalendar"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func TestSprintOutlinesAndColumnFooterPosition(t *testing.T) {

@@ -3,12 +3,13 @@ package shell
 import (
 	"fmt"
 	"time"
-	"worklog/internal/shared/backend"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
 )
 
 // The loading strip lives at the top of a tab as two thin rows: a slim

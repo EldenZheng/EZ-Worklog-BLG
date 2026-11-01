@@ -1,9 +1,9 @@
 package shell
 
 import (
-	"worklog/internal/shared/backend"
-
 	"fyne.io/fyne/v2"
+
+	"worklog/internal/shared/backend"
 )
 
 // Hooks lets shared code reach functions that live in a menu package
@@ -23,6 +23,7 @@ var Hooks struct {
 	KanbanUIBubbleSurface             func(*KanbanUI, backend.SprintBoard, backend.SprintItem, fyne.CanvasObject) fyne.CanvasObject
 	KanbanUICalendar                  func(*KanbanUI) fyne.CanvasObject
 	KanbanUIDraw                      func(*KanbanUI)
+	KanbanKick                        func(*KanbanUI)
 	KanbanUIDrawKeepingCalendarScroll func(*KanbanUI)
 	KanbanUIEditor                    func(*KanbanUI, backend.SprintBoard, backend.SprintItem)
 	KanbanUIMatchesIssueFilter        func(*KanbanUI, backend.SprintBoard, backend.SprintItem) bool

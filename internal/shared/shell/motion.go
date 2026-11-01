@@ -4,14 +4,15 @@ import (
 	"image/color"
 	"strings"
 	"time"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/widgets"
 )
 
 // Feedback paints only a neutral outline; the card's semantic fill and accent

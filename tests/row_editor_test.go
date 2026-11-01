@@ -3,16 +3,17 @@ package tests
 import (
 	"strings"
 	"testing"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/menus/report"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/menus/report"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // walk visits every object in a widget tree.

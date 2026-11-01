@@ -3,14 +3,15 @@ package tests
 import (
 	"fmt"
 	"testing"
-	"worklog/internal/menus/kanban"
-	"worklog/internal/menus/sprintcalendar"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+
+	"worklog/internal/menus/kanban"
+	"worklog/internal/menus/sprintcalendar"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 func plannerFixture(t *testing.T) (*shell.UI, fyne.Window, backend.SprintCandidate) {

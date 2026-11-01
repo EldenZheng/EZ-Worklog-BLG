@@ -2,12 +2,13 @@ package shell
 
 import (
 	"strings"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/widgets"
 )
 
 // ShowIf is Show/Hide as one call, so a form that reveals one row per mode

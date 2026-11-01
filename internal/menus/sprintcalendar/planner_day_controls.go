@@ -2,13 +2,14 @@ package sprintcalendar
 
 import (
 	"fmt"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 func newPlannerDayClear(k *shell.KanbanUI, date string, day *shell.PlannerDayHover) *shell.PlannerDayClearButton {

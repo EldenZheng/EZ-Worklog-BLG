@@ -2,8 +2,6 @@ package shell
 
 import (
 	"image/color"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -11,6 +9,9 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/widgets"
 )
 
 type PlannerDateTarget struct {
@@ -156,6 +157,11 @@ func (c *PlannerDragCard) DragEnd() {
 	if k.CalendarDrag == c {
 		k.CalendarDrag = nil
 	}
+	defer func() {
+		if k.RedrawPending {
+			Hooks.KanbanUIDraw(k)
+		}
+	}()
 	k.CalendarGhost.Objects = nil
 	k.CalendarGhost.Refresh()
 	for _, t := range k.Dates {

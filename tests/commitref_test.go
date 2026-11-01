@@ -3,11 +3,12 @@ package tests
 import (
 	"strings"
 	"testing"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
 )
 
 // A commit is not in the repo its issue is in — the issue lives in a tracker

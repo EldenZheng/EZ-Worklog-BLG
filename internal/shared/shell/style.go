@@ -3,10 +3,11 @@ package shell
 import (
 	_ "embed"
 	"image/color"
-	"worklog/internal/shared/backend"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/shared/backend"
 )
 
 // dayCellMinHeight keeps a cell legible when the window is too short for the

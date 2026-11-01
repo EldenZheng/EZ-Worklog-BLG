@@ -3,15 +3,17 @@ package kanban
 import (
 	"fmt"
 	"image/color"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func itemTypeControls(k *shell.KanbanUI) fyne.CanvasObject {
@@ -90,31 +92,43 @@ func kanbanMetadata(text string, ink color.Color) fyne.CanvasObject {
 }
 
 func CardContents(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem) fyne.CanvasObject {
-	repository := widget.NewLabel(it.RepositoryNumber(b))
-	repository.Wrapping = fyne.TextWrapWord
-	header := container.NewBorder(nil, nil, container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), widget.NewIcon(it.TypeIcon()))), nil, container.NewThemeOverride(repository, kanbanMetadataTheme{Theme: theme.Current(), textSize: theme.CaptionTextSize() - 1}))
+	// The owner/repo#number is the link to the issue or pull request itself, so
+	// the card needs no separate "Open" link at the bottom.
+	var repository fyne.CanvasObject
+	if link, ok := shell.GithubHyperlink(it.RepositoryNumber(b), it.URL).(*widget.Hyperlink); ok {
+		link.Wrapping = fyne.TextWrapWord
+		repository = link
+	} else {
+		label := widget.NewLabel(it.RepositoryNumber(b))
+		label.Wrapping = fyne.TextWrapWord
+		repository = label
+	}
+	icon := container.NewThemeOverride(widget.NewIcon(it.TypeIcon()), widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	header := container.NewBorder(nil, nil, container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), icon)), nil, container.NewThemeOverride(repository, kanbanMetadataTheme{Theme: theme.Current(), textSize: theme.CaptionTextSize() - 1}))
 	title := widget.NewLabelWithStyle(it.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapWord
 	pink := color.NRGBA{R: 225, G: 131, B: 178, A: 255}
 	body := container.NewVBox(header, title,
 		kanbanMetadata(fmt.Sprintf("Project estimate: %dm", backend.SprintEstimate(it, backend.SprintTask{})), pink),
 		kanbanMetadata("Complexity: "+backend.OrDefault(it.Complexity, "Not set"), pink))
-	footer := container.NewBorder(nil, nil, nil, nil)
-	if it.URL != "" {
-		label := "Open issue"
-		if it.ItemType() == backend.KanbanPullRequests {
-			label = "Open PR"
-		}
-		footer = container.NewBorder(nil, nil, container.NewThemeOverride(shell.GithubHyperlink(label, it.URL), kanbanMetadataTheme{Theme: theme.Current()}), nil)
-	}
 	if k.Filter == "all" && it.SprintID != "" {
 		for _, sprint := range b.Iterations() {
 			if sprint.ID == it.SprintID {
-				footer.Add(kanbanMetadata("– "+sprint.Title, theme.Color(theme.ColorNameSuccess)))
+				body.Add(container.NewHBox(sprintTag(sprint.Title)))
 				break
 			}
 		}
 	}
-	body.Add(footer)
 	return body
+}
+
+// sprintTag is the card's sprint as a small gold pill, styled like the app's
+// gold buttons: gold fill, dark text.
+func sprintTag(title string) fyne.CanvasObject {
+	bg := canvas.NewRectangle(widgets.LogoGold)
+	bg.CornerRadius = 10
+	text := canvas.NewText(title, color.NRGBA{R: 0x1c, G: 0x18, B: 0x0d, A: 0xff})
+	text.TextSize = theme.CaptionTextSize()
+	text.TextStyle = fyne.TextStyle{Bold: true}
+	return container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(2, 2, 8, 8), text))
 }

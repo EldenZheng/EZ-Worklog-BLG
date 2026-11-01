@@ -2,14 +2,15 @@ package tests
 
 import (
 	"testing"
-	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func TestPillNavigationPreservesPagesAndSelection(t *testing.T) {

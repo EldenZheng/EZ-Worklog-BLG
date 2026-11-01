@@ -2,13 +2,14 @@ package tests
 
 import (
 	"testing"
+
+	"fyne.io/fyne/v2"
+
 	"worklog/internal/menus/kanban"
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/sprintcalendar"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2"
 )
 
 func maintenanceBoard() backend.SprintBoard {

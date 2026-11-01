@@ -2,10 +2,11 @@ package tests
 
 import (
 	"testing"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/shell"
 )
 
 func TestLoadingBarsStopWhenLeavingAndWhenFetchCompletes(t *testing.T) {

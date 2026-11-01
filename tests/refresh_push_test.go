@@ -3,13 +3,14 @@ package tests
 import (
 	"testing"
 	"time"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // The window stays open for days, so a list fetched once per session went stale

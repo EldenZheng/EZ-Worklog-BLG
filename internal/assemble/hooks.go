@@ -28,6 +28,7 @@ func WireHooks() {
 	shell.Hooks.KanbanUIBubbleSurface = kanban.BubbleSurface
 	shell.Hooks.KanbanUICalendar = sprintcalendar.Calendar
 	shell.Hooks.KanbanUIDraw = kanban.Draw
+	shell.Hooks.KanbanKick = kanban.Kick
 	shell.Hooks.KanbanUIDrawKeepingCalendarScroll = sprintcalendar.DrawKeepingCalendarScroll
 	shell.Hooks.KanbanUIEditor = kanban.Editor
 	shell.Hooks.KanbanUIMatchesIssueFilter = kanban.MatchesIssueFilter

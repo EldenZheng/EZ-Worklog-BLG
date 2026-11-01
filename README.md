@@ -67,10 +67,19 @@ including the ones currently displayed. These choices are saved in
 board rather than the sprint sidebar. Status colors appear in softly tinted
 column backgrounds, quieter full-column outlines and header
 text. Kanban cards retain their original project-colored fill and stripe,
-show a distinct issue or pull request icon beside a small `owner/repo#number`,
-then the complete title. Estimate and complexity appear on separate pink lines.
-The footer has an **Open issue** or **Open PR** link, followed by the sprint in
-green when no sprint is selected. The status palette
+show a gold issue or pull request icon beside a small `owner/repo#number`,
+which links to the issue or pull request, then the complete title. Estimate and
+complexity appear on separate pink lines. When no sprint is selected the
+card's sprint sits at the bottom as a gold tag.
+
+Changes made on the board are saved to GitHub one at a time, in the order you
+make them, so you can keep dragging while earlier saves run. A card waiting its
+turn is drawn where it is going, marked **Queued**. Moving it again before it
+is sent replaces the queued change, and moving it back cancels it. If GitHub
+refuses a change, only that card goes back and the rest still save. Refresh
+GitHub waits until the queue is empty. Closing the app with changes still
+queued asks first, and a GitHub call that does not answer within three minutes
+fails rather than holding up the queue. The status palette
 itself is unchanged. The old elapsed-days progress
 bars were removed; they did not measure completed work.
 Columns expand to fill the space beside the fixed sprint sidebar; many columns

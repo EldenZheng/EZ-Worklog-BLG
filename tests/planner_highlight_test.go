@@ -2,13 +2,14 @@ package tests
 
 import (
 	"testing"
+
+	"fyne.io/fyne/v2"
+
 	"worklog/internal/menus/kanban"
 	"worklog/internal/menus/sprintcalendar"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
-
-	"fyne.io/fyne/v2"
 )
 
 func TestSprintHighlightsOnlySidebarHoverOrHeldMoveAndNeverResize(t *testing.T) {

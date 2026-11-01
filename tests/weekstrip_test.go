@@ -7,15 +7,16 @@ import (
 	"strconv"
 	"testing"
 	"time"
-	"worklog/internal/menus/logwork"
-	"worklog/internal/menus/sprintcalendar"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+
+	"worklog/internal/menus/logwork"
+	"worklog/internal/menus/sprintcalendar"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // The day turns over at 08:00, not at midnight: work carried past midnight is

@@ -4,13 +4,14 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"worklog/internal/menus/kanban"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/kanban"
+	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 func TestSprintItemTypeFilterPersistsAndKeepsCalendarIndependent(t *testing.T) {
@@ -61,8 +62,8 @@ func TestSprintIssueAndPRCardsHaveDistinctIconsAndLinks(t *testing.T) {
 		item                  backend.SprintItem
 		kind, icon, link, ref string
 	}{
-		{backend.SprintItem{URL: "https://github.com/owner/repo/issues/12", Kind: "Issue"}, backend.KanbanIssues, "kanban-issue.svg", "Open issue", "owner/repo#12"},
-		{backend.SprintItem{URL: "https://github.com/owner/repo/pull/13?tab=files"}, backend.KanbanPullRequests, "kanban-pull-request.svg", "Open PR", "owner/repo#13"},
+		{backend.SprintItem{URL: "https://github.com/owner/repo/issues/12", Kind: "Issue"}, backend.KanbanIssues, "kanban-issue.svg", "owner/repo#12", "owner/repo#12"},
+		{backend.SprintItem{URL: "https://github.com/owner/repo/pull/13?tab=files"}, backend.KanbanPullRequests, "kanban-pull-request.svg", "owner/repo#13", "owner/repo#13"},
 		{backend.SprintItem{Kind: "PullRequest"}, backend.KanbanPullRequests, "kanban-pull-request.svg", "", backend.ProjectShortName(b)},
 	} {
 		if tc.item.ItemType() != tc.kind || tc.item.RepositoryNumber(b) != tc.ref {

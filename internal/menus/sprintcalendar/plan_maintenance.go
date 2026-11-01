@@ -1,12 +1,10 @@
 package sprintcalendar
 
 import (
-	"fmt"
 	"strings"
+
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-
-	"fyne.io/fyne/v2"
 )
 
 // ---- housekeeping for the local sprint plan ----
@@ -84,7 +82,7 @@ func Maintain(k *shell.KanbanUI) {
 // since the cache was written is never overwritten. Each issue is tried at most
 // once per session: if it is moved back to Created by hand, that stands.
 func StartPlannedToday(k *shell.KanbanUI) {
-	if k.Busy || k.StorageErr != nil {
+	if k.StorageErr != nil {
 		return
 	}
 	if k.AutoStarted == nil {
@@ -98,53 +96,11 @@ func StartPlannedToday(k *shell.KanbanUI) {
 			todo = append(todo, c)
 		}
 	}
-	if len(todo) == 0 {
-		return
-	}
-	k.Busy = true
+	// Through the board's write queue, like a drag: each lands in turn,
+	// reports its own result, and a failure leaves the others going.
 	for _, c := range todo {
-		k.SetPending(c.board, c.Item, "status", plannerInProgressStatus)
+		shell.Hooks.KanbanUIMove(k, c.board, c.Item, "status", plannerInProgressStatus)
 	}
-	k.SetMessage(fmt.Sprintf("Moving %d issue(s) planned for today to %s on GitHub…", len(todo), plannerInProgressStatus))
-	shell.Hooks.KanbanUIDraw(k)
-	go func() {
-		var moved []plannerStartCandidate
-		var failures []string
-		for _, c := range todo {
-			if err := backend.PushSprintItem(c.board, c.Item, "status", plannerInProgressStatus); err != nil {
-				failures = append(failures, c.Item.Title+": "+err.Error())
-				continue
-			}
-			moved = append(moved, c)
-		}
-		fyne.Do(func() {
-			k.Busy = false
-			for _, c := range todo {
-				k.ClearPending(c.board, c.Item)
-			}
-			for _, c := range moved {
-				for bi := range k.Plan.Boards {
-					if k.Plan.Boards[bi].ID != c.board.ID {
-						continue
-					}
-					for ii := range k.Plan.Boards[bi].Items {
-						if k.Plan.Boards[bi].Items[ii].ID == c.Item.ID {
-							k.Plan.Boards[bi].Items[ii].Status = plannerInProgressStatus
-						}
-					}
-				}
-			}
-			if len(moved) > 0 {
-				k.Save(k.Plan)
-			}
-			msg := fmt.Sprintf("Moved %d issue(s) planned for today to %s.", len(moved), plannerInProgressStatus)
-			if len(failures) > 0 {
-				msg += " Failed: " + strings.Join(failures, "; ")
-			}
-			k.SetMessage(msg)
-			shell.Hooks.KanbanUIDraw(k)
-		})
-	}()
 }
 
 func ensureSupportWeeks(ui *shell.UI) {
