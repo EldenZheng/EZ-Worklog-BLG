@@ -462,18 +462,25 @@ func OrgLegendWith(cfg backend.Config, byOrg map[string]int, hidden map[string]b
 
 // orgChip is one entry in the key: the colour, the name, and what it is worth.
 func orgChip(cfg backend.Config, org, amount string, off bool, toggle func(org string)) fyne.CanvasObject {
-	var fill color.Color = OrgColor(cfg, org)
-	text := theme.Color(theme.ColorNameForeground)
-	if off {
-		// Off has to read as off at a glance, with no checkbox to spell it out:
-		// the dot fades most of the way into the background and the name goes
-		// the same grey as any other disabled thing in the app.
-		fill = Dimmed(fill)
-		text = theme.Color(theme.ColorNamePlaceHolder)
-	}
-	name := canvas.NewText(fmt.Sprintf("%s (%s)", backend.OrDefault(org, "unknown org"), amount), text)
-	name.TextSize = theme.TextSize()
+	label := fmt.Sprintf("%s (%s)", backend.OrDefault(org, "unknown org"), amount)
+	return LegendChip(OrgColor(cfg, org), label, off, func() { toggle(org) })
+}
 
-	chip := container.NewHBox(OrgDotIn(fill), container.NewCenter(name))
-	return NewTappable(chip, func() { toggle(org) })
+// LegendChip is one entry of a colour key that doubles as a filter, styled the
+// same in every menu (Log Work, Status, Kanban, Sprint Calendar): a dot, its
+// label, padding that keeps the chips apart, and the card hover and press
+// animation. Tapping it calls onTap.
+//
+// Off has to read as off at a glance, with no checkbox to spell it out: the
+// dot fades most of the way into the background and the label goes the same
+// grey as any other disabled thing in the app.
+func LegendChip(fill color.Color, label string, off bool, onTap func()) fyne.CanvasObject {
+	ink := theme.Color(theme.ColorNameForeground)
+	if off {
+		fill = Dimmed(fill)
+		ink = theme.Color(theme.ColorNamePlaceHolder)
+	}
+	name := canvas.NewText(label, ink)
+	name.TextSize = theme.TextSize()
+	return NewCardTappable(container.NewPadded(container.NewHBox(OrgDotIn(fill), container.NewCenter(name))), onTap)
 }

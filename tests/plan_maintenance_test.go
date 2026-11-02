@@ -118,14 +118,23 @@ func TestSupportWeekDroppedOnceEveryWeekdayIsLogged(t *testing.T) {
 	sprintcalendar.SetSupport(ui, true, week)
 	byDay := map[string][]backend.WorklogItem{}
 	days := shell.WeekDates(week)
+	// Empty rota slots on every weekday, as the rota creates them up front:
+	// nothing is logged yet, so the tick stays.
+	for _, d := range days[:5] {
+		byDay[d] = []backend.WorklogItem{{Title: "Alex: Weekly Support (12PM - 3PM)"}}
+	}
+	sprintcalendar.DropLoggedSupportWeek(ui, week, byDay, "ok")
+	if !sprintcalendar.SupportOn(ui, week) {
+		t.Fatal("dropped on empty rota slots")
+	}
 	for _, d := range days[:4] {
-		byDay[d] = []backend.WorklogItem{{ParentTitle: "Alex: Weekly Support (12PM - 3PM)"}}
+		byDay[d] = []backend.WorklogItem{{ParentTitle: "Alex: Weekly Support (12PM - 3PM)", Minutes: 180}}
 	}
 	sprintcalendar.DropLoggedSupportWeek(ui, week, byDay, "ok")
 	if !sprintcalendar.SupportOn(ui, week) {
 		t.Fatal("dropped while Friday is still unlogged")
 	}
-	byDay[days[4]] = []backend.WorklogItem{{ParentTitle: "Alex: Weekly Support (12PM - 3PM)"}}
+	byDay[days[4]] = []backend.WorklogItem{{ParentTitle: "Alex: Weekly Support (12PM - 3PM)", Minutes: 180}}
 	sprintcalendar.DropLoggedSupportWeek(ui, week, byDay, "loading")
 	if !sprintcalendar.SupportOn(ui, week) {
 		t.Fatal("decided on data still loading")

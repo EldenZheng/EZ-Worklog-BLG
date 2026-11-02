@@ -35,6 +35,9 @@ func plannerFixture(t *testing.T) (*shell.UI, fyne.Window, backend.SprintCandida
 func TestSprintCalendarHoverAndDropSaveOnlyLocally(t *testing.T) {
 	ui, w, c := plannerFixture(t)
 	k := ui.Kanban
+	// Next week: today's date has its own thick border, which on a Monday
+	// would read as a hover highlight on the first day.
+	k.Week = backend.AddDays(k.Week, 7)
 	k.Plan.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 540, 480}}}
 	kanban.Draw(k)
 	w.Content().Refresh()

@@ -193,20 +193,7 @@ func DrawWeekStrip(ui *shell.UI) {
 		ui.RefreshTodayScore()
 	})
 
-	// Display only, and it says so: nothing is pushed. The tick is remembered
-	// for this week alone (support-weeks.json) until its Friday passes.
-	support := widget.NewCheck(
-		fmt.Sprintf("+%d min weekday support (display only)", backend.SupportPlaceholderMins), nil)
-	// Seeded before the handler is attached. SetChecked fires OnChanged, and a
-	// handler that redraws the strip would build a fresh checkbox, seed that
-	// one, and go round again until the stack ran out.
-	support.SetChecked(shell.Hooks.SupportOn(ui, ui.WeekStart))
-	support.OnChanged = func(on bool) {
-		shell.Hooks.SetSupport(ui, on, ui.WeekStart)
-		DrawWeekStrip(ui)
-	}
-
-	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), shell.GoldChoice(support), mail, refresh,
+	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), weekSupportControl(ui), mail, refresh,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
 
 	// Any column about to be thrown away stops breathing first: an animation left
@@ -674,4 +661,35 @@ func (t *DragTile) DragEnd() {
 	// Dropped on nothing, or on the day it already sits on: the card just goes
 	// back where it came from.
 	moveRowToDay(t.ui, t.Row, day)
+}
+
+// weekSupportControl is the "+180 min weekday support" checkbox. It is built
+// once and kept, like Log Work's other checkboxes, and only re-synced to the
+// week on each redraw. A fresh checkbox per redraw drew fine but never got the
+// mouse, so it could not be ticked.
+//
+// Display only, and it says so: nothing is pushed. The tick is remembered for
+// its own week (support-weeks.json) until that week's Friday passes.
+func weekSupportControl(ui *shell.UI) fyne.CanvasObject {
+	on := shell.Hooks.SupportOn(ui, ui.WeekStart)
+	if ui.WeekSupport == nil {
+		ui.WeekSupport = widget.NewCheck(
+			fmt.Sprintf("+%d min weekday support (display only)", backend.SupportPlaceholderMins), nil)
+		// Seeded before the handler is attached: SetChecked fires OnChanged.
+		ui.WeekSupport.SetChecked(on)
+		ui.WeekSupport.OnChanged = func(on bool) {
+			shell.Hooks.SetSupport(ui, on, ui.WeekStart)
+			DrawWeekStrip(ui)
+		}
+		ui.WeekSupportView = shell.GoldChoice(ui.WeekSupport)
+		return ui.WeekSupportView
+	}
+	if ui.WeekSupport.Checked != on {
+		// Re-sync quietly: walking to another week must not tick or untick it.
+		changed := ui.WeekSupport.OnChanged
+		ui.WeekSupport.OnChanged = nil
+		ui.WeekSupport.SetChecked(on)
+		ui.WeekSupport.OnChanged = changed
+	}
+	return ui.WeekSupportView
 }

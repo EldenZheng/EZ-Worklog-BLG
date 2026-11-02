@@ -2154,7 +2154,11 @@ func lastLine(s string) string {
 // The variadic progress callbacks receive fetchProgress events at each named
 // step, so a push spinner can render "Creating sub-issue — 40%" instead of
 // a bare wheel. done is out of 100 in every emit — the caller need not scale.
-func PushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBody, mode, resume, subTitleBase string, progress ...func(FetchProgress)) (PushResult, error) {
+// PushEntry is the push itself, held in a variable so tests can stand in for
+// GitHub.
+var PushEntry = pushEntry
+
+func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBody, mode, resume, subTitleBase string, progress ...func(FetchProgress)) (PushResult, error) {
 	emit := func(done int, stage string) {
 		p := FetchProgress{Done: done, Total: 100, Stage: stage}
 		for _, f := range progress {

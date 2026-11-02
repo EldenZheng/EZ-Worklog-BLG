@@ -34,15 +34,23 @@ func MeetingWeekStartOf(date string) string {
 }
 
 // HasWeeklySupport reports whether a day's board items already include the
-// weekly support shift. Matched on the parent issue as well as the item's own
-// title, because the worklog under it is called "Worklog: <date>" like any
-// other and says nothing about what it was for.
+// weekly support shift with time logged on it. Matched on the parent issue as
+// well as the item's own title, because the worklog under it is called
+// "Worklog: <date>" like any other and says nothing about what it was for.
+//
+// Only items with minutes count. The rota creates a slot for every weekday of
+// the week up front, at 0 minutes; counting those as logged made the current
+// week look fully covered, so ticking the placeholder was undone at once and
+// the +180 never showed.
 func HasWeeklySupport(cfg backend.Config, items []backend.WorklogItem) bool {
 	prefix := strings.ToLower(strings.TrimSpace(backend.SupportTitlePrefix(cfg)))
 	if prefix == ":: weekly support" || strings.HasPrefix(prefix, ": ") {
 		return false // no display name configured; nothing to match on
 	}
 	for _, it := range items {
+		if it.Minutes <= 0 {
+			continue // an empty rota slot, not a logged shift
+		}
 		for _, title := range []string{it.ParentTitle, it.Title} {
 			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(title)), prefix) {
 				return true

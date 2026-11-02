@@ -277,7 +277,8 @@ func DrawReport(ui *shell.UI) {
 			shell.ShareBar(fill, mins, allMin, 12),
 			widget.NewLabelWithStyle(amount, fyne.TextAlignTrailing,
 				fyne.TextStyle{Monospace: true}))
-		split = append(split, shell.NewTappable(row, func() { ui.ToggleOrg(org) }))
+		// Same hover and press animation as the legend chips elsewhere.
+		split = append(split, shell.NewCardTappable(row, func() { ui.ToggleOrg(org) }))
 	}
 	if len(byOrg) == 0 {
 		split = append(split, widget.NewLabel("Nothing logged in this period."))

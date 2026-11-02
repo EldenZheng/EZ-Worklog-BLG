@@ -171,6 +171,10 @@ type UI struct {
 	// ticked for. Saved in support-weeks.json, pruned once a week's Friday has
 	// passed or its weekdays all hold logged support. Never pushed anywhere.
 	SupportWeeks map[string]bool
+	// WeekSupport is Log Work's support checkbox, kept across redraws, and
+	// WeekSupportView the gold wrapper it is shown in.
+	WeekSupport     *widget.Check
+	WeekSupportView fyne.CanvasObject
 
 	// Organisations tapped out of the colour key, lowercased. One filter for the
 	// whole app rather than one per tab: hiding an employer is a decision about

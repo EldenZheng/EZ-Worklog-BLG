@@ -485,12 +485,6 @@ func (k *KanbanUI) ProjectLegend(calendar ...bool) fyne.CanvasObject {
 	row := container.NewHBox(widget.NewLabelWithStyle("Projects", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
 	for _, b := range k.Plan.Boards {
 		b := b
-		fill := k.Accent(b, backend.SprintItem{})
-		var ink = theme.Color(theme.ColorNameForeground)
-		if !k.VisibleBoard(b) {
-			fill = Dimmed(fill)
-			ink = theme.Color(theme.ColorNamePlaceHolder)
-		}
 		count, minutes := 0, 0
 		hasPR := false
 		for _, it := range b.Items {
@@ -518,9 +512,8 @@ func (k *KanbanUI) ProjectLegend(calendar ...bool) fyne.CanvasObject {
 				quantity = "item"
 			}
 		}
-		name := canvas.NewText(fmt.Sprintf("%s (%d %s | %s estimated)", b.Title, count, quantity, backend.HoursMins(minutes)), ink)
-		name.TextSize = theme.TextSize()
-		row.Add(NewCardTappable(container.NewPadded(container.NewHBox(OrgDotIn(fill), container.NewCenter(name))), func() {
+		label := fmt.Sprintf("%s (%d %s | %s estimated)", b.Title, count, quantity, backend.HoursMins(minutes))
+		row.Add(LegendChip(k.Accent(b, backend.SprintItem{}), label, !k.VisibleBoard(b), func() {
 			if k.ProjectOff == nil {
 				k.ProjectOff = map[string]bool{}
 			}

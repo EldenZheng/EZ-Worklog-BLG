@@ -499,8 +499,12 @@ func pushRow(ui *shell.UI, r backend.Row, refresh func()) {
 		return nil
 	}, func() {
 		stop()
+		repush := func() { repushRow(ui, r["id"], refresh) }
 		if perr != nil {
-			ui.Errf(perr)
+			msg := widget.NewLabel(perr.Error())
+			msg.Wrapping = fyne.TextWrapWord
+			showPushFailedDialog(ui, "Push failed", container.NewVBox(msg,
+				widget.NewLabel("The entry is still saved locally.")), repush)
 			return
 		}
 		_, complete := applyPushResult(ui, r["id"], res)
@@ -510,14 +514,43 @@ func pushRow(ui *shell.UI, r backend.Row, refresh func()) {
 		if complete {
 			title = "Push complete"
 		}
-		showPushResultDialog(ui, title, res)
+		showPushResultDialog(ui, title, res, repush)
 	})
+}
+
+// repushRow pushes a saved row again, read fresh from disk so a retry sends
+// whatever the failed attempt already recorded on it (the issue URL, the item
+// it created) rather than starting over.
+func repushRow(ui *shell.UI, id string, refresh func()) {
+	rows, err := ui.Store.ReadRows()
+	if err != nil {
+		ui.Errf(err)
+		return
+	}
+	for _, r := range rows {
+		if r["id"] == id {
+			pushRow(ui, r, refresh)
+			return
+		}
+	}
+	ui.Errf(fmt.Errorf("that entry is no longer saved, so there is nothing to push again"))
+}
+
+// showPushFailedDialog is the popup for a push that did not finish: what went
+// wrong, and a button to push the same entry again.
+func showPushFailedDialog(ui *shell.UI, title string, content fyne.CanvasObject, repush func()) {
+	d := dialog.NewCustomConfirm(title, "Push again", "Close", content, func(again bool) {
+		if again {
+			repush()
+		}
+	}, ui.Win)
+	d.Show()
 }
 
 // showPushResultDialog puts up a compact popup with "Pushed:" and a clickable
 // link to the worklog on GitHub. Incomplete pushes carry their problem lines
 // beneath the link so nothing is silently swallowed.
-func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult) {
+func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult, repush func()) {
 	rows := []fyne.CanvasObject{}
 	if res.URL != "" {
 		if u, err := url.Parse(res.URL); err == nil {
@@ -531,7 +564,9 @@ func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult) {
 	}
 	if !res.Complete() {
 		rows = append(rows, widget.NewLabel(strings.Join(res.Problems, "\n")))
-		rows = append(rows, widget.NewLabel("The row keeps its push button so you can retry."))
+		rows = append(rows, widget.NewLabel("Push again to finish it, or later from the entry's push button."))
+		showPushFailedDialog(ui, title, container.NewVBox(rows...), repush)
+		return
 	}
 	dialog.ShowCustom(title, "OK", container.NewVBox(rows...), ui.Win)
 }

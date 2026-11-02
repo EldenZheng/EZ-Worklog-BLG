@@ -126,6 +126,7 @@ func TestSupportPlaceholderCoversWeekdaysWithoutOne(t *testing.T) {
 	support := []backend.WorklogItem{{
 		ParentTitle: "Alex: Weekly Support (28th August, 12PM - 3PM)",
 		Title:       "Worklog: 2026-08-28",
+		Minutes:     180,
 	}}
 
 	for _, c := range []struct {
@@ -142,7 +143,11 @@ func TestSupportPlaceholderCoversWeekdaysWithoutOne(t *testing.T) {
 		// Matched on the parent, since the worklog under it is called
 		// "Worklog: <date>" like every other one.
 		{"matched on the item's own title", true, "2026-08-28",
-			[]backend.WorklogItem{{Title: "Alex: Weekly Support (28th August)"}}, 0},
+			[]backend.WorklogItem{{Title: "Alex: Weekly Support (28th August)", Minutes: 180}}, 0},
+		// The rota creates every weekday's slot up front at 0 minutes; an empty
+		// slot is not a logged shift.
+		{"an empty rota slot is not the shift", true, "2026-08-28",
+			[]backend.WorklogItem{{Title: "Alex: Weekly Support (28th August, 12PM - 3PM)"}}, backend.SupportPlaceholderMins},
 		{"other work on the day is not the shift", true, "2026-08-24",
 			[]backend.WorklogItem{{ParentTitle: "Chinese translation"}}, backend.SupportPlaceholderMins},
 		// The rota is weekdays; a weekend is its own arrangement.
