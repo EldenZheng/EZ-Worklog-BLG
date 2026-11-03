@@ -18,7 +18,6 @@ import (
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
-	"worklog/internal/shared/widgets"
 )
 
 // ============================ Status (calendar) ============================
@@ -60,17 +59,19 @@ func BuildStatusTab(ui *shell.UI) fyne.CanvasObject {
 	// The day's detail rides beside the calendar, not under it. Underneath, a
 	// day picked in the last week sat a full month's scroll below the click
 	// that opened it. Its own scroll keeps a long day off the calendar's back.
-	width := canvas.NewRectangle(color.Transparent)
-	width.SetMinSize(fyne.NewSize(dayPanelWidth, 0))
-	ui.DaySide = container.NewStack(width, ui.DaySwap)
+	// Fixed width whatever the day holds: a long link or name is cut or
+	// wrapped inside it rather than pushing the panel wider.
+	ui.DaySide = container.New(fixedWidthLayout{width: dayPanelWidth}, ui.DaySwap)
 
 	// No scroll around the calendar: a scroll sizes its content to the content's
 	// minimum, which is what kept the month to half the window. Border hands the
 	// grid every pixel the header and legend do not use.
 	ui.StatusProgress = shell.NewLoadingIndicator()
 	ui.CalBody = container.NewBorder(container.NewVBox(head, ui.StatusProgress.View), ui.CalLegend, nil, nil, ui.CalBox)
-	calCard := widget.NewCard("", "", ui.CalBody)
-	return container.NewBorder(nil, nil, nil, ui.DaySide, calCard)
+	// The day detail is its own menu, so it sits in a rounded panel like
+	// Settings; its scroll runs inside the panel, which stays put.
+	return container.NewBorder(nil, nil, nil, container.NewPadded(shell.PanelFrame(ui.DaySide)),
+		container.NewPadded(ui.CalBody))
 }
 
 // dayPanelWidth is the side panel's share of the window. Wide enough for a
@@ -291,60 +292,52 @@ func DrawDayPanel(ui *shell.UI) {
 		ui.ProgressBar("detail", ui.SelDay, byOrg, nil, backend.Target, 12),
 	}
 	for _, org := range shell.OrgsByShare(ui.Cfg, byOrg) {
-		body = append(body, container.New(widgets.NewRatioRow(0.08, 0.52, 0.40),
+		// Border, not a ratio row: a ratio row's minimum grows with its widest
+		// share, which kept pushing the fixed-width panel wider.
+		name := widget.NewLabel(org)
+		name.Truncation = fyne.TextTruncateEllipsis
+		body = append(body, container.NewBorder(nil, nil,
 			shell.OrgDot(ui.Cfg, org),
-			widget.NewLabel(org),
 			widget.NewLabelWithStyle(backend.HoursMins(byOrg[org]),
-				fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})))
+				fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true}),
+			name))
 	}
 	if len(dayItems) == 0 {
-		body = append(body, widget.NewLabel("No worklog items on this day for "+
-			backend.OrDefault(ui.Cfg.WorklogOwner, "you")+"."))
+		none := widget.NewLabel("No worklog items on this day for " +
+			backend.OrDefault(ui.Cfg.WorklogOwner, "you") + ".")
+		none.Wrapping = fyne.TextWrapWord
+		body = append(body, none)
 	}
 
 	for _, it := range dayItems {
 		it := it
 		org := shell.ItemOrg(it)
-		title := widget.NewLabel(shell.Truncate(it.Title, 80))
-		title.Wrapping = fyne.TextWrapWord
-		head := container.New(widgets.NewRatioRow(0.10, 0.24, 0.66),
-			shell.OrgDot(ui.Cfg, org),
-			widget.NewLabelWithStyle(fmt.Sprintf("%d min", it.Minutes),
-				fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true}),
-			title)
-		// The parent issue is the name the work is filed under, so it sits with
-		// the duration rather than as a bare "Parent issue" link at the foot of
-		// the card: the day panel says what was worked on, and one click on the
-		// name opens it on GitHub.
-		var parent fyne.CanvasObject
+		// The title is the link to the worklog on GitHub; there is no separate
+		// "Worklog" link at the foot any more.
+		title := shell.NewHoverLink(it.Title, it.URL)
+		switch t := title.(type) {
+		case *shell.HoverLink:
+			t.Wrapping = fyne.TextWrapWord
+		case *widget.Label:
+			t.Wrapping = fyne.TextWrapWord
+		}
+		head := container.NewBorder(nil, nil,
+			container.NewHBox(shell.OrgDot(ui.Cfg, org),
+				widget.NewLabelWithStyle(fmt.Sprintf("%d min", it.Minutes),
+					fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true})),
+			nil, title)
+		card := []fyne.CanvasObject{head}
+		// The parent issue, the name the work is filed under, as the same gold
+		// tag Kanban cards carry: a click opens it on GitHub.
 		if it.ParentTitle != "" || it.ParentURL != "" {
-			parent = container.NewHBox(
-				widget.NewLabelWithStyle("Parent", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
-				shell.GithubHyperlink(shell.Truncate(backend.OrDefault(it.ParentTitle, "issue"), 60), it.ParentURL))
-		}
-
-		var links []fyne.CanvasObject
-		if it.URL != "" {
-			links = append(links, shell.GithubHyperlink("Worklog", it.URL))
-		}
-		var link fyne.CanvasObject = widget.NewLabel("")
-		if len(links) > 0 {
-			link = container.NewHBox(links...)
+			card = append(card, shell.ParentTag(backend.OrDefault(it.ParentTitle, "Parent issue"), it.ParentURL))
 		}
 		rem := widget.NewLabel(it.Remarks)
 		rem.Wrapping = fyne.TextWrapWord
+		card = append(card, rem)
 
-		card := []fyne.CanvasObject{head}
-		if parent != nil {
-			card = append(card, parent)
-		}
-		card = append(card, rem, link)
-
-		// A stripe in the org's colour, the same cue the pending tiles carry.
-		stripe := canvas.NewRectangle(shell.OrgColor(ui.Cfg, org))
-		stripe.SetMinSize(fyne.NewSize(3, 0))
-		body = append(body, widget.NewCard("", "", container.NewBorder(nil, nil, stripe, nil,
-			container.NewPadded(container.NewVBox(card...)))))
+		// The same org-tinted bubble a worklog wears on Log Work.
+		body = append(body, shell.OrgBubble(shell.OrgColor(ui.Cfg, org), container.NewVBox(card...)))
 	}
 
 	ui.DayPanel.Objects = []fyne.CanvasObject{container.NewVBox(body...)}
@@ -352,7 +345,7 @@ func DrawDayPanel(ui *shell.UI) {
 	// A day's detail can run past the panel, so it gets the scroll the prompt
 	// does not want.
 	ui.DaySwap.Objects = []fyne.CanvasObject{
-		container.NewVScroll(container.NewPadded(ui.DayPanel))}
+		shell.NoScrollShadow(shell.PanelScroll(ui.DayPanel, false))}
 	ui.DaySwap.Refresh()
 }
 
@@ -363,4 +356,25 @@ func dayPanelHint() fyne.CanvasObject {
 		fyne.TextAlignCenter, fyne.TextStyle{Italic: true})
 	hint.Wrapping = fyne.TextWrapWord
 	return container.NewCenter(hint)
+}
+
+// fixedWidthLayout holds its content to one width, whatever the content's own
+// minimum, and passes the height through.
+type fixedWidthLayout struct{ width float32 }
+
+func (l fixedWidthLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	h := float32(0)
+	for _, o := range objects {
+		if o.Visible() {
+			h = max(h, o.MinSize().Height)
+		}
+	}
+	return fyne.NewSize(l.width, h)
+}
+
+func (l fixedWidthLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objects {
+		o.Move(fyne.NewPos(0, 0))
+		o.Resize(size)
+	}
 }

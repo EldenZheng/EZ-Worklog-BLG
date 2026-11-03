@@ -22,6 +22,18 @@ func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 	switch v := o.(type) {
 	case *shell.Tappable:
 		walk(v.Content, fn)
+	case *shell.Fold:
+		walk(v.Content, fn)
+	case *shell.StripeBubble:
+		walk(v.Body, fn)
+	case *shell.HoverArea:
+		walk(v.Content, fn)
+	case *shell.HoverRegion:
+		walk(v.Content, fn)
+	case *shell.Wipe:
+		walk(v.Content, fn)
+	case *shell.Morph:
+		walk(v.Content, fn)
 	case *shell.DayColumn:
 		walk(v.Body, fn)
 	case *logwork.DragTile:

@@ -458,3 +458,26 @@ func TestTappingTheKeyFiltersThePendingList(t *testing.T) {
 		t.Fatalf("the hidden org keeps its count in the key: %v", labels(ui.LogLegend))
 	}
 }
+
+// The day panel keeps one width whatever the day holds: a long parent title
+// or org name used to push it wider, so the calendar shifted between days.
+func TestStatusDayPanelKeepsItsWidth(t *testing.T) {
+	ui := statusUI(t)
+	defer fyne.CurrentApp().Quit()
+	empty := ui.DaySide.MinSize().Width
+
+	key := shell.StatusCacheKey("2026-08")
+	ui.ProjItems[key] = append(ui.ProjItems[key], backend.WorklogItem{
+		Date: "2026-08-11", Minutes: 45,
+		Title:       strings.Repeat("a very long worklog title ", 8),
+		ParentTitle: strings.Repeat("an even longer parent issue title ", 8),
+		ParentURL:   "https://github.com/exampleorg/sample-intranet/issues/9",
+		URL:         "https://github.com/exampleorg/sample-intranet/issues/10",
+	})
+	ui.SelDay = "2026-08-11"
+	status.DrawCalendar(ui)
+	status.DrawDayPanel(ui)
+	if got := ui.DaySide.MinSize().Width; got != empty {
+		t.Fatalf("day panel width changed from %g to %g", empty, got)
+	}
+}

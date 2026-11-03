@@ -26,6 +26,9 @@ type Tappable struct {
 	Content  fyne.CanvasObject
 	onTap    func()
 	Feedback *cardFeedback
+	// OnTapAt, if set, hears where the tap landed (window coordinates)
+	// before the tap itself runs, for a ripple from that point.
+	OnTapAt func(at fyne.Position)
 }
 
 func NewTappable(content fyne.CanvasObject, onTap func()) *Tappable {
@@ -41,7 +44,10 @@ func (t *Tappable) CreateRenderer() fyne.WidgetRenderer {
 	return widget.NewSimpleRenderer(t.Content)
 }
 
-func (t *Tappable) Tapped(_ *fyne.PointEvent) {
+func (t *Tappable) Tapped(e *fyne.PointEvent) {
+	if t.OnTapAt != nil && e != nil {
+		t.OnTapAt(e.AbsolutePosition)
+	}
 	if t.Feedback != nil {
 		t.Feedback.press()
 	}
@@ -219,9 +225,16 @@ type UpdateState struct {
 // re-runs its layout against the panel's new MinSize.
 //
 // Until this existed the only thing that did that was resizing the window.
+//
+// A column on a page built with NewPageScroll also keeps the view on the page:
+// when the page gets shorter under a view scrolled near its foot, the view
+// rides up to the new end instead of being left over blank space.
 func Relayout(column *fyne.Container) {
 	if column != nil {
 		column.Refresh()
+		if p := pageScrolls[column]; p != nil {
+			p.settle()
+		}
 	}
 }
 

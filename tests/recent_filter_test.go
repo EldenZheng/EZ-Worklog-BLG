@@ -1,7 +1,6 @@
 package tests
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +25,8 @@ func labels(o fyne.CanvasObject) []string {
 		out = append(out, v.Text)
 	case *widget.Hyperlink:
 		out = append(out, v.Text)
+	case *shell.HoverLink:
+		out = append(out, v.Text)
 	case *widget.Button:
 		out = append(out, v.Text)
 	case *widget.Check:
@@ -33,6 +34,20 @@ func labels(o fyne.CanvasObject) []string {
 	case *canvas.Text:
 		out = append(out, v.Text)
 	case *shell.Tappable:
+		out = append(out, labels(v.Content)...)
+	case *shell.Fold:
+		out = append(out, labels(v.Content)...)
+	case *shell.StripeBubble:
+		out = append(out, labels(v.Body)...)
+	case *shell.HoverArea:
+		out = append(out, labels(v.Content)...)
+	case *shell.HoverRegion:
+		out = append(out, labels(v.Content)...)
+	case *shell.Wipe:
+		out = append(out, labels(v.Content)...)
+	case *shell.HoverTag:
+		out = append(out, v.Text)
+	case *shell.Morph:
 		out = append(out, labels(v.Content)...)
 	case *shell.DayColumn:
 		out = append(out, labels(v.Body)...)
@@ -234,46 +249,6 @@ func TestShortIssueLabel(t *testing.T) {
 		if got := logwork.ShortIssueLabel(c.info, c.ref); got != c.want {
 			t.Fatalf("shortIssueLabel(%q) = %q, want %q", c.ref, got, c.want)
 		}
-	}
-}
-
-// The daily target is scored against the project, not the local CSV. Without a
-// project configured the pane must say so rather than pass local minutes off as
-// the real total.
-func TestTodayProgressSourcesFromGitHub(t *testing.T) {
-	a := test.NewApp()
-	defer a.Quit()
-	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
-
-	if got := logwork.TodayProgress(ui, 300, 300); !strings.Contains(got, "saved locally") ||
-		!strings.Contains(got, "Settings") {
-		t.Fatalf("no project configured should be stated plainly, got %q", got)
-	}
-
-	// With the month cached, the target is scored on GitHub's minutes (120),
-	// and the 300 sitting unpushed locally is called out, not added in.
-	ui.Cfg = backend.Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
-	ui.EnsureProjectCache()
-	key := shell.StatusCacheKey(shell.ThisMonth())
-	ui.ProjItems[key] = []backend.WorklogItem{
-		{Date: shell.Today(), Minutes: 120},
-		{Date: "1999-01-01", Minutes: 999},
-	}
-	ui.ProjLoaded[key] = true
-
-	got := logwork.TodayProgress(ui, 420, 300)
-	if !strings.Contains(got, fmt.Sprintf("120/%d min", backend.Target)) {
-		t.Fatalf("target should be scored on GitHub minutes, got %q", got)
-	}
-	if !strings.Contains(got, fmt.Sprintf("%d left", backend.Target-120)) {
-		t.Fatalf("remaining should follow the GitHub total, got %q", got)
-	}
-	if !strings.Contains(got, "300 min saved locally, not pushed yet") {
-		t.Fatalf("unpushed local minutes should be reported separately, got %q", got)
-	}
-	if strings.Contains(got, "420") {
-		t.Fatalf("local total must not stand in for the GitHub total, got %q", got)
 	}
 }
 

@@ -3,6 +3,7 @@ package backend
 import (
 	_ "embed"
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -60,4 +61,20 @@ func HoursMins(m int) string {
 // shift on the board and must not have a second pencilled in on top.
 func SupportTitlePrefix(cfg Config) string {
 	return DisplayName(cfg) + ": Weekly Support"
+}
+
+// The support rota's issues: a person's weekly shift ("<Name>: Weekly Support
+// (28th August, 12PM - 3PM)"), weekend support, and a team or group's support
+// however it is written ("Team A Support", "Team A/Group A support",
+// "Support - Group A").
+var (
+	rotaSupportTitle = regexp.MustCompile(`(?i):\s*weekly\s+support\b|\bweekend\s+support\b`)
+	teamWord         = regexp.MustCompile(`(?i)\b(team|group)\b`)
+	supportWord      = regexp.MustCompile(`(?i)\bsupport\b`)
+)
+
+// IsSupportIssue reports whether an issue title is one of the support rota's,
+// which the Sprint Calendar leaves out: they are shifts, not planned work.
+func IsSupportIssue(title string) bool {
+	return rotaSupportTitle.MatchString(title) || teamWord.MatchString(title) && supportWord.MatchString(title)
 }

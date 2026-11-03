@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
@@ -37,14 +36,14 @@ func TestSprintCardKeepsFullTitleRepositoryAndConditionalSprint(t *testing.T) {
 				labels[label.Text] = true
 			}
 			// The repository reference is now the link to the issue.
-			if link, ok := o.(*widget.Hyperlink); ok && link.URL.String() == it.URL {
+			if link, ok := o.(*shell.HoverLink); ok && link.URL.String() == it.URL {
 				labels[link.Text] = true
 			}
-			if text, ok := o.(*canvas.Text); ok {
-				labels["sprint tag: "+text.Text] = true
+			if tag, ok := o.(*shell.HoverTag); ok {
+				labels["sprint tag: "+tag.Text] = true
 			}
 		})
-		if !labels[it.Title] || !labels["bigledger/invoice-engine#25"] || !labels["Project estimate: 90m"] || !labels["Complexity: L - 2 hours"] {
+		if !labels[it.Title] || !labels["bigledger/invoice-engine#25"] || !labels["Estimate: 90m"] || !labels["Complexity: L - 2 hours"] {
 			t.Fatal("full title/repository/details missing", labels)
 		}
 		if labels["sprint tag: Sprint"] != (filter == "all") {

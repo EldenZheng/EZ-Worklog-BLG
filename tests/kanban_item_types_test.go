@@ -74,7 +74,7 @@ func TestSprintIssueAndPRCardsHaveDistinctIconsAndLinks(t *testing.T) {
 			if icon, ok := o.(*widget.Icon); ok && strings.HasSuffix(icon.Resource.Name(), tc.icon) {
 				iconFound = true
 			}
-			if link, ok := o.(*widget.Hyperlink); ok && link.Text == tc.link && link.URL.String() == tc.item.URL {
+			if link, ok := o.(*shell.HoverLink); ok && link.Text == tc.link && link.URL.String() == tc.item.URL {
 				linkFound = true
 			}
 		})

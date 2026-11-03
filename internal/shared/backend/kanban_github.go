@@ -41,6 +41,9 @@ type SprintItem struct {
 	ID, Title, URL, Status, SprintID, Complexity string
 	Effort                                       int
 	Kind                                         string `json:",omitempty"`
+	// The issue this one is a sub-issue of, when it has one.
+	ParentTitle string `json:",omitempty"`
+	ParentURL   string `json:",omitempty"`
 }
 
 func (it SprintItem) Key(projectID string) string {
@@ -151,7 +154,7 @@ const SprintMetadataQuery = `query($login:String!,$number:Int!){
 
 const sprintItemsQuery = `query($id:ID!,$filter:String!,$after:String){node(id:$id){... on ProjectV2{
  items(first:100,after:$after,query:$filter){nodes{id
- content{__typename ... on Issue{title url} ... on PullRequest{title url} ... on DraftIssue{title}}
+ content{__typename ... on Issue{title url parent{title url}} ... on PullRequest{title url} ... on DraftIssue{title}}
  fieldValues(first:100){nodes{
  ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}
  ... on ProjectV2ItemFieldNumberValue{number field{... on ProjectV2FieldCommon{name}}}
@@ -233,6 +236,7 @@ func fetchSprintItems(projectID, filter string, keep func(SprintItem)) error {
 							Content *struct {
 								Title, URL string
 								Kind       string `json:"__typename"`
+								Parent     *struct{ Title, URL string }
 							}
 							FieldValues struct {
 								Nodes []struct {
@@ -258,6 +262,9 @@ func fetchSprintItems(projectID, filter string, keep func(SprintItem)) error {
 				continue
 			}
 			it := SprintItem{ID: n.ID, Title: n.Content.Title, URL: n.Content.URL, Kind: n.Content.Kind}
+			if p := n.Content.Parent; p != nil {
+				it.ParentTitle, it.ParentURL = p.Title, p.URL
+			}
 			for _, v := range n.FieldValues.Nodes {
 				switch v.Field.Name {
 				case "Status":

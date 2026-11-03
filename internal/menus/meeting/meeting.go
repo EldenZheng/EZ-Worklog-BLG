@@ -143,10 +143,12 @@ func DrawMeeting(ui *shell.UI) {
 	calendarPane := container.NewVScroll(calendarBody)
 	rowsPane := meetingRowsPanel(ui, days)
 
-	// Swap only the inner content of the two persistent holders.
+	// Swap only the inner content of the two persistent holders. The logged
+	// rows are their own menu, so they sit in a rounded panel like Settings
+	// and scroll inside it while the panel stays put.
 	ui.MeetingCalendarHolder.Objects = []fyne.CanvasObject{calendarPane}
 	ui.MeetingCalendarHolder.Refresh()
-	ui.MeetingRowsHolder.Objects = []fyne.CanvasObject{rowsPane}
+	ui.MeetingRowsHolder.Objects = []fyne.CanvasObject{shell.PanelFrame(rowsPane)}
 	ui.MeetingRowsHolder.Refresh()
 
 	ui.MeetingBox.Objects = []fyne.CanvasObject{
@@ -176,6 +178,9 @@ const MeetingRowsFraction float32 = 0.10
 // HSplit it has no divider interaction, so the user cannot resize the sidebar.
 type MeetingColumnsLayout struct{}
 
+// meetingColumnGap keeps the two column panels apart.
+func meetingColumnGap() float32 { return theme.InnerPadding() }
+
 func (MeetingColumnsLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
 	if len(objs) < 2 {
 		if len(objs) == 1 {
@@ -185,7 +190,7 @@ func (MeetingColumnsLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
 	}
 	calendarMin := objs[0].MinSize()
 	rowsMin := objs[1].MinSize()
-	width := max(calendarMin.Width/(1-MeetingRowsFraction), rowsMin.Width/MeetingRowsFraction) + theme.Padding()
+	width := max(calendarMin.Width/(1-MeetingRowsFraction), rowsMin.Width/MeetingRowsFraction) + meetingColumnGap()
 	return fyne.NewSize(width, max(calendarMin.Height, rowsMin.Height))
 }
 
@@ -193,9 +198,7 @@ func (MeetingColumnsLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 	if len(objs) < 2 {
 		return
 	}
-	// A gap between the columns keeps the last day's border clear of the
-	// sidebar text.
-	gap := theme.Padding()
+	gap := meetingColumnGap()
 	rowsX := size.Width * (1 - MeetingRowsFraction)
 	rowsWidth := size.Width - rowsX
 	objs[0].Move(fyne.NewPos(0, 0))
@@ -270,7 +273,7 @@ func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 	}
 	if len(pairs) == 0 {
 		items = append(items, widget.NewLabel("Nothing logged yet."))
-		return container.NewVScroll(compactVBox(items...))
+		return shell.PanelScroll(compactVBox(items...), true)
 	}
 	for _, p := range pairs {
 		items = append(items, meetingRowLine(ui, p.key, p.title, p.mins))
@@ -281,7 +284,7 @@ func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 		fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	totalLine.Wrapping = fyne.TextWrapWord
 	items = append(items, totalLine)
-	return container.NewVScroll(compactVBox(items...))
+	return shell.PanelScroll(compactVBox(items...), true)
 }
 
 // meetingRowLine is one row on the rows panel: "<minutes> · <issue title>" as

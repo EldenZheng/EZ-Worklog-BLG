@@ -64,6 +64,9 @@ func (t *Tappable) Hide() {
 func (f *cardFeedback) paint(level float32) {
 	f.Level = level
 	f.outline.StrokeColor = widgets.WithAlpha(theme.Color(theme.ColorNameForeground), level)
+	// A faint wash fades in with the outline, so the hover reads as the card
+	// lighting up rather than only being edged.
+	f.outline.FillColor = widgets.WithAlpha(theme.Color(theme.ColorNameForeground), level*0.22)
 	f.outline.Refresh()
 }
 
@@ -80,7 +83,7 @@ func (f *cardFeedback) fade(to float32) {
 	if from == to {
 		return
 	}
-	f.Animation = fyne.NewAnimation(140*time.Millisecond, func(p float32) {
+	f.Animation = fyne.NewAnimation(180*time.Millisecond, func(p float32) {
 		f.paint(from + (to-from)*p)
 		if p == 1 {
 			f.Animation = nil

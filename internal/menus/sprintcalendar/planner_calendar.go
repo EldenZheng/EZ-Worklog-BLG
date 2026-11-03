@@ -159,11 +159,26 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	if selected := selectedCalendarSprint(k); selected.ID != "" && selected.Contains(shell.Today()) {
 		sprintControl = container.NewThemeOverride(sprintSelect, widgets.DropdownTheme{Theme: theme.Current(), Current: true})
 	}
-	header := container.NewHBox(container.NewThemeOverride(mode, widgets.DropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(360, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), widget.NewButton("Today", func() {
+	today := widget.NewButton("Today", func() {
 		k.Week = backend.WeekStartOf(shell.Today())
 		k.Month = shell.ThisMonth()
 		shell.Hooks.KanbanUIDraw(k)
-	}))
+	})
+	// Nothing to jump to when today is already in view.
+	onToday := k.Week == backend.WeekStartOf(shell.Today())
+	switch k.CalendarMode {
+	case "Month":
+		onToday = k.Month == shell.ThisMonth()
+	case "Sprint":
+		onToday = selectedCalendarSprint(k).Contains(shell.Today())
+	}
+	if onToday {
+		today.Disable()
+	}
+	// The shown sprints and their days left, filled in below once read, sit
+	// just after Today.
+	sprintInfo := widget.NewLabel("")
+	header := container.NewHBox(container.NewThemeOverride(mode, widgets.DropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(360, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), today, sprintInfo)
 	auto := widget.NewButton("Allocate unscheduled", func() {
 		p := k.Plan
 		var unplaced []string
@@ -262,7 +277,7 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		}
 	}
 	grid := container.NewVBox(unscheduled...)
-	trayScroll := container.NewVScroll(grid)
+	trayScroll := shell.PanelScroll(grid, true)
 	trayScroll.SetMinSize(fyne.NewSize(250, 0))
 	k.CalendarIssueClip = trayScroll
 	var tray fyne.CanvasObject = trayScroll
@@ -271,10 +286,13 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		empty.Wrapping = fyne.TextWrapWord
 		grid.Add(empty)
 	}
-	trayTitle := widget.NewLabelWithStyle(fmt.Sprintf("Sprint issues (%d)", issues), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	trayNote := widget.NewLabel("Drag again to plan another day")
-	trayNote.Wrapping = fyne.TextWrapWord
-	sidebar := container.NewBorder(container.NewVBox(trayTitle, trayNote), nil, nil, nil, tray)
+	// Gold, with the count at the right in the same badge as Kanban's.
+	trayHeading := canvas.NewText("Sprint Issues", widgets.LogoGold)
+	trayHeading.TextStyle = fyne.TextStyle{Bold: true}
+	trayTitle := container.NewBorder(nil, nil, container.NewCenter(trayHeading), container.NewCenter(shell.CountBadge(issues)))
+	// The issue tray is its own menu, so it sits in a rounded panel like
+	// Settings; the issues scroll inside it while the panel stays put.
+	sidebar := shell.PanelFrame(container.NewBorder(shell.PanelHead(trayTitle, true), nil, nil, nil, tray))
 	var summaries []string
 	seenSprints := map[string]bool{}
 	for _, b := range k.Plan.Boards {
@@ -291,14 +309,15 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 			seenSprints[summary] = true
 		}
 	}
-	periodNote := widget.NewLabel(strings.Join(summaries, "\n"))
+	sprintInfo.SetText(strings.Join(summaries, "\n"))
+	periodNote := widget.NewLabel("")
 	switch work.State {
 	case "loading":
-		periodNote.SetText(periodNote.Text + "\nLoading GitHub worklogs…")
+		periodNote.SetText("Loading GitHub worklogs…")
 	case "off":
-		periodNote.SetText(periodNote.Text + "\nSet Worklog project URLs in Settings to load worked time.")
+		periodNote.SetText("Set Worklog project URLs in Settings to load worked time.")
 	case "error":
-		periodNote.SetText(periodNote.Text + "\nWorklogs: " + shell.Truncate(work.detail, 180))
+		periodNote.SetText("Worklogs: " + shell.Truncate(work.detail, 180))
 	}
 	periodNote.Wrapping = fyne.TextWrapWord
 	support := widget.NewCheck(fmt.Sprintf("+%d min weekday support (display only)", backend.SupportPlaceholderMins), nil)
@@ -315,9 +334,14 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		shell.Hooks.DrawWeekStrip(k.Ui)
 		shell.Hooks.KanbanUIDraw(k)
 	}
-	noteRow := container.NewBorder(nil, nil, nil, shell.GoldChoice(support), periodNote)
-	legend := container.NewBorder(nil, nil, nil, shell.WeekCaption("Projects: GitHub · Gold: drafts/support · Purple: plans"), k.ProjectLegend(true))
-	return container.NewBorder(container.NewVBox(toolbar, noteRow), legend, sidebar, nil, dates)
+	// The project key sits on the support checkbox's line, as Kanban and Log
+	// Work keep theirs by their controls.
+	// The legend scrolls sideways, so it takes the row's free width; beside the
+	// checkbox as a left part it was squeezed to nothing.
+	noteRow := container.NewBorder(nil, nil, nil, shell.GoldChoice(support), k.ProjectLegend(true))
+	shell.ShowIf(periodNote, periodNote.Text != "")
+	legend := container.NewBorder(nil, nil, nil, shell.WeekCaption("Projects: GitHub · Gold: drafts/support · Purple: plans"), nil)
+	return container.NewBorder(container.NewVBox(toolbar, periodNote, noteRow), legend, sidebar, nil, dates)
 }
 
 func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate, scale *plannerScale, work PlannerDayWork) fyne.CanvasObject {
@@ -371,14 +395,10 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 	base := shell.DayFill(totals.Logged, totals.Draft+totals.support+totals.Planned)
 	bg := canvas.NewRectangle(base)
 	bg.CornerRadius = shell.CellCornerRadius
+	// The plain edge Log Work's days have; the green fill says a day is done,
+	// and only today is edged in gold.
 	bg.StrokeWidth = 1
 	bg.StrokeColor = theme.Color(theme.ColorNameInputBorder)
-	if projected > 0 {
-		bg.StrokeColor = widgets.LogoGold
-		if projected >= backend.Target {
-			bg.StrokeColor = theme.Color(theme.ColorNameSuccess)
-		}
-	}
 	if date == shell.Today() {
 		bg.StrokeWidth = 2
 		bg.StrokeColor = widgets.LogoGold
@@ -402,11 +422,14 @@ func plannerCardWithScale(k *shell.KanbanUI, c backend.SprintCandidate, index in
 	t := k.Plan.Tasks[c.Key]
 	finished := backend.PlannerIssueFinished(it, t)
 	duration := backend.SprintEstimate(it, t)
-	caption := fmt.Sprintf("%s · %dm\n%s", backend.ProjectShortName(b), duration, backend.OrDefault(it.Complexity, "Local plan"))
+	caption := fmt.Sprintf("%dm", duration)
+	if it.Complexity != "" {
+		caption += "\n" + it.Complexity
+	}
 	compact := index >= 0
 	if compact && index < len(t.Blocks) {
 		block := t.Blocks[index]
-		caption = fmt.Sprintf("%s–%s · %dm\n%s", backend.PlanClock(block.Start), backend.PlanClock(block.Start+block.Minutes), block.Minutes, backend.ProjectShortName(b))
+		caption = fmt.Sprintf("%s–%s · %dm", backend.PlanClock(block.Start), backend.PlanClock(block.Start+block.Minutes), block.Minutes)
 	}
 	if index < 0 && len(t.Blocks) > 0 {
 		caption += fmt.Sprintf("\n%d blocks planned · drag to add", len(t.Blocks))
@@ -422,7 +445,7 @@ func plannerCardWithScale(k *shell.KanbanUI, c backend.SprintCandidate, index in
 	card := &shell.PlannerDragCard{K: k, Candidate: c, Index: index, Content: content}
 	if compact && index < len(t.Blocks) {
 		size := &PlannerDurationLayout{minutes: t.Blocks[index].Minutes, scale: scale}
-		face := newPlannerTimedFace(it.Title, backend.ProjectShortName(b), it.URL, t.Blocks[index].Minutes, k.Accent(b, it))
+		face := newPlannerTimedFace(it.Title, "", it.URL, t.Blocks[index].Minutes, k.Accent(b, it))
 		face.finished = finished
 		card.Content = container.New(size, face)
 		if !finished {

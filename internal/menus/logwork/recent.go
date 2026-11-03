@@ -53,17 +53,6 @@ func DrawRecent(ui *shell.UI) {
 		}
 		rows = matching
 	}
-	localToday, localWaiting := 0, 0
-	for _, r := range rows {
-		if r["date"] != shell.Today() {
-			continue
-		}
-		localToday += r.Minutes()
-		if r["pushed_at"] == "" {
-			localWaiting += r.Minutes()
-		}
-	}
-
 	// Default view is the to-do list: rows saved locally that GitHub has not
 	// seen yet, whatever month they belong to — an entry left unpushed since
 	// last month is exactly the one worth surfacing. Ticking the box brings the
@@ -117,15 +106,12 @@ func DrawRecent(ui *shell.UI) {
 
 	objs := []fyne.CanvasObject{
 		widget.NewLabelWithStyle(head, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel(TodayProgress(ui, localToday, localWaiting)),
 	}
 	switch {
 	case len(shown) > 0 || showAll:
 		objs = append(objs, entryTable(ui, shown, func() { DrawRecent(ui) }))
 	case onStrip > 0:
-		// Not "nothing to do": everything waiting is standing on its day below.
-		objs = append(objs, widget.NewLabel(
-			"Everything still waiting is on the week below, on the day it will be pushed with."))
+		// Nothing to list: everything waiting is standing on its day below.
 	default:
 		objs = append(objs, widget.NewLabel("Everything logged has been pushed to GitHub."))
 	}
@@ -198,42 +184,6 @@ func DrawLogLegend(ui *shell.UI) {
 	ui.LogLegend.Refresh()
 	shell.Relayout(ui.LogBody)
 }
-
-// TodayProgress describes how much of the daily target is actually banked.
-//
-// It scores against the GitHub project, not the local CSV: a row saved here but
-// never pushed is not on the board, and a worklog pushed from another machine
-// is. Minutes still sitting locally are reported separately rather than folded
-// in, so the gap between "typed it" and "it counts" stays visible.
-func TodayProgress(ui *shell.UI, localToday, localWaiting int) string {
-	banked, state := githubMinutesToday(ui)
-
-	var s string
-	switch state {
-	case "ok":
-		s = fmt.Sprintf("Today on GitHub: %d/%d min", banked, backend.Target)
-		if banked >= backend.Target {
-			s += " ✓"
-		} else {
-			s += fmt.Sprintf(" (%d left)", backend.Target-banked)
-		}
-	case "loading":
-		return fmt.Sprintf("Today: %d/%d min saved locally — checking GitHub…", localToday, backend.Target)
-	case "off":
-		return fmt.Sprintf("Today: %d/%d min saved locally. Set a project URL in Settings to score against GitHub.",
-			localToday, backend.Target)
-	default: // "error"
-		return fmt.Sprintf("Today: %d/%d min saved locally — could not read the GitHub project.",
-			localToday, backend.Target)
-	}
-	if localWaiting > 0 {
-		s += fmt.Sprintf("   ·   %d min saved locally, not pushed yet", localWaiting)
-	}
-	return s
-}
-
-// githubMinutesToday sums today's worklog minutes from the project.
-func githubMinutesToday(ui *shell.UI) (int, string) { return githubMinutesOn(ui, shell.Today()) }
 
 // githubMinutesOn sums one day's worklog minutes from the project, kicking that
 // month's fetch off the first time it is asked. State is one of "ok",

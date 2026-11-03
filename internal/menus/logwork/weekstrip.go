@@ -127,7 +127,6 @@ func DrawWeekStrip(ui *shell.UI) {
 	// Everything still on this machine, whatever week it was filed under: the
 	// entries that can be dragged are the ones drawn hollow on their day.
 	localByDay := map[string][]backend.Row{}
-	waiting := 0
 	if rows, err := ui.Store.ReadRows(); err == nil {
 		for _, r := range ui.ShownRows(rows) {
 			if !ui.RowMatchesSearch(r) {
@@ -136,7 +135,6 @@ func DrawWeekStrip(ui *shell.UI) {
 			if r["pushed_at"] != "" {
 				continue
 			}
-			waiting++
 			localByDay[r["date"]] = append(localByDay[r["date"]], r)
 		}
 	}
@@ -210,11 +208,6 @@ func DrawWeekStrip(ui *shell.UI) {
 	}
 
 	objs := []fyne.CanvasObject{head, ui.WeekStripProgress.View, grid}
-	if waiting > 0 {
-		objs = append(objs, widget.NewLabelWithStyle(
-			"Drag a card onto another day to move it — the date it is pushed with follows the drop.",
-			fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
-	}
 
 	ui.WeekBox.Objects = objs
 	ui.WeekBox.Refresh()
@@ -389,10 +382,14 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 
 	name := fmt.Sprintf("%s %d", t.Format("Mon"), t.Day())
 	if ds == shell.Today() {
-		name += " · today"
+		name += " · Today"
 	}
-	head := widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
+	var head fyne.CanvasObject = widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
 		fyne.TextStyle{Bold: ds == shell.Today()})
+	if ds == shell.Today() {
+		// Today's heading is gold, like its outline.
+		head = container.NewThemeOverride(head, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	}
 
 	// Left of the line is what the day actually holds and what is queued for it;
 	// right of it is what those two come to together — the number the day would
@@ -427,8 +424,7 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 	// The frame is kept to hand so a drop target can be lit without rebuilding
 	// the column under the pointer that is aiming at it.
 	frame := canvas.NewRectangle(color.Transparent)
-	frame.StrokeColor = theme.Color(theme.ColorNameInputBorder)
-	frame.StrokeWidth = 1
+	frame.StrokeColor, frame.StrokeWidth = dayEdge(ds)
 	frame.CornerRadius = shell.CellCornerRadius
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.SetMinSize(fyne.NewSize(0, backend.WeekColMinHeight))
@@ -505,16 +501,7 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	body := container.NewVBox(title, mins, where,
 		container.NewBorder(nil, nil, leading, container.NewHBox(widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del))))
 
-	bg := canvas.NewRectangle(shell.BlendColor(
-		theme.Color(theme.ColorNameInputBackground), accent, 0.10))
-	bg.StrokeColor = shell.BlendColor(theme.Color(theme.ColorNameInputBorder), accent, 0.5)
-	bg.StrokeWidth = 1
-	bg.CornerRadius = 10
-	stripe := canvas.NewRectangle(accent)
-	stripe.SetMinSize(fyne.NewSize(4, 0))
-	stripe.CornerRadius = 2
-	return container.NewStack(bg, container.NewPadded(
-		container.NewBorder(nil, nil, stripe, nil, container.NewPadded(body))))
+	return shell.OrgBubble(accent, body)
 }
 
 // weekRowTitle names a locally saved row the same way its tile does.
@@ -540,12 +527,11 @@ func MarkDropTargets(ui *shell.UI) {
 			continue
 		}
 		col.StopPulse()
-		if col.Frame.StrokeColor == theme.Color(theme.ColorNameInputBorder) &&
-			col.Frame.StrokeWidth == 1 {
+		stroke, width := dayEdge(ds)
+		if col.Frame.StrokeColor == stroke && col.Frame.StrokeWidth == width {
 			continue
 		}
-		col.Frame.StrokeColor = theme.Color(theme.ColorNameInputBorder)
-		col.Frame.StrokeWidth = 1
+		col.Frame.StrokeColor, col.Frame.StrokeWidth = stroke, width
 		col.Frame.Refresh()
 	}
 }
@@ -561,18 +547,7 @@ func showGhost(ui *shell.UI, r backend.Row) {
 	if ui.DragLayer == nil {
 		return
 	}
-	label := canvas.NewText(fmt.Sprintf("%s · %dm",
-		shell.Truncate(weekRowTitle(ui, r), 24), r.Minutes()), theme.Color(theme.ColorNameForeground))
-	label.TextSize = theme.CaptionTextSize()
-
-	bg := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameInputBackground),
-		shell.OrgColor(ui.Cfg, shell.OrgOf(r["issue"])), 0.35))
-	bg.CornerRadius = 8
-	bg.StrokeColor = theme.Color(theme.ColorNamePrimary)
-	bg.StrokeWidth = 1
-
-	ghost := container.NewStack(bg, container.NewPadded(label))
-	ghost.Resize(ghost.MinSize()) // nothing lays this out; it sizes itself
+	ghost := shell.DragGhost(weekRowTitle(ui, r), r.Minutes(), shell.OrgColor(ui.Cfg, shell.OrgOf(r["issue"])))
 	ui.DragGhost = ghost
 	ui.DragLayer.Objects = []fyne.CanvasObject{ghost}
 	ui.DragLayer.Refresh()
@@ -642,6 +617,7 @@ func (t *DragTile) Dragged(e *fyne.DragEvent) {
 		t.lifted = true
 		t.ui.DragRow = t.Row
 		showGhost(t.ui, t.Row)
+		shell.HoldBubble(t.Content)
 		MarkDropTargets(t.ui)
 	}
 	moveGhost(t.ui, e.AbsolutePosition)
@@ -652,6 +628,7 @@ func (t *DragTile) DragEnd() {
 		return
 	}
 	t.lifted = false
+	shell.ReleaseBubble()
 	hideGhost(t.ui)
 
 	day := t.ui.HoverDay
@@ -692,4 +669,13 @@ func weekSupportControl(ui *shell.UI) fyne.CanvasObject {
 		ui.WeekSupport.OnChanged = changed
 	}
 	return ui.WeekSupportView
+}
+
+// dayEdge is a day's outline at rest: today edged in gold, as on the Sprint
+// Calendar, every other day in the plain input border.
+func dayEdge(date string) (color.Color, float32) {
+	if date == shell.Today() {
+		return widgets.LogoGold, 2
+	}
+	return theme.Color(theme.ColorNameInputBorder), 1
 }

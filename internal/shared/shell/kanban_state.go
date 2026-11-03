@@ -11,7 +11,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
@@ -28,10 +27,17 @@ type KanbanTarget struct {
 }
 
 type KanbanUI struct {
-	Ui                                  *UI
-	Plan                                backend.SprintPlan
-	Root, Body, GhostLayer              *fyne.Container
-	SideClip, BoardClip                 fyne.CanvasObject
+	Ui                     *UI
+	Plan                   backend.SprintPlan
+	Root, Body, GhostLayer *fyne.Container
+	SideClip, BoardClip    fyne.CanvasObject
+	// CompletedOpen unfolds the finished sprints in the sidebar; folded by default.
+	CompletedOpen bool
+	// CardsShown is which cards the board last showed (filter, sprint,
+	// search); when it changes the cards arrive top to bottom.
+	CardsShown string
+	// SprintsShowAll lists every upcoming sprint, not only the first few.
+	SprintsShowAll                      bool
 	Message                             *widget.Label
 	Targets                             []*KanbanTarget
 	Hover                               *KanbanTarget
@@ -174,6 +180,11 @@ func (k *KanbanUI) SetMessage(text string) {
 }
 
 func (k *KanbanUI) Accent(b backend.SprintBoard, it backend.SprintItem) color.NRGBA {
+	// The meeting bubble takes the planned-time colour of the day bars: it
+	// belongs to no org, and what it plans is time set aside.
+	if b.ID == plannerMeetingBoard.ID {
+		return PlannerPlanColor
+	}
 	org := OrgOf(it.URL)
 	if org == "" {
 		ref, err := backend.ParseProjectRef(b.URL)
@@ -249,10 +260,8 @@ func (c *SprintDragCard) Dragged(e *fyne.DragEvent) {
 	if !c.lifted {
 		c.lifted = true
 		k.Dragging = true
-		bg := canvas.NewRectangle(theme.Color(theme.ColorNameOverlayBackground))
-		bg.CornerRadius = 8
-		ghost := container.NewStack(bg, container.NewPadded(widget.NewLabel(Truncate(c.Item.Title, 38))))
-		ghost.Resize(ghost.MinSize())
+		ghost := DragGhost(c.Item.Title, backend.SprintEstimate(c.Item, k.Plan.Tasks[c.Item.Key(c.Board.ID)]), k.Accent(c.Board, c.Item))
+		HoldBubble(c.Content)
 		k.DropLine = newDropLine()
 		k.GhostLayer.Objects = []fyne.CanvasObject{ghost, k.DropLine}
 	}
@@ -292,6 +301,7 @@ func (c *SprintDragCard) DragEnd() {
 		return
 	}
 	c.lifted = false
+	ReleaseBubble()
 	k := c.K
 	k.Dragging = false
 	// A save that finished mid-drag held its redraw back; do it now unless
@@ -553,7 +563,8 @@ func (k *KanbanUI) CalendarItems() []backend.SprintCandidate {
 			continue
 		}
 		for _, it := range b.Items {
-			if it.SprintID == s.ID {
+			// Support rota issues are not planned work.
+			if it.SprintID == s.ID && !backend.IsSupportIssue(it.Title) {
 				out = append(out, backend.SprintCandidate{it.Key(b.ID), it, s})
 			}
 		}

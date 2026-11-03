@@ -1,7 +1,6 @@
 package kanban
 
 import (
-	"fmt"
 	"image/color"
 
 	"fyne.io/fyne/v2"
@@ -15,9 +14,30 @@ import (
 	"worklog/internal/shared/widgets"
 )
 
+// sprintsShown is how many upcoming sprints the sidebar lists before
+// "Show More…".
+const sprintsShown = 9
+
+// goldHeading is a sidebar heading in the logo gold.
+func goldHeading(text string) fyne.CanvasObject {
+	t := canvas.NewText(text, widgets.LogoGold)
+	t.TextStyle = fyne.TextStyle{Bold: true}
+	return container.NewCenter(t)
+}
+
 func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
-	side := container.NewVBox(widget.NewLabelWithStyle("Sprints", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+	side := container.NewVBox(container.NewHBox(goldHeading("Sprints")), shell.VGap(theme.Padding()))
+	// A slide re-lays only the sidebar's geometry each frame, from its scroll
+	// inwards, so the view rides along as the list grows or shrinks.
+	reflow := func(final bool) {
+		if scroll, ok := k.SideClip.(*container.Scroll); ok {
+			shell.Reflow(final, scroll, scroll.Content, side)
+		}
+	}
 	groups := k.CombinedSprints(true)
+	// into is where add puts a sprint's row: the sidebar, or the folding list
+	// of finished sprints.
+	into := side
 	add := func(g shell.CombinedSprint) {
 		name := widget.NewLabelWithStyle(g.Sprint.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 		meta := widget.NewLabel(shell.SprintDateLabel(g.Sprint))
@@ -32,7 +52,7 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 			frame.CornerRadius = 12
 			current = container.NewCenter(container.NewStack(frame, container.NewPadded(label)))
 		}
-		count := sprintCountBadge(g.Count)
+		count := shell.CountBadge(g.Count)
 		right := container.NewHBox()
 		if current != nil {
 			right.Add(current)
@@ -54,16 +74,40 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 			}
 		}
 		// The whole tall row is both clickable and a drop target.
-		side.Add(shell.NewCardTappable(container.New(sprintRowLayout{}, area), func() { ToggleSprint(k, g.Key); Draw(k) }))
+		into.Add(rippleRow(k, shell.NewCardTappable(container.New(sprintRowLayout{}, area), func() { ToggleSprint(k, g.Key); Draw(k) })))
 		divider := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameBackground), theme.Color(theme.ColorNameForeground), 0.35))
 		divider.SetMinSize(fyne.NewSize(1, 1))
-		side.Add(divider)
+		into.Add(divider)
 	}
+	// The next few sprints are listed; the rest slide out under Show More.
+	var upcoming []shell.CombinedSprint
 	for _, g := range groups {
 		if backend.AddDays(g.Sprint.StartDate, g.Sprint.Duration) > shell.Today() {
-			add(g)
+			upcoming = append(upcoming, g)
 		}
 	}
+	for i, g := range upcoming {
+		if i == sprintsShown {
+			more := container.NewVBox()
+			into = more
+			fold := shell.NewFold(more, k.SprintsShowAll)
+			// Gold words at rest; under the pointer a gold bar fills the
+			// sidebar's width.
+			var toggle *shell.HoverTag
+			toggle = shell.NewHoverTag(showMoreText(k.SprintsShowAll), color.Transparent, widgets.LogoGold,
+				widgets.LogoGold, shell.TagHoverInk, func() {
+					k.SprintsShowAll = !fold.Open()
+					toggle.Text = showMoreText(k.SprintsShowAll)
+					toggle.Refresh()
+					fold.Slide(k.SprintsShowAll, reflow)
+				})
+			toggle.Wide = true
+			side.Add(fold)
+			side.Add(toggle)
+		}
+		add(g)
+	}
+	into = side
 	noSprint := 0
 	for _, b := range k.Plan.Boards {
 		if k.VisibleBoard(b) {
@@ -80,7 +124,7 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 		if k.Filter == "none" {
 			ink = color.NRGBA{R: 24, G: 24, B: 24, A: 255}
 		}
-		row := container.NewPadded(container.NewBorder(nil, nil, nil, sprintCountBadge(noSprint), container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink})))
+		row := container.NewPadded(container.NewBorder(nil, nil, nil, shell.CountBadge(noSprint), container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink})))
 		area := dropArea(k, row, "", "sprint", "")
 		for _, target := range k.Targets {
 			if target.Object == area {
@@ -92,14 +136,14 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 				}
 			}
 		}
-		side.Add(shell.NewCardTappable(area, func() {
+		side.Add(rippleRow(k, shell.NewCardTappable(area, func() {
 			if k.Filter == "none" {
 				k.Filter = "all"
 			} else {
 				k.Filter = "none"
 			}
 			Draw(k)
-		}))
+		})))
 	}
 	hasCompleted := false
 	for _, g := range groups {
@@ -108,28 +152,30 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 		}
 	}
 	if hasCompleted {
-		side.Add(widget.NewLabelWithStyle("Completed", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
+		// Finished sprints fold away under their heading, folded by default;
+		// the choice holds across redraws.
+		completed := container.NewVBox()
+		into = completed
+		finished := 0
 		for i := len(groups) - 1; i >= 0; i-- {
 			g := groups[i]
 			if backend.AddDays(g.Sprint.StartDate, g.Sprint.Duration) <= shell.Today() {
 				add(g)
+				finished++
 			}
 		}
+		// Gold, with the count in the same badge the sprint rows carry, so the
+		// folded heading still says how much is under it.
+		label := container.NewHBox(goldHeading("Completed"), container.NewCenter(shell.CountBadge(finished)))
+		head, area := shell.CollapseToggle(label, completed, k.CompletedOpen,
+			func(on bool) { k.CompletedOpen = on }, reflow)
+		side.Add(head)
+		side.Add(area)
 	}
 	return side
 }
 
 type sprintRowLayout struct{}
-
-func sprintCountBadge(count int) fyne.CanvasObject {
-	bg := canvas.NewRectangle(theme.Color(theme.ColorNameOverlayBackground))
-	bg.CornerRadius = 12
-	bg.SetMinSize(fyne.NewSize(26, 26))
-	label := canvas.NewText(fmt.Sprint(count), theme.Color(theme.ColorNameForeground))
-	label.TextSize = theme.CaptionTextSize()
-	label.TextStyle = fyne.TextStyle{Bold: true}
-	return container.NewStack(bg, container.NewCenter(label))
-}
 
 func (sprintRowLayout) MinSize([]fyne.CanvasObject) fyne.Size { return fyne.NewSize(290, 96) }
 
@@ -173,4 +219,19 @@ func ToggleSprint(k *shell.KanbanUI, key string) {
 		k.Filter = "sprint"
 		k.Sprint = key
 	}
+}
+
+func showMoreText(all bool) string {
+	if all {
+		return "Show Less"
+	}
+	return "Show More…"
+}
+
+// rippleRow makes a sidebar row ripple gold from where it is tapped. The
+// ripple plays in the board's overlay, so the redraw the tap sets off does not
+// cut it short.
+func rippleRow(k *shell.KanbanUI, row *shell.Tappable) *shell.Tappable {
+	row.OnTapAt = func(at fyne.Position) { shell.Ripple(k.GhostLayer, row, at) }
+	return row
 }

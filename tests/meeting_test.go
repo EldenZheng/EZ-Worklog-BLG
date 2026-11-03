@@ -57,8 +57,8 @@ func TestMeetingSidebarIsFixedAtTenPercent(t *testing.T) {
 	}
 
 	columns.Resize(fyne.NewSize(1000, 600))
-	// The calendar stops a padding short of the sidebar so the two never touch.
-	if got, want := ui.MeetingCalendarHolder.Size().Width, 900-theme.Padding(); got != want {
+	// The calendar stops a gap short of the sidebar so the two panels never touch.
+	if got, want := ui.MeetingCalendarHolder.Size().Width, 900-theme.InnerPadding(); got != want {
 		t.Fatalf("calendar width = %g, want %g", got, want)
 	}
 	if got := ui.MeetingRowsHolder.Size().Width; got != 100 {

@@ -7,7 +7,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
@@ -69,10 +68,8 @@ func (c *PlannerDragCard) Dragged(e *fyne.DragEvent) {
 		c.lifted = true
 		k.CalendarDrag = c
 		b, it, _ := k.BoardItem(c.Candidate)
-		bg := canvas.NewRectangle(BlendColor(theme.Color(theme.ColorNameInputBackground), k.Accent(b, it), 0.5))
-		bg.CornerRadius = 10
-		ghost := container.NewStack(bg, container.NewPadded(widget.NewLabel(Truncate(c.Candidate.Item.Title, 35))))
-		ghost.Resize(ghost.MinSize())
+		ghost := DragGhost(c.Candidate.Item.Title, backend.SprintEstimate(it, k.Plan.Tasks[c.Candidate.Key]), k.Accent(b, it))
+		HoldBubble(c.Content)
 		k.CalendarGhost.Objects = []fyne.CanvasObject{ghost}
 	}
 	if len(k.CalendarGhost.Objects) > 0 {
@@ -105,12 +102,22 @@ func (c *PlannerDragCard) HighlightDates(at *fyne.Position) {
 		target.Frame.StrokeWidth = target.StrokeWidth
 		target.Frame.StrokeColor = target.StrokeColor
 		if valid {
-			target.Frame.FillColor = widgets.WithAlpha(PlannerAvailableBlue, 0.13)
+			// A day already green stays green; blue fills only an empty one.
+			blank := true
+			if target.Base != nil {
+				_, _, _, a := target.Base.RGBA()
+				blank = a == 0
+			}
+			if blank {
+				target.Frame.FillColor = widgets.WithAlpha(PlannerAvailableBlue, 0.13)
+			}
 			target.Frame.StrokeColor = PlannerAvailableBlue
 			target.Frame.StrokeWidth = 2
 			if at != nil && pointIn(target.Object, *at) && pointIn(k.CalendarClip, *at) {
 				c.Hover = target
-				target.Frame.FillColor = widgets.WithAlpha(PlannerAvailableBlue, 0.25)
+				if blank {
+					target.Frame.FillColor = widgets.WithAlpha(PlannerAvailableBlue, 0.25)
+				}
 				target.Frame.StrokeColor = widgets.LogoGold
 				target.Frame.StrokeWidth = 4
 			}
@@ -120,6 +127,10 @@ func (c *PlannerDragCard) HighlightDates(at *fyne.Position) {
 }
 
 func (c *PlannerDragCard) MouseIn(*desktop.MouseEvent) {
+	// The card hears the pointer, not its bubble, so it lights the bubble.
+	if b := BubbleIn(c.Content); b != nil {
+		b.SetHover(true)
+	}
 	if c.Day != nil {
 		c.Day.Enter(c)
 	}
@@ -131,6 +142,9 @@ func (c *PlannerDragCard) MouseIn(*desktop.MouseEvent) {
 func (c *PlannerDragCard) MouseMoved(*desktop.MouseEvent) {}
 
 func (c *PlannerDragCard) MouseOut() {
+	if b := BubbleIn(c.Content); b != nil {
+		b.SetHover(false)
+	}
 	if c.Day != nil {
 		c.Day.Leave(c)
 	}
@@ -153,6 +167,7 @@ func (c *PlannerDragCard) DragEnd() {
 		return
 	}
 	c.lifted = false
+	ReleaseBubble()
 	k := c.K
 	if k.CalendarDrag == c {
 		k.CalendarDrag = nil

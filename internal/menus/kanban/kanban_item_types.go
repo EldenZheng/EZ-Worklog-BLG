@@ -31,7 +31,14 @@ func itemTypeControls(k *shell.KanbanUI) fyne.CanvasObject {
 		if !k.VisibleItemType(it) {
 			ink = theme.Color(theme.ColorNamePlaceHolder)
 		}
-		content := container.NewHBox(container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), widget.NewIcon(it.TypeIcon()))), widget.NewLabel("|"), widget.NewLabel(label))
+		// Plain text, not labels: a label's own inset left a wide gap either
+		// side of the bar. The padding goes round the whole chip instead, so
+		// the hover outline sits clear of the icon and the words.
+		bar := canvas.NewText("|", ink)
+		name := canvas.NewText(label, ink)
+		content := container.NewPadded(container.NewHBox(
+			container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), widget.NewIcon(it.TypeIcon()))),
+			container.NewCenter(bar), container.NewCenter(name)))
 		row.Add(shell.NewCardTappable(container.NewThemeOverride(content, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink}), func() {
 			var selected []string
 			for _, candidate := range []backend.SprintItem{{Kind: "Issue"}, {Kind: "PullRequest"}} {
@@ -85,8 +92,9 @@ func (t kanbanMetadataTheme) Color(name fyne.ThemeColorName, v fyne.ThemeVariant
 	return t.Theme.Color(name, v)
 }
 
-func kanbanMetadata(text string, ink color.Color) fyne.CanvasObject {
+func kanbanMetadata(text string, ink color.Color, align fyne.TextAlign) fyne.CanvasObject {
 	label := widget.NewLabel(text)
+	label.Alignment = align
 	label.Wrapping = fyne.TextWrapWord
 	return container.NewThemeOverride(label, kanbanMetadataTheme{Theme: theme.Current(), ink: ink})
 }
@@ -95,7 +103,7 @@ func CardContents(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintIte
 	// The owner/repo#number is the link to the issue or pull request itself, so
 	// the card needs no separate "Open" link at the bottom.
 	var repository fyne.CanvasObject
-	if link, ok := shell.GithubHyperlink(it.RepositoryNumber(b), it.URL).(*widget.Hyperlink); ok {
+	if link, ok := shell.NewHoverLink(it.RepositoryNumber(b), it.URL).(*shell.HoverLink); ok {
 		link.Wrapping = fyne.TextWrapWord
 		repository = link
 	} else {
@@ -108,13 +116,23 @@ func CardContents(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintIte
 	title := widget.NewLabelWithStyle(it.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapWord
 	pink := color.NRGBA{R: 225, G: 131, B: 178, A: 255}
-	body := container.NewVBox(header, title,
-		kanbanMetadata(fmt.Sprintf("Project estimate: %dm", backend.SprintEstimate(it, backend.SprintTask{})), pink),
-		kanbanMetadata("Complexity: "+backend.OrDefault(it.Complexity, "Not set"), pink))
+	body := container.NewVBox(header)
+	// The parent issue, if any, as a gold tag under the link: muted at rest,
+	// bright under the pointer, and a click opens the parent on GitHub.
+	if it.ParentTitle != "" {
+		body.Add(shell.ParentTag(it.ParentTitle, it.ParentURL))
+	}
+	body.Add(title)
+	// A line across the middle, then the estimate on the left and the
+	// complexity on the right; the sprint, when shown, has the row under it.
+	body.Add(cardDivider())
+	body.Add(container.NewGridWithColumns(2,
+		kanbanMetadata(fmt.Sprintf("Estimate: %dm", backend.SprintEstimate(it, backend.SprintTask{})), pink, fyne.TextAlignLeading),
+		kanbanMetadata("Complexity: "+backend.OrDefault(it.Complexity, "Not set"), pink, fyne.TextAlignTrailing)))
 	if k.Filter == "all" && it.SprintID != "" {
 		for _, sprint := range b.Iterations() {
 			if sprint.ID == it.SprintID {
-				body.Add(container.NewHBox(sprintTag(sprint.Title)))
+				body.Add(shell.HugTag(shell.NewHoverTag(sprint.Title, shell.GitHubGreen, shell.GitHubGreen, color.White, color.White, nil)))
 				break
 			}
 		}
@@ -122,13 +140,10 @@ func CardContents(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintIte
 	return body
 }
 
-// sprintTag is the card's sprint as a small gold pill, styled like the app's
-// gold buttons: gold fill, dark text.
-func sprintTag(title string) fyne.CanvasObject {
-	bg := canvas.NewRectangle(widgets.LogoGold)
-	bg.CornerRadius = 10
-	text := canvas.NewText(title, color.NRGBA{R: 0x1c, G: 0x18, B: 0x0d, A: 0xff})
-	text.TextSize = theme.CaptionTextSize()
-	text.TextStyle = fyne.TextStyle{Bold: true}
-	return container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(2, 2, 8, 8), text))
+// cardDivider is the plain grey line across a card, the same grey as the
+// sidebar's dividers, whatever the card's tint.
+func cardDivider() fyne.CanvasObject {
+	line := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameBackground), theme.Color(theme.ColorNameForeground), 0.35))
+	line.SetMinSize(fyne.NewSize(0, 1))
+	return line
 }

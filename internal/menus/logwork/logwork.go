@@ -3,6 +3,8 @@ package logwork
 import (
 	_ "embed"
 	"fmt"
+	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -40,7 +42,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		DrawRecent(ui)
 	})
 	commitPane := container.NewVBox(
-		container.NewBorder(nil, nil, nil, fetchBtn, search), ui.PendingBox)
+		container.NewBorder(nil, nil, nil, shell.LeadGap(fetchBtn), search), ui.PendingBox)
 
 	// The list loads itself on first open; this button is the manual refresh.
 	// Both halves of this tab come from GitHub — the commits waiting here, and
@@ -68,6 +70,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	mMin := widget.NewEntry()
 	mMin.SetPlaceHolder("minutes")
 	mRemarks := widget.NewMultiLineEntry()
+	mRemarks.Wrapping = fyne.TextWrapWord
 	mRemarks.SetMinRowsVisible(4)
 	mRemarks.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
 	// Live character counter — same "%d / %d" reading the row editor's popup
@@ -76,7 +79,10 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	mRemarksCountUpdate := func() {
 		mRemarksCount.SetText(fmt.Sprintf("%d / %d", len(mRemarks.Text), backend.RemarkCap))
 	}
-	mRemarks.OnChanged = func(string) { mRemarksCountUpdate() }
+	// Remarks grow with what is typed, a row at a time, instead of scrolling
+	// inside a box of four.
+	growRemarks := autoGrow(mRemarks, 4, func() { shell.Relayout(ui.LogBody) })
+	mRemarks.OnChanged = func(string) { mRemarksCountUpdate(); growRemarks() }
 	mRemarksCountUpdate()
 	mMsg := widget.NewLabel("")
 
@@ -496,58 +502,70 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	manualPane.Hide()
 
 	// -- kind selector --
-	seg := widget.NewRadioGroup(
-		[]string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent"}, func(s string) {
-			wasBulkReview := kind == backend.KindBulkReview
-			kind = map[string]string{
-				"Commits": backend.KindCommit, "Meeting": backend.KindMeeting,
-				"Code Review": backend.KindCodeReview,
-				"Bulk Review": backend.KindBulkReview,
-				"Worklog":     backend.KindOther, "Independent": backend.KindIndependent,
-			}[s]
-			if kind == backend.KindCommit {
-				commitPane.Show()
-				manualPane.Hide()
+	// Switching kind slides the new form in from the side the choice moved to
+	// and eases the panel to its new height, rather than jumping.
+	kinds := []string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent"}
+	kindForm := shell.NewMorph(container.NewVBox(commitPane, manualPane))
+	var formReflow func(bool)
+	shownKind := 0
+	seg := widget.NewRadioGroup(kinds, func(s string) {
+		wasBulkReview := kind == backend.KindBulkReview
+		kind = map[string]string{
+			"Commits": backend.KindCommit, "Meeting": backend.KindMeeting,
+			"Code Review": backend.KindCodeReview,
+			"Bulk Review": backend.KindBulkReview,
+			"Worklog":     backend.KindOther, "Independent": backend.KindIndependent,
+		}[s]
+		if kind == backend.KindCommit {
+			commitPane.Show()
+			manualPane.Hide()
+		} else {
+			commitPane.Hide()
+			manualPane.Show()
+		}
+		// Only the fields each kind needs, so the form never asks for an
+		// issue link and a new issue's title at the same time.
+		shell.ShowIf(descRow, kind == backend.KindMeeting)
+		// The ratio layout hands the hidden Minutes share back to Date.
+		shell.ShowIf(minutesField, kind != backend.KindBulkReview)
+		shell.ShowIf(otherRow, kind == backend.KindOther)
+		shell.ShowIf(singleReviewRow, kind == backend.KindCodeReview)
+		shell.ShowIf(codeReviewRow, kind == backend.KindBulkReview)
+		shell.ShowIf(indepRow, kind == backend.KindIndependent)
+		shell.ShowIf(remarksRow, kind != backend.KindBulkReview)
+		shell.ShowIf(mPushAs, kind == backend.KindOther || kind == backend.KindCodeReview)
+		if kind == backend.KindBulkReview {
+			mMin.Disable()
+			if items, err := bulkReviewItems(); err == nil {
+				mMin.SetText(strconv.Itoa(backend.CodeReviewMinutes(items)))
 			} else {
-				commitPane.Hide()
-				manualPane.Show()
+				mMin.SetText("")
 			}
-			// Only the fields each kind needs, so the form never asks for an
-			// issue link and a new issue's title at the same time.
-			shell.ShowIf(descRow, kind == backend.KindMeeting)
-			// The ratio layout hands the hidden Minutes share back to Date.
-			shell.ShowIf(minutesField, kind != backend.KindBulkReview)
-			shell.ShowIf(otherRow, kind == backend.KindOther)
-			shell.ShowIf(singleReviewRow, kind == backend.KindCodeReview)
-			shell.ShowIf(codeReviewRow, kind == backend.KindBulkReview)
-			shell.ShowIf(indepRow, kind == backend.KindIndependent)
-			shell.ShowIf(remarksRow, kind != backend.KindBulkReview)
-			shell.ShowIf(mPushAs, kind == backend.KindOther || kind == backend.KindCodeReview)
-			if kind == backend.KindBulkReview {
-				mMin.Disable()
-				if items, err := bulkReviewItems(); err == nil {
-					mMin.SetText(strconv.Itoa(backend.CodeReviewMinutes(items)))
-				} else {
-					mMin.SetText("")
-				}
-			} else {
-				mMin.Enable()
-				if wasBulkReview {
-					mMin.SetText("")
-				}
+		} else {
+			mMin.Enable()
+			if wasBulkReview {
+				mMin.SetText("")
 			}
-			switch kind {
-			case backend.KindMeeting:
-				mMsg.SetText("Files under " + backend.MeetingTitle(ui.Cfg, backend.OrDefault(mDate.ISO(), shell.Today())) + ".")
-			case backend.KindBulkReview:
-				mMsg.SetText(bulkReviewFilingHint(backend.OrDefault(mDate.ISO(), shell.Today())))
-			case backend.KindCodeReview, backend.KindOther, backend.KindIndependent:
-				mMsg.SetText("Sub-issue title: " + autoDescFor(kind, backend.OrDefault(mDate.ISO(), shell.Today())) + ".")
-			default:
-				mMsg.SetText("")
-			}
-		})
+		}
+		switch kind {
+		case backend.KindMeeting:
+			mMsg.SetText("Files under " + backend.MeetingTitle(ui.Cfg, backend.OrDefault(mDate.ISO(), shell.Today())) + ".")
+		case backend.KindBulkReview:
+			mMsg.SetText(bulkReviewFilingHint(backend.OrDefault(mDate.ISO(), shell.Today())))
+		case backend.KindCodeReview, backend.KindOther, backend.KindIndependent:
+			mMsg.SetText("Sub-issue title: " + autoDescFor(kind, backend.OrDefault(mDate.ISO(), shell.Today())) + ".")
+		default:
+			mMsg.SetText("")
+		}
+		if formReflow != nil {
+			picked := slices.Index(kinds, s)
+			kindForm.Change(picked-shownKind, formReflow)
+			shownKind = picked
+		}
+	})
 	seg.Horizontal = true
+	// One kind is always picked: tapping the picked one again does not clear it.
+	seg.Required = true
 	seg.SetSelected("Commits")
 	// The hint line names what the push will file under; picking a new date
 	// should retitle it so it stays honest.
@@ -587,14 +605,32 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		container.NewHBox(widget.NewLabel("Sort bubbles"),
 			container.New(layout.NewGridWrapLayout(fyne.NewSize(190, draftSortPick.MinSize().Height)), draftSortPick)))
 	choices := container.NewThemeOverride(widgets.WithPointerCursor(seg), shell.RadioTheme{Theme: theme.Current()})
-	logCard := widget.NewCard("", "", container.NewVBox(choices, commitPane, manualPane))
+	// The entry form is its own menu, so it sits in a rounded panel like
+	// Settings; the saved list under it is part of the page.
+	logCard := shell.Panel(container.NewVBox(choices, kindForm))
 	// The key sits at the foot of the tab, where the Status tab keeps its own:
 	// it governs everything above it — the commits, the saved entries and the
 	// week — so it belongs under the lot rather than over one of them.
 	ui.LogLegend = container.NewVBox()
-	recentCard := widget.NewCard("Saved locally, not pushed yet", "",
-		container.NewVBox(draftSortControl, ui.RecentBox, widget.NewSeparator(),
-			ui.WeekBox, ui.LogLegend))
+	// Tapping the title folds away everything but the week: the list controls
+	// and the list of entries saved for other weeks. Folded to start with.
+	// Lines out here take the panels' colour; lines inside a panel stay dark.
+	savedList := container.NewVBox(draftSortControl, ui.RecentBox, shell.PanelDivider())
+	gap := theme.InnerPadding()
+	var logScroll *container.Scroll
+	var page *fyne.Container
+	var recentCard *fyne.Container
+	// Every frame of a slide re-lays the page from the scroll inwards, so the
+	// view follows the page as it grows or shrinks.
+	reflow := func(inner fyne.CanvasObject) func(bool) {
+		return func(final bool) { shell.Reflow(final, logScroll, ui.LogBody, page, inner) }
+	}
+	formReflow = reflow(logCard)
+	savedHead, savedArea := shell.CollapsibleTitle("Saved locally", savedList, false, nil,
+		func(final bool) { reflow(recentCard)(final) })
+	recentCard = container.NewVBox(savedHead, shell.PanelDivider(), savedArea,
+		container.New(layout.NewCustomPaddedLayout(gap, 0, gap, gap), ui.WeekBox),
+		ui.LogLegend)
 
 	// The dragging layer sits above the scroll rather than inside it: the card
 	// being carried has to pass over everything, and inside the scroll it would
@@ -608,8 +644,10 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	if ui.WeekStripProgress == nil {
 		ui.WeekStripProgress = shell.NewLoadingIndicator()
 	}
-	ui.LogBody = container.NewVBox(ui.LogProgress.View, logCard, recentCard)
-	return container.NewStack(container.NewVScroll(ui.LogBody), ui.DragLayer)
+	page = container.NewVBox(ui.LogProgress.View, logCard, recentCard)
+	ui.LogBody = shell.PageInset(page)
+	logScroll = shell.NewPageScroll(ui.LogBody, page, ui.LogBody)
+	return container.NewStack(logScroll, ui.DragLayer)
 }
 
 // NewDateEntryISO builds a calendar-backed date field seeded from a YYYY-MM-DD
@@ -1856,4 +1894,42 @@ func issueFieldRef(text string) (string, error) {
 		return "", nil
 	}
 	return backend.IssueRefFromAny(text)
+}
+
+// autoGrow returns a function that sizes a word-wrapped multi-line entry to
+// its text, never below minRows, and then calls relayout. Call it whenever the
+// text changes. Fyne has no wrapped line count, so it measures each paragraph
+// against the entry's text width.
+func autoGrow(e *widget.Entry, minRows int, relayout func()) func() {
+	shown := minRows
+	return func() {
+		rows := wrappedRows(e)
+		if rows < minRows {
+			rows = minRows
+		}
+		if rows == shown {
+			return
+		}
+		shown = rows
+		e.SetMinRowsVisible(rows)
+		if relayout != nil {
+			relayout()
+		}
+	}
+}
+
+func wrappedRows(e *widget.Entry) int {
+	paragraphs := strings.Split(e.Text, "\n")
+	// The text sits inside the entry's inner padding and a little more; a
+	// cautious width over-counts a row rather than leaving one hidden.
+	width := e.Size().Width - 3*theme.InnerPadding()
+	if width <= 0 {
+		return len(paragraphs)
+	}
+	rows := 0
+	for _, p := range paragraphs {
+		n := int(math.Ceil(float64(fyne.MeasureText(p, theme.TextSize(), e.TextStyle).Width / width)))
+		rows += max(n, 1)
+	}
+	return rows
 }

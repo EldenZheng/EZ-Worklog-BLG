@@ -294,10 +294,15 @@ On Windows, use the application build script (and optionally run the offline tes
 
 This hides the console window and applies the application's hand-cursor policy
 to Fyne buttons, checkboxes, radio options, dropdowns, popup menu items and tabs.
-It also gives standard gold buttons contrasting dark labels and icons.
+It also gives standard gold buttons contrasting dark labels and icons, rounds
+the corners of the button press flash, and changes the mouse wheel: it scrolls
+the innermost scroller under the pointer that can still move (so a text field
+or a list at its end no longer blocks the page), and glides instead of jumping.
+The wheel code lives in `_fynepatch`, which the script copies into the Fyne copy;
+the go tool skips folders starting with `_`, so it builds nowhere else.
 The script builds a private copy of the pinned Fyne version under `.build`;
 it does not modify the shared module cache or the project's dependencies.
-A plain `go build` uses Fyne's default cursors and button foreground colours.
+A plain `go build` uses Fyne's default cursors, button colours and wheel.
 
 ### Versions and updates
 

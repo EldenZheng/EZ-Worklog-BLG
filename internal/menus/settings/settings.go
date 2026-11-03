@@ -353,11 +353,11 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		bubbleBox,
 	)
 	sourcesSection := container.NewVBox(
-		sectionTitle("Sources"),
+		shell.SectionTitle("Sources"),
 		container.New(widgets.NewRatioRow(0.72, 0.28), fieldsCol, legendCol),
 	)
 	salarySection := container.NewVBox(
-		sectionTitle("Salary"),
+		shell.SectionTitle("Salary"),
 		container.NewGridWithColumns(3,
 			shell.LabeledHint("Base salary", "Paid per 21 working days.", sal),
 			shell.LabeledHint("Currency", "Currency the salary is paid in.", cur),
@@ -366,7 +366,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		shell.LabeledHint("Support payment per set", "Paid per seven qualifying support issues, in the salary currency. Blank means unset.", supportPay),
 	)
 	worklogSection := container.NewVBox(
-		sectionTitle("Worklog"),
+		shell.SectionTitle("Worklog"),
 		container.NewGridWithColumns(3,
 			shell.LabeledHint("Look back", "Days back the commit sweep scans for unlogged work.", back),
 			shell.LabeledHint("Default push mode", "Sub-issue creates a linked child. Issue writes on the parent itself.", outlinedSelect(mode)),
@@ -384,7 +384,8 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// Chunky theme bumps input padding so entries and the dropdown read as
 	// larger controls — filling more of the panel — without needing a per-widget
 	// wrapper on each one.
-	mainBubble := roundedPanel(container.NewThemeOverride(mainInner,
+	// The panel stays on screen; only the fields scroll inside it.
+	mainBubble, _ := shell.ScrollPanel(container.NewThemeOverride(mainInner,
 		chunkySettingsTheme{Theme: theme.Current()}))
 
 	// Both columns are wrapped in Stack so their contents render at natural
@@ -397,27 +398,13 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	ui.Update.Frame = sidebar
 	body := container.New(widgets.NewRatioRow(0.2, 0.8),
 		container.NewPadded(sidebar),
-		container.NewVScroll(container.NewPadded(mainBubble)),
+		container.NewPadded(mainBubble),
 	)
 	top := container.NewVBox(header, ui.SettingsProgress.View)
 	// Border pins the header on top and hands every remaining pixel to the
 	// body — the Settings tab now fills to the bottom of the window instead
 	// of hugging its natural content height.
 	return container.NewStack(container.NewBorder(top, nil, nil, nil, body), toast.layer)
-}
-
-// roundedPanel draws content inside a rounded rectangle so a group of fields
-// reads as its own card. The bg is a subtle blend toward foreground so it
-// reads as a distinct surface from the text fields and dropdowns inside — a
-// panel painted with ColorNameInputBackground would swallow them.
-func roundedPanel(content fyne.CanvasObject) fyne.CanvasObject {
-	bg := canvas.NewRectangle(shell.BlendColor(
-		theme.Color(theme.ColorNameBackground),
-		theme.Color(theme.ColorNameForeground),
-		0.08,
-	))
-	bg.CornerRadius = shell.CellCornerRadius
-	return container.NewStack(bg, container.NewPadded(content))
 }
 
 // outlinedSelect wraps a Select in a bordered rectangle so it reads as a form
@@ -432,22 +419,12 @@ func outlinedSelect(sel *widget.Select) fyne.CanvasObject {
 	return container.NewStack(border, shell.WideSelect(sel))
 }
 
-// goldPanel is roundedPanel with a low-alpha gold background, for content
+// goldPanel is a rounded panel with a low-alpha gold background, for content
 // that should read as accented rather than as another neutral card.
 func goldPanel(content fyne.CanvasObject) fyne.CanvasObject {
 	bg := canvas.NewRectangle(color.NRGBA{R: widgets.LogoGold.R, G: widgets.LogoGold.G, B: widgets.LogoGold.B, A: 48})
 	bg.CornerRadius = shell.CellCornerRadius
 	return container.NewStack(bg, container.NewPadded(content))
-}
-
-// sectionTitle is a gold heading with a separator under it, used to split the
-// Settings main pane into named groups (Repos and Orgs, Project boards,
-// Salary, Worklog).
-func sectionTitle(title string) fyne.CanvasObject {
-	t := canvas.NewText(title, widgets.LogoGold)
-	t.TextSize = theme.TextSize() + 4
-	t.TextStyle = fyne.TextStyle{Bold: true}
-	return container.NewVBox(t, widget.NewSeparator())
 }
 
 // chunkySettingsTheme grows inner padding so text fields and the dropdown

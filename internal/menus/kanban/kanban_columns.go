@@ -43,6 +43,17 @@ func KanbanColumnFill(name string) color.Color {
 	return shell.BlendColor(theme.Color(theme.ColorNameInputBackground), KanbanStatusColor(name), 0.14)
 }
 
+// KanbanHeaderFill is the column title's capsule: the column's own surface,
+// a little brighter.
+func KanbanHeaderFill(name string) color.Color {
+	return shell.BlendColor(theme.Color(theme.ColorNameInputBackground), KanbanStatusColor(name), 0.30)
+}
+
+// KanbanHeaderHover is the capsule while the pointer is in its column.
+func KanbanHeaderHover(name string) color.Color {
+	return shell.BlendColor(theme.Color(theme.ColorNameInputBackground), KanbanStatusColor(name), 0.48)
+}
+
 func KanbanColumnBorder(name string) color.Color {
 	return shell.BlendColor(theme.Color(theme.ColorNameInputBorder), KanbanStatusColor(name), 0.28)
 }

@@ -101,6 +101,54 @@ type PlannerTimedFace struct {
 	accent                             color.Color
 	day                                *shell.PlannerDayHover
 	finished                           bool
+	glow                               shell.Glow
+	lit, over                          bool
+	inside                             int
+	bg, stripe                         *canvas.Rectangle
+}
+
+// childHover keeps the block lit while the pointer is on its GH link.
+func (f *PlannerTimedFace) childHover(on bool) {
+	if on {
+		f.inside++
+	} else if f.inside > 0 {
+		f.inside--
+	}
+	f.light()
+}
+
+// SetHover lights the block like every other bubble: lighter, its bar
+// sliding in from the side. The card holding it hears the pointer and calls
+// this.
+func (f *PlannerTimedFace) SetHover(on bool) {
+	f.over = on
+	f.light()
+}
+
+func (f *PlannerTimedFace) light() {
+	on := f.over || f.inside > 0
+	if !shell.HoverAllowed(f, on) || on == f.lit {
+		return
+	}
+	f.lit = on
+	target := float32(0)
+	if on {
+		target = 1
+	}
+	f.glow.To(target, func(float32) { f.paint() })
+}
+
+func (f *PlannerTimedFace) paint() {
+	if f.bg == nil {
+		return
+	}
+	level := f.glow.Level()
+	f.bg.FillColor = shell.MixColor(shell.BubbleFill(f.accent, false), shell.BubbleFill(f.accent, true), level)
+	f.bg.StrokeColor = shell.MixColor(shell.BubbleStroke(f.accent, false), f.accent, level)
+	f.stripe.FillColor = shell.MixColor(color.Transparent, f.accent, level)
+	f.stripe.Move(fyne.NewPos(1-6*(1-level), 1))
+	f.bg.Refresh()
+	f.stripe.Refresh()
 }
 
 func newPlannerTimedFace(title, project, issueURL string, minutes int, accent color.Color) *PlannerTimedFace {
@@ -110,11 +158,12 @@ func newPlannerTimedFace(title, project, issueURL string, minutes int, accent co
 }
 
 func (f *PlannerTimedFace) CreateRenderer() fyne.WidgetRenderer {
-	bg := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameInputBackground), f.accent, 0.28))
+	bg := canvas.NewRectangle(shell.BubbleFill(f.accent, false))
 	bg.CornerRadius = 5
-	bg.StrokeColor = f.accent
+	bg.StrokeColor = shell.BubbleStroke(f.accent, false)
 	bg.StrokeWidth = 1
-	stripe := canvas.NewRectangle(f.accent)
+	stripe := canvas.NewRectangle(color.Transparent)
+	f.bg, f.stripe = bg, stripe
 	title := canvas.NewText("", theme.Color(theme.ColorNameForeground))
 	title.TextStyle.Bold = true
 	title.TextSize = 11
@@ -126,6 +175,7 @@ func (f *PlannerTimedFace) CreateRenderer() fyne.WidgetRenderer {
 	grip.StrokeWidth = 2
 	link := newPlannerIssueLink(f.issueURL)
 	link.day = f.day
+	link.parent = f.childHover
 	if f.issueURL == "" {
 		link.Hide()
 	}
@@ -145,8 +195,8 @@ func (r *plannerTimedFaceRenderer) MinSize() fyne.Size { return fyne.NewSize(80,
 func (r *plannerTimedFaceRenderer) Layout(size fyne.Size) {
 	r.link.(*PlannerIssueLink).day = r.face.day
 	r.bg.Resize(size)
-	r.stripe.Move(fyne.NewPos(1, 1))
 	r.stripe.Resize(fyne.NewSize(3, fyne.Max(0, size.Height-2)))
+	r.face.paint()
 	width := fyne.Max(1, size.Width-27)
 	first, rest := plannerTitleLine(r.face.title, width, r.title.TextSize)
 	r.title.Text = first
@@ -170,7 +220,11 @@ func (r *plannerTimedFaceRenderer) Layout(size fyne.Size) {
 		r.second.Move(fyne.NewPos(7, 17))
 		r.second.Resize(r.second.MinSize())
 	}
-	r.minutes.Text = plannerFitText(r.face.duration+" · "+r.face.project, size.Width-14, 11)
+	minutes := r.face.duration
+	if r.face.project != "" {
+		minutes += " · " + r.face.project
+	}
+	r.minutes.Text = plannerFitText(minutes, size.Width-14, 11)
 	if r.face.finished {
 		r.minutes.Text = plannerFitText(r.face.duration+" · Done", size.Width-14, 11)
 	}
@@ -206,7 +260,8 @@ func (*plannerTimedFaceRenderer) Destroy() {}
 // padding or a font's emoji treatment of the external-link arrow.
 type PlannerIssueLink struct {
 	widget.Hyperlink
-	day *shell.PlannerDayHover
+	day    *shell.PlannerDayHover
+	parent func(on bool) // the block it sits on, kept lit while hovered
 }
 
 func newPlannerIssueLink(raw string) *PlannerIssueLink {
@@ -231,6 +286,9 @@ func (l *PlannerIssueLink) MouseIn(*desktop.MouseEvent) {
 	if l.day != nil {
 		l.day.Enter(l)
 	}
+	if l.parent != nil {
+		l.parent(true)
+	}
 }
 
 func (*PlannerIssueLink) MouseMoved(*desktop.MouseEvent) {}
@@ -238,6 +296,9 @@ func (*PlannerIssueLink) MouseMoved(*desktop.MouseEvent) {}
 func (l *PlannerIssueLink) MouseOut() {
 	if l.day != nil {
 		l.day.Leave(l)
+	}
+	if l.parent != nil {
+		l.parent(false)
 	}
 }
 

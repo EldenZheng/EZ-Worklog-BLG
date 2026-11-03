@@ -14,7 +14,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
-	"worklog/internal/shared/widgets"
 )
 
 // CommitWeekSummary is the line above the day grid: how many commits landed and
@@ -60,7 +59,7 @@ func (ui *UI) commitDayColumn(ds string, commits []backend.Commit,
 	t, _ := time.Parse("2006-01-02", ds)
 	name := fmt.Sprintf("%s %d", t.Format("Mon"), t.Day())
 	if ds == Today() {
-		name += " · today"
+		name += " · Today"
 	}
 	if n := len(commits); n > 0 {
 		name += fmt.Sprintf(" · %d commit%s", n, Plural(n))
@@ -94,9 +93,9 @@ func (ui *UI) commitDayColumn(ds string, commits []backend.Commit,
 // long commit message wraps to a second line inside its bubble rather than
 // pushing the sha off the right edge of the column.
 //
-// The header is two lines: the issue title on top (bold, wrapping, with a full
-// tooltip on hover so a long title read in full without clipping the column),
-// and the issue reference underneath as a hyperlink to the issue on GitHub.
+// The header is two lines: the issue title on top (bold, wrapping, so a long
+// title reads in full without clipping the column), and the issue reference
+// underneath as a hyperlink to the issue on GitHub.
 // One glance says what the bubble is about; the ref is there when you need it.
 func (ui *UI) commitIssueBubble(issue string, commits []backend.Commit,
 	issueLabel func(string) string) fyne.CanvasObject {
@@ -104,7 +103,8 @@ func (ui *UI) commitIssueBubble(issue string, commits []backend.Commit,
 	if title == issue {
 		title = issueLabel(issue)
 	}
-	titleLabel := widgets.NewHoverText(ui.Win, title, title, fyne.TextStyle{Bold: true})
+	titleLabel := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	titleLabel.Wrapping = fyne.TextWrapWord
 	// A long owner/repo#number must not set the column's width: one wide
 	// reference would push the whole week past the edge of the window.
 	ref := truncateText(issueHyperlinkWithLabel(issue, issueLabel(issue)))
@@ -121,11 +121,7 @@ func (ui *UI) commitIssueBubble(issue string, commits []backend.Commit,
 		rows = append(rows, subject, shaLine)
 	}
 
-	frame := canvas.NewRectangle(ui.bubbleBackground(issue))
-	frame.StrokeColor = theme.Color(theme.ColorNameInputBorder)
-	frame.StrokeWidth = 1
-	frame.CornerRadius = CellCornerRadius
-	return container.NewStack(frame, container.NewPadded(container.NewVBox(rows...)))
+	return HoverBubble(ui.bubbleAccent(issue), container.NewVBox(rows...))
 }
 
 // truncateText makes a one-line label or link shorten with an ellipsis rather
@@ -140,18 +136,14 @@ func truncateText(o fyne.CanvasObject) fyne.CanvasObject {
 	return o
 }
 
-// bubbleBackground tints a bubble by its org, so a day of mixed employers reads
-// as such at a glance. Falls back to the theme's card colour for commits with
-// no parseable issue.
-func (ui *UI) bubbleBackground(issue string) color.Color {
-	if issue == "" {
-		return theme.Color(theme.ColorNameOverlayBackground)
+// bubbleAccent is the org colour a bubble is tinted with, so a day of mixed
+// employers reads as such at a glance. Commits with no parseable issue get the
+// unknown-org grey.
+func (ui *UI) bubbleAccent(issue string) color.Color {
+	if owner, _, _, err := backend.SplitIssue(issue); issue != "" && err == nil {
+		return OrgColor(ui.Cfg, owner)
 	}
-	if owner, _, _, err := backend.SplitIssue(issue); err == nil {
-		c := OrgColor(ui.Cfg, owner)
-		return color.NRGBA{R: c.R, G: c.G, B: c.B, A: 40}
-	}
-	return theme.Color(theme.ColorNameOverlayBackground)
+	return OrgUnknown
 }
 
 // commitBubbleTitle is the human title on the top line of a bubble. Falls back

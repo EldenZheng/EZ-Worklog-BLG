@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
@@ -104,6 +105,9 @@ func TestSprintKanbanSidebarClickPreservesItsScroll(t *testing.T) {
 		b.Items = append(b.Items, backend.SprintItem{ID: fmt.Sprint(i), Title: "Issue", SprintID: s.ID})
 	}
 	w.SetContent(k.Root)
+	// Every sprint listed, not only the first few, so the list is long enough
+	// to scroll.
+	k.SprintsShowAll = true
 	kanban.Draw(k)
 	w.Content().Refresh()
 	shell.PlannerScroll(k.SideClip).ScrollToOffset(fyne.NewPos(0, 800))
@@ -176,5 +180,40 @@ func TestSprintDayHoverClearAndFullBackgroundKeepOtherDays(t *testing.T) {
 	p, err := ui.Store.LoadSprintPlan()
 	if err != nil || len(p.Tasks[c.Key].Blocks) != 1 || p.Tasks[c.Key].Blocks[0].Date != backend.AddDays(day, 1) || p.Tasks[c.Key].Notes != "keep" {
 		t.Fatal("day clear affected other dates or metadata", err)
+	}
+}
+
+// The sidebar lists the next nine sprints; the rest wait, folded, behind
+// Show More, which turns into Show Less once they are out.
+func TestSprintSidebarFoldsSprintsPastNine(t *testing.T) {
+	ui, w, c := plannerFixture(t)
+	k := ui.Kanban
+	b := &k.Plan.Boards[0]
+	for i := 1; i < 18; i++ {
+		s := backend.SprintIteration{ID: fmt.Sprint(i), Title: fmt.Sprintf("Sprint %d", i), StartDate: backend.AddDays(c.Sprint.StartDate, i*14), Duration: 14}
+		b.Fields[0].Configuration.Iterations = append(b.Fields[0].Configuration.Iterations, s)
+		b.Items = append(b.Items, backend.SprintItem{ID: fmt.Sprint(i), Title: "Issue", SprintID: s.ID})
+	}
+	w.SetContent(k.Root)
+	kanban.Draw(k)
+	var fold *shell.Fold
+	var more *shell.HoverTag
+	walkCanvas(shell.PlannerScroll(k.SideClip).Content, func(o fyne.CanvasObject) {
+		if f, ok := o.(*shell.Fold); ok && fold == nil {
+			fold = f
+		}
+		if b, ok := o.(*shell.HoverTag); ok && strings.HasPrefix(b.Text, "Show") {
+			more = b
+		}
+	})
+	if fold == nil || more == nil {
+		t.Fatal("sprints past the ninth should sit in a fold behind Show More")
+	}
+	if fold.Visible() || more.Text != "Show More…" {
+		t.Fatalf("the extra sprints should start folded, got visible=%v %q", fold.Visible(), more.Text)
+	}
+	test.Tap(more)
+	if !fold.Visible() || more.Text != "Show Less" || !k.SprintsShowAll {
+		t.Fatalf("Show More should open the fold and become Show Less, got visible=%v %q", fold.Visible(), more.Text)
 	}
 }

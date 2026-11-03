@@ -48,7 +48,7 @@ func BuildKanbanTab(ui *shell.UI) fyne.CanvasObject {
 	refresh := widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), func() { k.Load(true) })
 	k.RefreshButtons = append(k.RefreshButtons, refresh)
 	k.Activity = shell.NewLoadingIndicator()
-	top := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Kanban", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), refresh, search)
+	top := container.NewBorder(nil, nil, widget.NewLabelWithStyle("Kanban", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), shell.LeadGap(refresh), search)
 	k.Root = container.NewBorder(container.NewVBox(top, k.Activity.View, k.Message), nil, nil, nil, container.NewStack(k.Body, k.GhostLayer))
 	Draw(k)
 	return k.Root
@@ -108,7 +108,9 @@ func BuildPlannerTab(ui *shell.UI) fyne.CanvasObject {
 	k.CalendarMessage = widget.NewLabel(k.Message.Text)
 	k.CalendarMessage.Wrapping = fyne.TextWrapWord
 	shell.ShowIf(k.CalendarMessage, strings.TrimSpace(k.Message.Text) != "")
-	heading := widget.NewLabelWithStyle("Sprint Calendar · local planning", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	headingText := canvas.NewText("Sprint Calendar · Local Planning", widgets.LogoGold)
+	headingText.TextStyle = fyne.TextStyle{Bold: true}
+	heading := container.NewCenter(headingText)
 	note := widget.NewLabel("Select a sprint, then drag bubbles onto highlighted dates. Drag a scheduled bubble's bottom edge to resize its local duration.")
 	note.Wrapping = fyne.TextWrapWord
 	refresh := widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), func() { shell.Hooks.KanbanUIRefreshCalendarSources(k) })
@@ -163,11 +165,19 @@ func dropArea(k *shell.KanbanUI, content fyne.CanvasObject, b, kind, value strin
 
 func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 	side := sprintSidebar(k)
-	sideScroll := container.NewVScroll(container.NewPadded(side))
+	// The sprint list is its own menu, so it sits in a rounded panel like
+	// Settings and scrolls inside it.
+	sideScroll := shell.PanelScroll(side, true)
 	sideScroll.SetMinSize(fyne.NewSize(255, 0))
 	k.SideClip = sideScroll
+	sidePanel := container.NewPadded(shell.PanelFrame(sideScroll))
 	statuses, extra := StatusColumns(k)
 	columns := container.New(KanbanColumnsLayout{})
+	// A new selection (sprint, filter, search) brings each column's cards in
+	// from the top down, one after another; any other redraw leaves them be.
+	shown := fmt.Sprint(k.Filter, "|", k.Sprint, "|", k.Search, "|", k.ProjectOff, "|", k.Plan.KanbanTypes)
+	arrive := shown != k.CardsShown
+	k.CardsShown = shown
 	for _, status := range statuses {
 		status := status
 		value := status
@@ -186,18 +196,45 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 				if d, ok := card.(*shell.SprintDragCard); ok {
 					k.ColumnCards[value] = append(k.ColumnCards[value], d)
 				}
-				cards.Add(card)
+				if arrive {
+					cards.Add(shell.NewWipe(card, time.Duration(min(count, 12))*40*time.Millisecond))
+				} else {
+					cards.Add(card)
+				}
 			}
 		}
 		header := widget.NewLabelWithStyle(status, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 		header.Wrapping = fyne.TextWrapWord
-		heading := container.NewPadded(container.NewBorder(nil, nil, nil, container.NewCenter(sprintCountBadge(count)), container.NewThemeOverride(header, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: statusHeaderInk(status)})))
-		col := dropArea(k, container.NewBorder(heading, nil, nil, nil, container.NewVScroll(container.NewPadded(cards))), "", "status", value)
+		// The title sits in its own rounded capsule, a shade brighter than the
+		// column, with a gap before the cards scrolling under it.
+		capsule := canvas.NewRectangle(KanbanHeaderFill(status))
+		capsule.CornerRadius = 8
+		titleRow := container.NewPadded(container.NewBorder(nil, nil, nil, container.NewCenter(shell.CountBadge(count)), container.NewThemeOverride(header, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: statusHeaderInk(status)})))
+		pad := theme.Padding()
+		heading := container.New(layout.NewCustomPaddedLayout(pad, 0, pad, pad), container.NewStack(capsule, titleRow))
+		// The cards scroll the column's full height and pass behind the
+		// capsule, which floats over their top; at rest they start a gap
+		// below it.
+		inset := &columnInset{}
+		list := shell.NoScrollShadow(container.NewVScroll(container.New(inset, container.NewPadded(cards))))
+		col := dropArea(k, container.New(&floatingHeaderLayout{inset: inset, gap: theme.InnerPadding() + 2}, list, heading), "", "status", value)
 		frame := k.Targets[len(k.Targets)-1].Frame
 		frame.FillColor = KanbanColumnFill(status)
 		frame.StrokeColor = KanbanColumnBorder(status)
 		frame.StrokeWidth = 1
-		columns.Add(container.New(kanbanColumnLayout{}, col))
+		// Anywhere in the column, its cards included, lights its capsule.
+		var glow shell.Glow
+		region := shell.NewHoverRegion(col, func(on bool) {
+			target := float32(0)
+			if on {
+				target = 1
+			}
+			glow.To(target, func(level float32) {
+				capsule.FillColor = shell.MixColor(KanbanHeaderFill(status), KanbanHeaderHover(status), level)
+				capsule.Refresh()
+			})
+		})
+		columns.Add(container.New(kanbanColumnLayout{}, region))
 	}
 	boardScroll := container.NewHScroll(columns)
 	k.BoardClip = boardScroll
@@ -215,23 +252,19 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 	}
 	board := container.NewBorder(nil, columnControls(k, extra), nil, nil, boardScroll)
 	legend := container.NewBorder(nil, nil, nil, itemTypeControls(k), k.ProjectLegend())
-	return container.NewBorder(legend, nil, sideScroll, nil, board)
+	return container.NewBorder(legend, nil, sidePanel, nil, board)
 }
 
+// BubbleSurface is a Sprint Calendar bubble: the shared card look, lit by the
+// card holding it (which watches the pointer for its own reasons).
 func BubbleSurface(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, body fyne.CanvasObject) fyne.CanvasObject {
-	accent := k.Accent(b, it)
-	bg := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameInputBackground), accent, 0.24))
-	bg.CornerRadius = 10
-	bg.StrokeWidth = 1
-	bg.StrokeColor = shell.BlendColor(theme.Color(theme.ColorNameInputBorder), accent, 0.65)
-	stripe := canvas.NewRectangle(accent)
-	stripe.CornerRadius = 2
-	stripe.SetMinSize(fyne.NewSize(4, 0))
-	return container.NewStack(bg, container.NewPadded(container.NewBorder(nil, nil, stripe, nil, container.NewPadded(body))))
+	return shell.NewStripeBubble(k.Accent(b, it), body)
 }
 
 func Card(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem) fyne.CanvasObject {
-	content := BubbleSurface(k, b, it, CardContents(k, b, it))
+	// The worklog card look of Log Work and Status: a darker org tint, and the
+	// org bar down the left sliding in only under the pointer.
+	var content fyne.CanvasObject = shell.HoverBubble(k.Accent(b, it), CardContents(k, b, it))
 	if p, ok := k.Pending[it.Key(b.ID)]; ok {
 		content = SavingOverlay(content, p)
 	}
@@ -286,53 +319,7 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 	notes.SetMinRowsVisible(2)
 	done := widget.NewCheck("Completed locally", nil)
 	done.SetChecked(task.Done)
-	blocks := widget.NewMultiLineEntry()
-	blocks.SetMinRowsVisible(4)
-	var lines []string
-	for _, block := range task.Blocks {
-		lines = append(lines, fmt.Sprintf("%s %s %d", block.Date, backend.PlanClock(block.Start), block.Minutes))
-	}
-	blocks.SetText(strings.Join(lines, "\n"))
-	blocks.SetPlaceHolder("2026-11-02 09:00 120")
 	local := container.NewVBox(container.NewGridWithColumns(2, shell.Labeled("Local effort (minutes)", estimate), shell.Labeled("Complexity", complexity)), shell.Labeled("Local notes", notes), shell.GoldChoice(done))
-	schedule := container.NewVBox()
-	current := backend.SprintIteration{}
-	for _, s := range b.Iterations() {
-		if s.ID == it.SprintID {
-			current = s
-		}
-	}
-	canPlan := current.ID != ""
-	if canPlan {
-		date := widget.NewEntry()
-		if current.Contains(shell.Today()) {
-			date.SetText(shell.Today())
-		} else {
-			date.SetText(current.StartDate)
-		}
-		clock := widget.NewEntry()
-		clock.SetText("09:00")
-		duration := widget.NewEntry()
-		duration.SetText(strconv.Itoa(backend.PlannerDurationUp(backend.SprintEstimate(it, task))))
-		schedule.Add(container.NewGridWithColumns(3, shell.Labeled("Date (YYYY-MM-DD)", date), shell.Labeled("Start (HH:MM)", clock), shell.Labeled("Minutes (15m steps)", duration)))
-		schedule.Add(widget.NewButton("Add time block", func() {
-			minutes, err := strconv.Atoi(strings.TrimSpace(duration.Text))
-			if err != nil || !backend.ValidPlannerDuration(minutes) {
-				k.Ui.Errf(fmt.Errorf("duration must use 15-minute increments (15, 30, 45, …)"))
-				return
-			}
-			line := strings.TrimSpace(date.Text) + " " + strings.TrimSpace(clock.Text) + " " + strings.TrimSpace(duration.Text)
-			if strings.TrimSpace(blocks.Text) == "" {
-				blocks.SetText(line)
-			} else {
-				blocks.SetText(strings.TrimSpace(blocks.Text) + "\n" + line)
-			}
-		}))
-		schedule.Add(widget.NewLabel("Time blocks: YYYY-MM-DD HH:MM MINUTES"))
-		schedule.Add(blocks)
-	} else {
-		schedule.Add(widget.NewLabel("Assign a sprint to schedule this issue."))
-	}
 	statusOptions := []string{"No status"}
 	for _, o := range b.Field("Status").Options {
 		statusOptions = append(statusOptions, o.Name)
@@ -411,10 +398,13 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 	left := container.NewVBox()
 	if !localOnly {
 		left.Add(remote)
-		left.Add(widget.NewSeparator())
+		// Grey, like the cards' line, with room above it.
+		left.Add(container.New(layout.NewCustomPaddedLayout(theme.InnerPadding(), 0, 0, 0), cardDivider()))
 	}
 	left.Add(local)
-	columns := container.NewGridWithColumns(2, left, schedule)
+	// Time blocks are planned by dragging on the Sprint Calendar; the popup
+	// edits the issue and its local estimate only, and keeps its blocks.
+	columns := left
 	popupBody := container.NewStack()
 	popupTitle := "Kanban issue"
 	if localOnly {
@@ -435,49 +425,6 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 		}
 		t.Notes = notes.Text
 		t.Done = done.Checked
-		if canPlan {
-			t.Blocks = nil
-			for _, line := range strings.Split(blocks.Text, "\n") {
-				if strings.TrimSpace(line) == "" {
-					continue
-				}
-				parts := strings.Fields(line)
-				if len(parts) != 3 {
-					k.Ui.Errf(fmt.Errorf("schedule format: YYYY-MM-DD HH:MM MINUTES"))
-					return
-				}
-				clock, err := time.Parse("15:04", parts[1])
-				if err != nil {
-					k.Ui.Errf(fmt.Errorf("enter time as HH:MM"))
-					return
-				}
-				mins, err := strconv.Atoi(parts[2])
-				if err != nil {
-					k.Ui.Errf(fmt.Errorf("duration must be a number of minutes"))
-					return
-				}
-				block := backend.PlanBlock{parts[0], clock.Hour()*60 + clock.Minute(), mins}
-				if err := backend.ValidatePlannerDuration(block, task.Blocks); err != nil {
-					k.Ui.Errf(err)
-					return
-				}
-				if !current.Contains(block.Date) {
-					k.Ui.Errf(fmt.Errorf("schedule dates must fall inside %s", current.Title))
-					return
-				}
-				if err := backend.ValidatePlanBlock(key, block, k.Plan.Tasks); err != nil {
-					k.Ui.Errf(err)
-					return
-				}
-				for _, old := range t.Blocks {
-					if old.Date == block.Date && old.Start < block.Start+block.Minutes && block.Start < old.Start+old.Minutes {
-						k.Ui.Errf(fmt.Errorf("schedule blocks overlap"))
-						return
-					}
-				}
-				t.Blocks = append(t.Blocks, block)
-			}
-		}
 		p := k.Plan
 		tasks := map[string]backend.SprintTask{}
 		for key, value := range p.Tasks {
@@ -493,7 +440,7 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 	})
 	actions := container.NewHBox(layout.NewSpacer(), widget.NewButton("Close", popup.Hide), save)
 	popupBody.Add(container.NewBorder(container.NewVBox(title, subtitle), actions, nil, nil, columns))
-	size := fyne.NewSize(1080, 560)
+	size := fyne.NewSize(640, 560)
 	if available := k.Ui.Win.Canvas().Size(); available.Width > 0 && available.Height > 0 {
 		size.Width = fyne.Min(size.Width, available.Width*0.94)
 		size.Height = fyne.Min(size.Height, available.Height*0.9)
@@ -542,4 +489,51 @@ func BubbleContents(k *shell.KanbanUI, title, foot fyne.CanvasObject, issueURL s
 		body.Add(shell.GithubHyperlink("Open issue", issueURL))
 	}
 	return body
+}
+
+// columnInset holds a column's cards a set distance down from the top of
+// their scroll, under the floating header.
+type columnInset struct{ top float32 }
+
+func (c *columnInset) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	m := objects[0].MinSize()
+	return fyne.NewSize(m.Width, m.Height+c.top)
+}
+
+func (c *columnInset) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	objects[0].Move(fyne.NewPos(0, c.top))
+	objects[0].Resize(fyne.NewSize(size.Width, max(size.Height-c.top, 0)))
+}
+
+// floatingHeaderLayout lays a column's card scroll (first) from halfway down
+// its header to the foot, and its header (second) across the top, over the
+// cards. The cards'
+// inset follows the header's height, which grows when a title wraps.
+type floatingHeaderLayout struct {
+	inset *columnInset
+	gap   float32
+}
+
+func (l *floatingHeaderLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	list, head := objects[0].MinSize(), objects[1].MinSize()
+	return fyne.NewSize(max(list.Width, head.Width), max(list.Height, head.Height+l.gap))
+}
+
+func (l *floatingHeaderLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	head := objects[1]
+	head.Move(fyne.NewPos(0, 0))
+	head.Resize(fyne.NewSize(size.Width, head.MinSize().Height))
+	// A wrapped title knows its height only once it has its width.
+	height := head.MinSize().Height
+	head.Resize(fyne.NewSize(size.Width, height))
+	// The cards' scroll starts halfway down the capsule, so a card scrolling
+	// up slips under the capsule and is gone by its middle line.
+	clip := height / 2
+	list := objects[0]
+	if top := height - clip + l.gap; top != l.inset.top {
+		l.inset.top = top
+		list.Refresh()
+	}
+	list.Move(fyne.NewPos(0, clip))
+	list.Resize(fyne.NewSize(size.Width, max(size.Height-clip, 0)))
 }

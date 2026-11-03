@@ -179,6 +179,18 @@ func walkCanvas(o fyne.CanvasObject, visit func(fyne.CanvasObject)) {
 		visit(&x.CheckGroup)
 	case *shell.Tappable:
 		walkCanvas(x.Content, visit)
+	case *shell.Fold:
+		walkCanvas(x.Content, visit)
+	case *shell.StripeBubble:
+		walkCanvas(x.Body, visit)
+	case *shell.HoverArea:
+		walkCanvas(x.Content, visit)
+	case *shell.HoverRegion:
+		walkCanvas(x.Content, visit)
+	case *shell.Wipe:
+		walkCanvas(x.Content, visit)
+	case *shell.Morph:
+		walkCanvas(x.Content, visit)
 	case *shell.SprintDragCard:
 		walkCanvas(x.Content, visit)
 	case *shell.PlannerDragCard:

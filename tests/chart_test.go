@@ -10,7 +10,6 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/assemble"
 	"worklog/internal/menus/report"
@@ -253,18 +252,29 @@ func TestDayPanelNamesTheParentIssue(t *testing.T) {
 		t.Fatalf("the nameless link should be gone once the name is the link: %v", got)
 	}
 
-	// The name itself is the link, pointing at the parent and not the worklog.
-	var link *widget.Hyperlink
+	// The parent is the same clickable gold tag Kanban cards carry, and the
+	// worklog's own title is the link to the worklog; no separate "Worklog"
+	// link is left at the foot.
+	var parent *shell.HoverTag
+	var title *shell.HoverLink
 	walk(ui.DaySwap, func(c fyne.CanvasObject) {
-		if h, ok := c.(*widget.Hyperlink); ok && h.Text == "DOC ITEM ENHANCEMENT" {
-			link = h
+		if tag, ok := c.(*shell.HoverTag); ok && tag.Text == "DOC ITEM ENHANCEMENT" {
+			parent = tag
+		}
+		if h, ok := c.(*shell.HoverLink); ok && h.Text == "Worklog 2026-08-11" {
+			title = h
 		}
 	})
-	if link == nil {
-		t.Fatalf("the parent name should be clickable: %v", got)
+	if parent == nil || parent.OnTapped == nil {
+		t.Fatalf("the parent should be a clickable tag: %v", got)
 	}
-	if link.URL == nil || link.URL.String() != "https://github.com/exampleorg/sample-intranet/issues/42" {
-		t.Fatalf("the parent link points at %v", link.URL)
+	if title == nil || title.URL == nil || title.URL.String() != "https://github.com/exampleorg/sample-intranet/issues/900" {
+		t.Fatalf("the title should link to the worklog: %v", got)
+	}
+	for _, text := range got {
+		if text == "Worklog" {
+			t.Fatalf("the separate Worklog link should be gone: %v", got)
+		}
 	}
 }
 

@@ -94,7 +94,7 @@ func BuildLogListTab(ui *shell.UI) fyne.CanvasObject {
 	ui.ListBox = container.NewVBox()
 	ui.ListProgress = shell.NewLoadingIndicator()
 	ui.ListBody = container.NewVBox(head, ui.ListProgress.View, ui.ListBox)
-	return container.NewVScroll(widget.NewCard("", "", ui.ListBody))
+	return shell.NewPageScroll(shell.PageInset(ui.ListBody), ui.ListBody, ui.ListBody)
 }
 
 func DrawLogList(ui *shell.UI) {
@@ -138,10 +138,14 @@ func DrawLogList(ui *shell.UI) {
 	ui.ListBox.Objects = []fyne.CanvasObject{
 		weekProgressPanel(ui, days, byDay, weekItems),
 		listDaysPanel(ui, days, byDay),
-		widget.NewSeparator(),
-		shell.Hooks.WeekBoardsPanel(ui, from, to),
-		widget.NewSeparator(),
-		columns,
+		shell.VGap(theme.InnerPadding()),
+		// Everything under the week is one menu, in a rounded panel like
+		// Settings.
+		shell.Panel(container.NewVBox(
+			shell.Hooks.WeekBoardsPanel(ui, from, to),
+			widget.NewSeparator(),
+			columns,
+		)),
 	}
 	ui.ListBox.Refresh()
 	shell.Relayout(ui.ListBody)

@@ -81,6 +81,7 @@ func (g *PlannerResizeGrip) Dragged(e *fyne.DragEvent) {
 		g.delta = 0
 		g.pixelsPerMinute = g.Layout.Pixels()
 		g.card.ResetDates()
+		shell.HoldBubble(g.Face)
 	}
 	g.delta += e.Dragged.DY
 	max := 1440 - t.Blocks[g.Index].Start
@@ -101,6 +102,7 @@ func (g *PlannerResizeGrip) DragEnd() {
 		return
 	}
 	g.Started = false
+	shell.ReleaseBubble()
 	g.k.CalendarResizing = false
 	p, err := backend.ResizePlannerBlock(g.k.Plan, g.Key, g.Index, g.Preview)
 	if err != nil {

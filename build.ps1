@@ -82,10 +82,36 @@ func (c *$($control.Type)) Cursor() desktop.Cursor {
             $original = 'r.button.Importance != MediumImportance && r.button.Importance != LowImportance'
             if (-not $code.Contains($original)) { throw 'Review the button icon foreground policy for this Fyne version.' }
             $code = $code.Replace($original, 'r.button.Importance != LowImportance')
+            # The press flash takes the button's rounded corners; stock Fyne
+            # draws it square over the rounded hover background.
+            $original = 'tapBG := canvas.NewRectangle(color.Transparent)'
+            if (-not $code.Contains($original)) { throw 'Review the button press flash for this Fyne version.' }
+            $code = $code.Replace($original, "$original`n`ttapBG.CornerRadius = background.CornerRadius")
+            $original = "bg.CornerRadius = th.Size(theme.SizeNameButtonRadius)`n`t`tbg.Refresh()"
+            if (-not $code.Contains($original)) { throw 'Review the button press flash theme update for this Fyne version.' }
+            $code = $code.Replace($original, "$original`n`t`tr.tapBG.CornerRadius = bg.CornerRadius")
         }
         $patched = Join-Path $dependency $control.File
         (Get-Item -LiteralPath $patched).IsReadOnly = $false
         [System.IO.File]::WriteAllText($patched, $code, $utf8)
+    }
+    # Mouse wheel: _fynepatch holds whole files added to the copy (see the
+    # comments in them). The window's own wheel handler is renamed out of the
+    # way so the patched one replaces it.
+    $source = Join-Path $module.Dir 'internal/driver/glfw/window.go'
+    $code = [System.IO.File]::ReadAllText($source).Replace("`r`n", "`n")
+    $original = 'func (w *window) processMouseScrolled(xoff float64, yoff float64) {'
+    if (-not $code.Contains($original)) { throw 'Review the mouse wheel patch for this Fyne version.' }
+    $code = $code.Replace($original, 'func (w *window) fyneProcessMouseScrolled(xoff float64, yoff float64) {')
+    $patched = Join-Path $dependency 'internal/driver/glfw/window.go'
+    (Get-Item -LiteralPath $patched).IsReadOnly = $false
+    [System.IO.File]::WriteAllText($patched, $code, $utf8)
+    $patchRoot = Join-Path $PSScriptRoot '_fynepatch'
+    foreach ($file in Get-ChildItem -LiteralPath $patchRoot -Recurse -File -Filter '*.go') {
+        $relative = $file.FullName.Substring($patchRoot.Length + 1)
+        $target = Join-Path $dependency $relative
+        if (Test-Path -LiteralPath $target) { (Get-Item -LiteralPath $target).IsReadOnly = $false }
+        Copy-Item -LiteralPath $file.FullName -Destination $target -Force
     }
     $buildMod = Join-Path $stage 'worklog.mod'
     Copy-Item -LiteralPath 'go.mod' -Destination $buildMod -Force

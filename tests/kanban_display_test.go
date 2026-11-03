@@ -85,7 +85,7 @@ func TestSprintBubblesHaveDirectIssueHyperlink(t *testing.T) {
 	card := kanban.Card(k, b, it).(*shell.SprintDragCard)
 	found := false
 	walkCanvas(card.Content, func(o fyne.CanvasObject) {
-		if link, ok := o.(*widget.Hyperlink); ok && link.URL.String() == it.URL {
+		if link, ok := o.(*shell.HoverLink); ok && link.URL.String() == it.URL {
 			found = true
 		}
 	})
