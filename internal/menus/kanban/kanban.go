@@ -44,9 +44,7 @@ func BuildKanbanTab(ui *shell.UI) fyne.CanvasObject {
 	if err != nil {
 		k.SetMessage("Cannot read local planner: " + err.Error())
 	}
-	search := widget.NewEntry()
-	search.SetPlaceHolder("Search issues or project")
-	search.OnChanged = func(s string) { k.Search = strings.ToLower(s); Draw(k) }
+	search := shell.NewSearchEntry("Search issues or project", "", func(s string) { k.Search = strings.ToLower(s); Draw(k) })
 	refresh := widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), func() { k.Load(true) })
 	k.RefreshButtons = append(k.RefreshButtons, refresh)
 	k.Activity = shell.NewLoadingIndicator()
@@ -404,8 +402,8 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 		}
 	})
 	remote := container.NewVBox(widget.NewLabel("GitHub fields · each Apply saves to the source project"),
-		container.NewBorder(nil, nil, nil, applyStatus, status),
-		container.NewBorder(nil, nil, nil, applySprint, sprint),
+		container.NewBorder(nil, nil, nil, shell.GitHubButton(applyStatus), status),
+		container.NewBorder(nil, nil, nil, shell.GitHubButton(applySprint), sprint),
 		applyProgress.View, applyState)
 	title := widget.NewLabelWithStyle(it.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapWord

@@ -49,6 +49,20 @@ func PlannedTodayStillCreated(p backend.SprintPlan, date string) []plannerStartC
 	return out
 }
 
+func plannedToday(p backend.SprintPlan, date string) bool {
+	for _, t := range p.Tasks {
+		if t.Done {
+			continue
+		}
+		for _, b := range t.Blocks {
+			if b.Date == date {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func boardHasStatus(b backend.SprintBoard, name string) bool {
 	for _, o := range b.Field("Status").Options {
 		if o.Name == name {
@@ -66,6 +80,15 @@ func boardHasStatus(b backend.SprintBoard, name string) bool {
 // status changes come from dragging a card.
 func Maintain(k *shell.KanbanUI) {
 	k.PrunePlan()
+	if len(k.Plan.Boards) == 0 {
+		// Boards are not saved between runs. Until the first fetch, any task
+		// planned for today may still be Created: fetch to find out.
+		if plannedToday(k.Plan, shell.Today()) {
+			k.AutoStartPending = !k.Busy
+			k.Load(false)
+		}
+		return
+	}
 	for _, c := range PlannedTodayStillCreated(k.Plan, shell.Today()) {
 		if !k.AutoStarted[c.Item.Key(c.board.ID)] {
 			// A GitHub write in flight blocks the fetch; leave nothing pending

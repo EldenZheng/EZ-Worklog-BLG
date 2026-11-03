@@ -75,7 +75,7 @@ func TestSprintCalendarHoverAndDropSaveOnlyLocally(t *testing.T) {
 	if len(p.Tasks[c.Key].Blocks) != 1 || p.Tasks[c.Key].Blocks[0].Minutes != 90 || p.Tasks[c.Key].Blocks[0].Date != allowed.Date {
 		t.Fatal("local drop not persisted")
 	}
-	if p.Boards[0].Items[0].Effort != 90 || k.Busy {
+	if k.Plan.Boards[0].Items[0].Effort != 90 || k.Busy {
 		t.Fatal("drop changed GitHub data or started a GitHub write")
 	}
 }

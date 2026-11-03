@@ -79,6 +79,9 @@ func OrgColorPicker(ui *shell.UI, org string, initial color.Color, onSaved func(
 	picker.Advanced = true
 	picker.Show()
 	picker.SetColor(initial)
+	// Fyne builds the picker's buttons itself and paints Confirm its default
+	// blue; give it the app's green instead.
+	shell.RestyleStockDialog(ui.Win)
 	return picker
 }
 

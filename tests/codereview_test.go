@@ -37,9 +37,9 @@ func TestCanonicalPullRequestURL(t *testing.T) {
 }
 
 func TestSingleReviewStillAcceptsDirectIssueLink(t *testing.T) {
-	ref, lookup, err := backend.ResolveSingleCodeReviewTarget("https://github.com/exampleorg/sample-intranet/issues/5804")
-	if err != nil || ref != "exampleorg/sample-intranet#5804" || len(lookup.IssueRefs) != 0 {
-		t.Fatalf("direct issue resolved as ref=%q lookup=%+v err=%v", ref, lookup, err)
+	lookup, err := backend.CodeReviewTargets("https://github.com/exampleorg/sample-intranet/issues/5804")
+	if err != nil || len(lookup.IssueRefs) != 1 || lookup.IssueRefs[0] != "exampleorg/sample-intranet#5804" {
+		t.Fatalf("direct issue resolved as lookup=%+v err=%v", lookup, err)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -295,23 +296,38 @@ func PushableWithoutIssue(r Row) bool {
 // A pasted URL is what actually happens: you are looking at the issue, so you
 // copy the address bar. Refusing that and demanding the shorthand would be the
 // app being difficult about a string it can read perfectly well.
+//
+// Every spelling GitHub itself uses is read the same way:
+//
+//	owner/repo#123
+//	owner/repo/issues/123
+//	github.com/owner/repo/issues/123
+//	https://github.com/owner/repo/issues/123#issuecomment-1
+//
+// A pull-request link is refused here: work is logged against the issue a PR
+// belongs to, and only Code Review knows how to find that issue.
 func IssueRefFromAny(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return "", GhErr("Paste the issue link, or type it as owner/repo#123.")
 	}
-	if strings.Contains(s, "github.com/") {
-		ref, err := RefFromIssueURL(s)
-		if err != nil {
-			return "", GhErr("That does not look like an issue link: %q", s)
+	if m := issRe.FindStringSubmatch(s); m != nil {
+		return fmt.Sprintf("%s/%s#%s", m[1], m[2], m[3]), nil
+	}
+	if m := githubPathRe.FindStringSubmatch(s); m != nil {
+		ref := fmt.Sprintf("%s/%s#%s", m[1], m[2], m[4])
+		if !strings.EqualFold(m[3], "issues") {
+			return "", GhErr("%s is a pull request. Paste the issue it belongs to, or log it as a Code Review.", ref)
 		}
 		return ref, nil
 	}
-	if issRe.MatchString(s) {
-		return s, nil
-	}
-	return "", GhErr("Issue should look like owner/repo#123, got %q.", s)
+	return "", GhErr("Issue should look like owner/repo#123, owner/repo/issues/123 or its GitHub link, got %q.", s)
 }
+
+// githubPathRe reads an issue or pull-request path with or without the
+// github.com host in front: owner, repo, "issues" or "pull", number. Anything
+// after the number (/files, #issuecomment-1, ?diff=split) is ignored.
+var githubPathRe = regexp.MustCompile(`(?i)^(?:(?:https?://)?(?:www\.)?github\.com/)?([\w.-]+)/([\w.-]+)/(issues|pull|pulls)/(\d+)(?:[/#?].*)?$`)
 
 // EnsureIssueRef fills in the issue a saved row should be pushed against, for
 // the kinds whose issue is only decided at push time. It returns the patch to

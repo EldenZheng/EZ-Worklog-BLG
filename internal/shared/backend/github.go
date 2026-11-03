@@ -259,7 +259,10 @@ func (i IssueInfo) Label() string {
 // FetchIssueInfo resolves one ref to its title. The org, repo, number and a
 // usable URL come from the ref itself, so a failed lookup still returns
 // something worth displaying alongside the error.
-func FetchIssueInfo(ref string) (IssueInfo, error) {
+// A variable so tests can stand in for gh.
+var FetchIssueInfo = fetchIssueInfo
+
+func fetchIssueInfo(ref string) (IssueInfo, error) {
 	owner, repo, num, err := SplitIssue(ref)
 	if err != nil {
 		return IssueInfo{}, err

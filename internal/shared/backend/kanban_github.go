@@ -79,6 +79,66 @@ func (b SprintBoard) Current(date string) SprintIteration {
 	return SprintIteration{}
 }
 
+// HiddenDone reports a Done item outside the sprint running on date. The
+// board shows Done work for the current sprint only, whatever the source
+// filter says: older (or unscheduled) Done work is history, and holding it
+// would only grow memory.
+func (b SprintBoard) HiddenDone(it SprintItem, date string) bool {
+	if !strings.EqualFold(strings.TrimSpace(it.Status), "Done") {
+		return false
+	}
+	current := b.Current(date)
+	return current.ID == "" || it.SprintID != current.ID
+}
+
+// CurrentDoneFilter turns a source filter into one that finds the current
+// sprint's Done items, so they show even when the source filter hides them
+// (-status:Done, is:open). Status, state and sprint terms are replaced; the
+// rest (assignee, repo, label…) still narrows the result.
+func CurrentDoneFilter(filter string) string {
+	var kept []string
+	for _, term := range filterTerms(filter) {
+		key := strings.ToLower(strings.TrimPrefix(term, "-"))
+		if k, _, ok := strings.Cut(key, ":"); ok {
+			switch k {
+			case "status", "is", "sprint", "iteration":
+				continue
+			case "no", "has":
+				if v := strings.Trim(key[len(k)+1:], `"`); v == "status" || v == "sprint" {
+					continue
+				}
+			}
+		}
+		kept = append(kept, term)
+	}
+	return strings.TrimSpace(strings.Join(append(kept, "status:Done", "sprint:@current"), " "))
+}
+
+// filterTerms splits a project filter on spaces outside double quotes.
+func filterTerms(filter string) []string {
+	var terms []string
+	var cur strings.Builder
+	quoted := false
+	for _, r := range filter {
+		switch {
+		case r == '"':
+			quoted = !quoted
+			cur.WriteRune(r)
+		case r == ' ' && !quoted:
+			if cur.Len() > 0 {
+				terms = append(terms, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		terms = append(terms, cur.String())
+	}
+	return terms
+}
+
 // Personal open issues are an app-owned filter, independent of shared views.
 const SprintProjectFilter = "assignee:@me is:open"
 
@@ -132,15 +192,37 @@ func FetchSprintBoardWithFilter(rawURL, filter string) (SprintBoard, error) {
 		return b, fmt.Errorf("project unavailable: %s", rawURL)
 	}
 	b.ID, b.Title, b.Filter, b.Fields = p.ID, p.Title, filter, p.Fields.Nodes
+	today := WorkDate(time.Now())
+	seen := map[string]bool{}
+	keep := func(it SprintItem) {
+		if !seen[it.ID] && !b.HiddenDone(it, today) {
+			seen[it.ID] = true
+			b.Items = append(b.Items, it)
+		}
+	}
+	if err = fetchSprintItems(b.ID, b.Filter, keep); err != nil {
+		return b, err
+	}
+	if b.Current(today).ID != "" {
+		if err = fetchSprintItems(b.ID, CurrentDoneFilter(b.Filter), keep); err != nil {
+			return b, err
+		}
+	}
+	return b, nil
+}
+
+// fetchSprintItems pages through the project items matching filter and hands
+// each issue or pull request to keep.
+func fetchSprintItems(projectID, filter string, keep func(SprintItem)) error {
 	after := ""
 	for {
-		args := []string{"api", "graphql", "-f", "query=" + sprintItemsQuery, "-f", "id=" + b.ID, "-f", "filter=" + b.Filter}
+		args := []string{"api", "graphql", "-f", "query=" + sprintItemsQuery, "-f", "id=" + projectID, "-f", "filter=" + filter}
 		if after != "" {
 			args = append(args, "-f", "after="+after)
 		}
-		out, err = Gh(args)
+		out, err := Gh(args)
 		if err != nil {
-			return b, err
+			return err
 		}
 		var page struct {
 			Data struct {
@@ -169,7 +251,7 @@ func FetchSprintBoardWithFilter(rawURL, filter string) (SprintBoard, error) {
 			}
 		}
 		if err = json.Unmarshal([]byte(out), &page); err != nil {
-			return b, err
+			return err
 		}
 		for _, n := range page.Data.Node.Items.Nodes {
 			if n.Content == nil || n.Content.Kind == "DraftIssue" {
@@ -190,18 +272,18 @@ func FetchSprintBoardWithFilter(rawURL, filter string) (SprintBoard, error) {
 					}
 				}
 			}
-			b.Items = append(b.Items, it)
+			keep(it)
 		}
 		pi := page.Data.Node.Items.PageInfo
 		if !pi.HasNextPage {
 			break
 		}
 		if pi.EndCursor == "" || pi.EndCursor == after {
-			return b, fmt.Errorf("project pagination did not advance")
+			return fmt.Errorf("project pagination did not advance")
 		}
 		after = pi.EndCursor
 	}
-	return b, nil
+	return nil
 }
 
 // IDs are always resolved against the source project; identical sprint titles

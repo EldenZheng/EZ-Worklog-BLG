@@ -119,7 +119,10 @@ func TestSprintCompactPopupHasNoOuterScrollAndSaves(t *testing.T) {
 	if err != nil || p.Tasks[c.Key].Estimate != 120 {
 		t.Fatal("compact popup did not save local estimate")
 	}
-	if p.Boards[0].Items[0].Effort != 90 {
+	if len(p.Boards) != 0 {
+		t.Fatal("GitHub boards were written to the local plan")
+	}
+	if k.Plan.Boards[0].Items[0].Effort != 90 {
 		t.Fatal("popup changed GitHub estimate")
 	}
 }

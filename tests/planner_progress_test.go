@@ -173,7 +173,7 @@ func TestSprintProgressReadsGitHubDraftsAndRemainingPlans(t *testing.T) {
 	test.Tap(save)
 	assertReading(240, 60, 0)
 	p, err := ui.Store.LoadSprintPlan()
-	if err != nil || !p.Tasks[planned.Key(b.ID)].Done || len(p.Tasks[planned.Key(b.ID)].Blocks) != 1 || p.Boards[0].Items[1].Status != "Done" || k.Busy {
+	if err != nil || !p.Tasks[planned.Key(b.ID)].Done || len(p.Tasks[planned.Key(b.ID)].Blocks) != 1 || k.Plan.Boards[0].Items[1].Status != "Done" || k.Busy {
 		t.Fatal("completion lost schedule data or changed GitHub state", err)
 	}
 	// The shared GitHub cache landing and a draft being pushed refresh the

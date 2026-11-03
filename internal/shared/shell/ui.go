@@ -189,6 +189,23 @@ type UI struct {
 	fetchJobs                                                   map[*fetchJob]bool
 	ProfileBox                                                  *fyne.Container
 	ProfileLoaded, ProfileLoading                               bool
+	// Update is the Settings sidebar's update panel and what it last learned.
+	Update UpdateState
+}
+
+// UpdateState belongs to the update panel at the foot of the Settings sidebar.
+// It lives on the UI because the check runs at start-up, before anyone opens
+// Settings, and its answer also lights the dot on the gear.
+type UpdateState struct {
+	Status         *widget.Label
+	Check, Install *widget.Button
+	InstallView    fyne.CanvasObject
+	// Frame is the sidebar column the panel stands in. Showing the Update
+	// button or a longer status changes how tall the panel is, and only
+	// re-laying out the column moves the rest of the sidebar to make room.
+	Frame           *fyne.Container
+	Latest          backend.Release
+	Available, Busy bool
 }
 
 // Relayout re-measures the column a panel stands in, after the panel's contents

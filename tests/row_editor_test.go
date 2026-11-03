@@ -333,7 +333,7 @@ func TestIndependentEditorShowsStandaloneFieldsOnly(t *testing.T) {
 			t.Fatalf("independent editor is missing %q: %v", want, got)
 		}
 	}
-	if entryByPlaceholder(form, "owner/repo#123") != nil {
+	if entryByPlaceholder(form, logwork.IssuePlaceholder) != nil {
 		t.Fatal("independent editor should not expose an issue-ref field")
 	}
 	if entryByPlaceholder(form, "exampleorg/repository") == nil ||
@@ -360,7 +360,7 @@ func TestBulkReviewEditorUsesOwnIssueControls(t *testing.T) {
 	if !contains(got, "Bulk review issue") {
 		t.Fatalf("bulk review editor should identify its own issue: %v", got)
 	}
-	if entryByPlaceholder(form, "owner/repo#123") != nil {
+	if entryByPlaceholder(form, logwork.IssuePlaceholder) != nil {
 		t.Fatal("bulk review editor should not expose an issue-ref field")
 	}
 }
@@ -376,7 +376,7 @@ func TestOtherKeepsIssueBackedEditorControls(t *testing.T) {
 	if !contains(labels(form), "Push as") {
 		t.Fatal("Other is visually independent but still needs its Push-as control")
 	}
-	if entryByPlaceholder(form, "owner/repo#123") == nil {
+	if entryByPlaceholder(form, logwork.IssuePlaceholder) == nil {
 		t.Fatal("Other still points at an existing issue and needs its issue-ref field")
 	}
 }

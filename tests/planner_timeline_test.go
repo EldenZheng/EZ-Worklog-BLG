@@ -214,7 +214,7 @@ func TestSprintCalendarClearButtonConfirmsAndSavesLocally(t *testing.T) {
 	}
 	test.Tap(confirm)
 	p, err := ui.Store.LoadSprintPlan()
-	if err != nil || len(p.Tasks[c.Key].Blocks) != 0 || p.Tasks[c.Key].Notes != "keep" || p.Boards[0].Items[0].Effort != 90 {
+	if err != nil || len(p.Tasks[c.Key].Blocks) != 0 || p.Tasks[c.Key].Notes != "keep" || k.Plan.Boards[0].Items[0].Effort != 90 {
 		t.Fatal("clear did not preserve local metadata and GitHub fields", err)
 	}
 }

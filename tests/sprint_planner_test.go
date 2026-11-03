@@ -149,8 +149,11 @@ func TestSprintPlanSaveReloadAndOfflineUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.LoadSprintPlan()
-	if err != nil || !reflect.DeepEqual(got, p) {
+	if err != nil || !reflect.DeepEqual(got.Tasks, p.Tasks) {
 		t.Fatalf("roundtrip: %v, %v", got, err)
+	}
+	if len(got.Boards) != 0 {
+		t.Fatal("GitHub boards were saved locally; they are refetched each run")
 	}
 	a := test.NewApp()
 	defer a.Quit()
@@ -160,6 +163,7 @@ func TestSprintPlanSaveReloadAndOfflineUI(t *testing.T) {
 	w.SetContent(kanban.BuildKanbanTab(ui))
 	w.Resize(fyne.NewSize(1200, 800))
 	k := ui.Kanban
+	k.Plan.Boards = p.Boards // as after the first fetch
 	k.Filter = "all"
 	kanban.Draw(k)
 	if len(k.Targets) < 2 {

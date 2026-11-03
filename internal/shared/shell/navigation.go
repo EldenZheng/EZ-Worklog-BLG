@@ -79,55 +79,6 @@ func (t PillTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) co
 	return t.Theme.Color(name, variant)
 }
 
-// Scope the green and rounded shape to push actions, including disabled ones.
-type pushTheme struct {
-	fyne.Theme
-	compact bool
-}
-
-func (t pushTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
-	switch name {
-	case theme.ColorNamePrimary:
-		return color.NRGBA{R: 0x28, G: 0x80, B: 0x48, A: 0xff}
-	case theme.ColorNameForegroundOnPrimary:
-		return color.White
-	}
-	return t.Theme.Color(name, variant)
-}
-
-func (t pushTheme) Size(name fyne.ThemeSizeName) float32 {
-	if t.compact && name == theme.SizeNameInnerPadding {
-		return 6
-	}
-	if name == theme.SizeNameButtonRadius {
-		return 100
-	}
-	return t.Theme.Size(name)
-}
-
-func OvalPush(button *widget.Button) fyne.CanvasObject {
-	return container.NewThemeOverride(widgets.WithPointerCursor(button), pushTheme{Theme: theme.Current()})
-}
-
-func CompactPush(button *widget.Button) fyne.CanvasObject {
-	styled := container.NewThemeOverride(widgets.WithPointerCursor(button), pushTheme{Theme: theme.Current(), compact: true})
-	// The taller Edit/Delete controls must not stretch the compact button.
-	return container.New(compactPushLayout{}, styled)
-}
-
-type compactPushLayout struct{}
-
-func (compactPushLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	return objects[0].MinSize().AddWidthHeight(8, 0)
-}
-
-func (compactPushLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	button := objects[0]
-	want := button.MinSize().AddWidthHeight(8, 0)
-	button.Resize(want)
-	button.Move(fyne.NewPos((size.Width-want.Width)/2, (size.Height-want.Height)/2))
-}
-
 func GoldChoice(control fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewThemeOverride(widgets.AnimatedChoice(control), RadioTheme{Theme: theme.Current()})
 }
@@ -148,7 +99,7 @@ func (t PillTheme) Size(name fyne.ThemeSizeName) float32 {
 // the row's issue still carries other unlogged commits — one glance says
 // "there is more work here" without opening the pending list above.
 func SavedTag(text string) fyne.CanvasObject {
-	bg := canvas.NewRectangle(color.NRGBA{R: 0x28, G: 0x80, B: 0x48, A: 0xff})
+	bg := canvas.NewRectangle(GitHubGreen)
 	bg.CornerRadius = 8
 	lbl := canvas.NewText(text, color.White)
 	lbl.TextSize = theme.CaptionTextSize()
@@ -173,6 +124,8 @@ type pillTabs struct {
 	Buttons    []*widget.Button
 	page       *fyne.Container
 	body       *fyne.Container
+	// UpdateDot sits on the gear while a newer release is waiting.
+	UpdateDot *canvas.Circle
 }
 
 func NewPillTabs(items ...*container.TabItem) *pillTabs {
@@ -188,7 +141,11 @@ func NewPillTabs(items ...*container.TabItem) *pillTabs {
 		t.styleButton(i)
 		if item.Text == SettingsTabName {
 			button.SetText("")
-			settings = container.NewCenter(button)
+			t.UpdateDot = canvas.NewCircle(GitHubGreen)
+			t.UpdateDot.StrokeColor = color.White
+			t.UpdateDot.StrokeWidth = 1.5
+			t.UpdateDot.Hide()
+			settings = container.NewCenter(container.New(cornerDotLayout{}, button, t.UpdateDot))
 		} else {
 			if item.Text == KanbanTabName || item.Text == PlannerTabName {
 				right.Add(button)
@@ -260,5 +217,37 @@ func (t *pillTabs) SelectIndex(index int) {
 	t.styleButton(index)
 	if t.OnSelected != nil {
 		t.OnSelected(item)
+	}
+}
+
+// ShowUpdateDot marks the gear while an update is waiting, so it is seen from
+// any tab, not only from Settings.
+func (t *pillTabs) ShowUpdateDot(show bool) {
+	if t.UpdateDot == nil {
+		return
+	}
+	ShowIf(t.UpdateDot, show)
+	t.UpdateDot.Refresh()
+}
+
+// cornerDotLayout sizes itself to its first object, an icon-only button, and
+// pins the second, a small dot, on the top-right of the icon at its centre.
+type cornerDotLayout struct{}
+
+const cornerDotSize = 10
+
+func (cornerDotLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return objects[0].MinSize()
+}
+
+func (cornerDotLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	objects[0].Resize(size)
+	objects[0].Move(fyne.NewPos(0, 0))
+	if len(objects) > 1 {
+		objects[1].Resize(fyne.NewSquareSize(cornerDotSize))
+		icon := theme.IconInlineSize()
+		objects[1].Move(fyne.NewPos(
+			size.Width/2+icon/2-cornerDotSize/2,
+			size.Height/2-icon/2-cornerDotSize/2))
 	}
 }

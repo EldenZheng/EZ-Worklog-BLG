@@ -32,16 +32,13 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	ui.PendingBox = container.NewVBox(
 		widget.NewLabel("Loading your commits from GitHub…"),
 	)
-	search := widget.NewEntry()
-	search.SetPlaceHolder("Search issues, titles or commits")
-	search.SetText(ui.LogSearch)
-	search.OnChanged = func(value string) {
+	search := shell.NewSearchEntry("Search issues, titles or commits", ui.LogSearch, func(value string) {
 		ui.LogSearch = value
 		if ui.PendingLoaded {
 			RenderPending(ui)
 		}
 		DrawRecent(ui)
-	}
+	})
 	commitPane := container.NewVBox(
 		container.NewBorder(nil, nil, nil, fetchBtn, search), ui.PendingBox)
 
@@ -114,78 +111,17 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 
 	// "Worklog": an issue that already exists.
 	mIssue := widget.NewEntry()
-	mIssue.SetPlaceHolder("https://github.com/exampleorg/repo/issues/123  or  exampleorg/repo#123")
+	mIssue.SetPlaceHolder(IssuePlaceholder)
 	otherRow := shell.Labeled("Issue link", mIssue)
 	otherRow.Hide()
 
-	// A single code review starts from the thing actually in hand: its PR URL.
-	// The linked issue is resolved from GitHub's metadata or the PR's Refs text;
-	// a direct issue link remains accepted when a PR names none or several.
-	mReviewPR := widget.NewEntry()
-	mReviewPR.SetPlaceHolder("https://github.com/exampleorg/repo/pull/123  (or paste the issue link directly)")
-	mReviewTarget := widget.NewLabel("")
-	mReviewTarget.Wrapping = fyne.TextWrapWord
-	reviewLookupVersion := 0
-	var reviewResolvedSource, reviewResolvedRef, reviewResolvedTitle string
-	startReviewLookup := func(source string, version int) {
-		if version != reviewLookupVersion || mReviewPR.Text != source {
-			return
-		}
-		mReviewTarget.SetText("Finding the referenced issue on GitHub…")
-		var ref string
-		var info backend.IssueInfo
-		var err error
-		ui.Async(func() error {
-			ref, _, err = backend.ResolveSingleCodeReviewTarget(source)
-			if err == nil {
-				info, _ = backend.FetchIssueInfo(ref)
-			}
-			return nil
-		}, func() {
-			if version != reviewLookupVersion || mReviewPR.Text != source {
-				return
-			}
-			if err != nil {
-				mReviewTarget.SetText(err.Error())
-				return
-			}
-			if ui.IssueInfo == nil {
-				ui.IssueInfo = map[string]backend.IssueInfo{}
-			}
-			if strings.TrimSpace(info.Title) != "" {
-				ui.IssueInfo[ref] = info
-			}
-			reviewResolvedSource = source
-			reviewResolvedRef = ref
-			reviewResolvedTitle = strings.TrimSpace(info.Title)
-			mReviewTarget.SetText(backend.CodeReviewTargetLabel(ref, info.Title))
-		})
-	}
-	singleReviewRow := container.NewVBox(
-		shell.Labeled("PR or issue link", mReviewPR),
-		mReviewTarget,
-	)
+	// A single code review starts from the thing actually in hand: its PR, in
+	// any spelling. The linked issue is resolved from GitHub's metadata or the
+	// PR's Refs text, with a dropdown beside the link when the PR names several;
+	// a direct issue link is accepted too.
+	review := newReviewTarget(ui)
+	singleReviewRow := review.View
 	singleReviewRow.Hide()
-	mReviewPR.OnChanged = func(source string) {
-		reviewLookupVersion++
-		reviewResolvedSource, reviewResolvedRef, reviewResolvedTitle = "", "", ""
-		version := reviewLookupVersion
-		mReviewTarget.SetText("")
-		if _, ok := backend.CanonicalPullRequestURL(source); ok {
-			// Wait for a paste/typing burst to settle. Without the debounce,
-			// typing PR 123 would request PR 1, then 12, then 123.
-			mReviewTarget.SetText("Finding the referenced issue on GitHub…")
-			time.AfterFunc(350*time.Millisecond, func() {
-				defer func() { _ = recover() }() // the app may close meanwhile
-				fyne.Do(func() { startReviewLookup(source, version) })
-			})
-			return
-		}
-		// Direct issue links/refs need no network lookup and can show at once.
-		if ref, err := backend.IssueRefFromAny(source); err == nil {
-			mReviewTarget.SetText("Worklog issue: " + ref)
-		}
-	}
 
 	// "Bulk Review" is a two-column growing sheet. Completing the current
 	// PR + Minutes pair appends the next blank row automatically. The resulting
@@ -216,9 +152,9 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			if pr == "" || minuteText == "" {
 				return nil, fmt.Errorf("row %d needs both a PR link and minutes", i+1)
 			}
-			url, ok := backend.CanonicalPullRequestURL(pr)
+			url, ok := backend.PullRequestURLFromAny(pr)
 			if !ok {
-				return nil, fmt.Errorf("row %d is not a GitHub pull-request link", i+1)
+				return nil, fmt.Errorf("row %d is not a pull request (owner/repo#123 or its link)", i+1)
 			}
 			mins, err := strconv.Atoi(minuteText)
 			if err != nil || mins <= 0 {
@@ -236,7 +172,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	updateBulkReviewTotal := func() {
 		total := 0
 		for _, input := range bulkInputs {
-			if _, ok := backend.CanonicalPullRequestURL(input.pr.Text); !ok {
+			if _, ok := backend.PullRequestURLFromAny(input.pr.Text); !ok {
 				continue
 			}
 			if mins, err := strconv.Atoi(strings.TrimSpace(input.mins.Text)); err == nil && mins > 0 {
@@ -253,7 +189,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			return
 		}
 		last := bulkInputs[len(bulkInputs)-1]
-		if _, ok := backend.CanonicalPullRequestURL(last.pr.Text); !ok {
+		if _, ok := backend.PullRequestURLFromAny(last.pr.Text); !ok {
 			return
 		}
 		mins, err := strconv.Atoi(strings.TrimSpace(last.mins.Text))
@@ -266,14 +202,14 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		input := &bulkReviewInput{
 			pr: widget.NewEntry(), mins: widget.NewEntry(), issue: widget.NewLabel(""),
 		}
-		input.pr.SetPlaceHolder("https://github.com/exampleorg/repo/pull/123")
+		input.pr.SetPlaceHolder(PullRequestPlaceholder)
 		input.mins.SetPlaceHolder("10")
 		input.issue.Wrapping = fyne.TextWrapWord
 		input.pr.OnChanged = func(source string) {
 			input.lookupVersion++
 			version := input.lookupVersion
 			input.issue.SetText("")
-			if prURL, ok := backend.CanonicalPullRequestURL(source); ok {
+			if prURL, ok := backend.PullRequestURLFromAny(source); ok {
 				input.issue.SetText("Finding referenced issue…")
 				time.AfterFunc(350*time.Millisecond, func() {
 					defer func() { _ = recover() }()
@@ -459,8 +395,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			mRemarks.SetText("")
 			mTitle.SetText("")
 			mIssue.SetText("")
-			mReviewPR.SetText("")
-			mReviewTarget.SetText("")
+			review.Reset()
 			resetBulkReviewRows()
 			DrawRecent(ui)
 			DrawWeekStrip(ui)
@@ -516,65 +451,26 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// Single reviews resolve their PR to its referenced issue before the normal
 	// save path runs. Save draft does the same lookup so the draft itself is
 	// already attached to the correct issue and can be pushed later unchanged.
+	// The preview usually has the answer already, so a paste-then-save does
+	// not ask GitHub twice; a PR naming several issues waits for the pick.
 	mSave := func(push bool) {
 		if kind != backend.KindCodeReview {
 			mSaveResolved(push, "", "")
 			return
 		}
-		source := mReviewPR.Text
-		if strings.TrimSpace(source) == "" {
-			mMsg.SetText("Paste the PR link (or the issue link directly).")
-			return
-		}
-		// The debounced preview already did both GitHub reads in the common
-		// paste-then-save flow. Reuse it instead of resolving the same PR and
-		// issue a second time; clicking Save before the preview lands still
-		// falls through to the complete lookup below.
-		if source == reviewResolvedSource && reviewResolvedRef != "" {
-			mReviewTarget.SetText(backend.CodeReviewTargetLabel(reviewResolvedRef, reviewResolvedTitle))
-			mSaveResolved(push, reviewResolvedRef, reviewResolvedTitle)
-			return
-		}
-		mMsg.SetText("Finding the issue referenced by this PR…")
-		var ref string
-		var info backend.IssueInfo
-		var err error
-		ui.Async(func() error {
-			ref, _, err = backend.ResolveSingleCodeReviewTarget(source)
-			if err == nil {
-				// Title lookup is best-effort. Resolving the issue remains the
-				// correctness boundary; a temporary title failure must not stop a
-				// draft from being saved, and startup backfill will retry it.
-				info, _ = backend.FetchIssueInfo(ref)
+		review.Resolve(func(ref, title string) {
+			if kind == backend.KindCodeReview {
+				mSaveResolved(push, ref, title)
 			}
-			return nil
-		}, func() {
-			if kind != backend.KindCodeReview || mReviewPR.Text != source {
-				return
-			}
-			if err != nil {
-				mReviewTarget.SetText(err.Error())
-				mMsg.SetText(err.Error())
-				return
-			}
-			if ui.IssueInfo == nil {
-				ui.IssueInfo = map[string]backend.IssueInfo{}
-			}
-			if strings.TrimSpace(info.Title) != "" {
-				ui.IssueInfo[ref] = info
-			}
-			mReviewTarget.SetText(backend.CodeReviewTargetLabel(ref, info.Title))
-			mSaveResolved(push, ref, info.Title)
-		})
+		}, mMsg.SetText)
 	}
 
 	saveBtn := widget.NewButton("Save draft", func() { mSave(false) })
 	pushBtn := widget.NewButton("Save & push", func() { mSave(true) })
-	pushBtn.Importance = widget.HighImportance
 	// Push-as sits at the left, actions at the right — the mode is the last
 	// choice made before the button that acts on it, so they sit together on
 	// one line rather than the mode stacked above.
-	actionRow := container.NewBorder(nil, nil, mPushAs, container.NewHBox(saveBtn, shell.OvalPush(pushBtn)))
+	actionRow := container.NewBorder(nil, nil, mPushAs, container.NewHBox(saveBtn, shell.GitHubButton(pushBtn)))
 
 	// Date on its own row so the picker's month can drop under it without
 	// fighting Minutes for width; Minutes rides alongside as a narrower field.
@@ -1510,7 +1406,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	minE.SetPlaceHolder("480")
 	issE := widget.NewEntry()
 	issE.SetText(r["issue"])
-	issE.SetPlaceHolder("owner/repo#123")
+	issE.SetPlaceHolder(IssuePlaceholder)
 	parentRepoE := widget.NewEntry()
 	parentRepoE.SetText(r["parent_repo"])
 	parentRepoE.SetPlaceHolder("exampleorg/repository")
@@ -1580,10 +1476,16 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			msg.SetText("Enter the minutes before pushing.")
 			return
 		}
+		issue, err := issueFieldRef(issE.Text)
+		if err != nil {
+			msg.SetText(err.Error())
+			return
+		}
+		issE.SetText(issue)
 		patch := backend.Row{
 			"date": date, "minutes": strconv.Itoa(mins),
 			"description": strings.TrimSpace(descE.Text),
-			"issue":       strings.TrimSpace(issE.Text),
+			"issue":       issue,
 			"owner":       strings.TrimSpace(ownE.Text),
 			"remarks":     remarks, "mode": modeVal(),
 		}
@@ -1658,7 +1560,6 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 
 	saveBtn := widget.NewButton("Save", func() { save(false) })
 	pushBtn := widget.NewButton("Save & push", func() { save(true) })
-	pushBtn.Importance = widget.HighImportance
 
 	header := container.NewHBox(
 		widget.NewLabelWithStyle(r["date"], fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
@@ -1726,7 +1627,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	fields := container.NewVBox(fieldRow, dayFillReadout(ui, dateE, minE, r["id"]))
 	// Caption beside the dropdown rather than stacked over it: the bar shares a
 	// line with Back, and a two-row label would drag that whole line taller.
-	actionItems := []fyne.CanvasObject{aiBtn, saveBtn, shell.OvalPush(pushBtn)}
+	actionItems := []fyne.CanvasObject{aiBtn, saveBtn, shell.GitHubButton(pushBtn)}
 	if !createsOwnIssue {
 		actionItems = append([]fyne.CanvasObject{
 			widget.NewLabel("Push as"), shell.WideSelect(modeSel)}, actionItems...)
@@ -1768,7 +1669,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 	minE.SetPlaceHolder("480")
 	issE := widget.NewEntry()
 	issE.SetText(g.Issue)
-	issE.SetPlaceHolder("owner/repo#123")
+	issE.SetPlaceHolder(IssuePlaceholder)
 
 	msg := widget.NewLabel("")
 	text := CommitTextEditor(ui, g.Remarks, "", msg)
@@ -1820,6 +1721,12 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 			msg.SetText("Pick a worklog date.")
 			return
 		}
+		issue, err := issueFieldRef(issE.Text)
+		if err != nil {
+			msg.SetText(err.Error())
+			return
+		}
+		issE.SetText(issue)
 		// Each sha is written with the repo it came from. The issue's repo is not
 		// that repo — the issue is in a tracker, the commit is in the applet that
 		// changed — so a sha stored bare could only ever be linked by guessing.
@@ -1831,11 +1738,11 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		// The row's label is the issue it belongs to. It used to be every picked
 		// commit's subject joined with semicolons, which read as noise in the
 		// list and repeated what the remarks already say properly.
-		desc := shell.Truncate(RowLabel(ui, strings.TrimSpace(issE.Text), picked), 200)
+		desc := shell.Truncate(RowLabel(ui, issue, picked), 200)
 		made, err := ui.Store.AppendRows([]backend.Row{{
 			"date": date, "minutes": strconv.Itoa(mins), "type": "commit",
 			"description": desc, "refs": strings.Join(shas, ","),
-			"issue": strings.TrimSpace(issE.Text), "owner": ownE.Text,
+			"issue": issue, "owner": ownE.Text,
 			"remarks": remarks, "issue_body": issueBody, "mode": modeVal(),
 		}})
 		if err != nil {
@@ -1909,7 +1816,6 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 
 	saveBtn := widget.NewButton("Save only", func() { doSave(false) })
 	pushBtn := widget.NewButton("Save & push", func() { doSave(true) })
-	pushBtn.Importance = widget.HighImportance
 
 	header := container.NewHBox(
 		widget.NewLabelWithStyle(g.Date, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
@@ -1931,7 +1837,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		dayFillReadout(ui, dateE, minE, ""),
 	)
 	actions := container.NewHBox(
-		widget.NewLabel("Push as"), shell.WideSelect(modeSel), aiBtn, saveBtn, shell.OvalPush(pushBtn),
+		widget.NewLabel("Push as"), shell.WideSelect(modeSel), aiBtn, saveBtn, shell.GitHubButton(pushBtn),
 	)
 	return editorForm{
 		Body: container.NewVBox(
@@ -1943,4 +1849,14 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		actions: actions,
 		msg:     msg,
 	}
+}
+
+// issueFieldRef reads an editor's Issue field in any spelling IssueRefFromAny
+// takes, so a pasted link is stored as owner/repo#123 like every other row.
+// An empty field stays empty: a row may be saved before its issue is known.
+func issueFieldRef(text string) (string, error) {
+	if strings.TrimSpace(text) == "" {
+		return "", nil
+	}
+	return backend.IssueRefFromAny(text)
 }

@@ -149,7 +149,7 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	walk(tab, func(o fyne.CanvasObject) {
 		if e, ok := o.(*widget.Entry); ok {
 			switch e.PlaceHolder {
-			case "https://github.com/exampleorg/repo/pull/123":
+			case logwork.PullRequestPlaceholder:
 				prs = append(prs, e)
 			case "10":
 				mins = append(mins, e)
@@ -165,7 +165,7 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	walk(tab, func(o fyne.CanvasObject) {
 		if e, ok := o.(*widget.Entry); ok {
 			switch e.PlaceHolder {
-			case "https://github.com/exampleorg/repo/pull/123":
+			case logwork.PullRequestPlaceholder:
 				prs = append(prs, e)
 			case "10":
 				mins = append(mins, e)

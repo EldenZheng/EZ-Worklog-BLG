@@ -18,19 +18,34 @@ type CodeReviewItem struct {
 	Minutes int
 }
 
-var (
-	pullURLRe = regexp.MustCompile(`(?i)^https://github\.com/([\w.-]+)/([\w.-]+)/pull/(\d+)(?:[/#?].*)?$`)
-	// Issue references occur in PR titles, bodies and branch names in both of
-	// the forms used across the ExampleOrg repositories.
-	issueRefAnywhereRe = regexp.MustCompile(`(?i)([\w.-]+)/([\w.-]+)(?:/issues/|#)(\d+)`)
-)
+// Issue references occur in PR titles, bodies and branch names in both of the
+// forms used across the ExampleOrg repositories.
+var issueRefAnywhereRe = regexp.MustCompile(`(?i)([\w.-]+)/([\w.-]+)(?:/issues/|#)(\d+)`)
 
+// CanonicalPullRequestURL recognises a pull request written as a path, with or
+// without the host: https://github.com/owner/repo/pull/123/files,
+// github.com/owner/repo/pull/123 or owner/repo/pull/123. The shorthand
+// owner/repo#123 is not taken here, because the same spelling names an issue;
+// see PullRequestURLFromAny and CodeReviewTargets for the places that can tell.
 func CanonicalPullRequestURL(raw string) (string, bool) {
-	match := pullURLRe.FindStringSubmatch(strings.TrimSpace(raw))
-	if match == nil {
+	m := githubPathRe.FindStringSubmatch(strings.TrimSpace(raw))
+	if m == nil || strings.EqualFold(m[3], "issues") {
 		return "", false
 	}
-	return fmt.Sprintf("https://github.com/%s/%s/pull/%s", match[1], match[2], match[3]), true
+	return fmt.Sprintf("https://github.com/%s/%s/pull/%s", m[1], m[2], m[4]), true
+}
+
+// PullRequestURLFromAny is CanonicalPullRequestURL for a field that only ever
+// holds pull requests, such as the bulk review sheet. There owner/repo#123 can
+// only mean a PR, so the shorthand is read as one too.
+func PullRequestURLFromAny(raw string) (string, bool) {
+	if url, ok := CanonicalPullRequestURL(raw); ok {
+		return url, true
+	}
+	if m := issRe.FindStringSubmatch(strings.TrimSpace(raw)); m != nil {
+		return fmt.Sprintf("https://github.com/%s/%s/pull/%s", m[1], m[2], m[3]), true
+	}
+	return "", false
 }
 
 // ParseCodeReviewItems reads one PR per line. Minutes are deliberately kept on
@@ -58,7 +73,7 @@ func ParseCodeReviewItems(text string) ([]CodeReviewItem, error) {
 		if err != nil || mins <= 0 {
 			return nil, fmt.Errorf("line %d has invalid minutes; use a value such as (10m)", i+1)
 		}
-		canonical, ok := CanonicalPullRequestURL(url)
+		canonical, ok := PullRequestURLFromAny(url)
 		if !ok {
 			return nil, fmt.Errorf("line %d is not a GitHub pull-request link", i+1)
 		}
@@ -121,8 +136,11 @@ func CodeReviewTargetLabel(ref, title string) string {
 
 // FetchCodeReviewLookup resolves the issue(s) named by a PR. GitHub's typed
 // closingIssuesReferences is preferred; branch/title/body text covers the
-// common non-closing "Refs owner/repo/issues/123" convention.
-func FetchCodeReviewLookup(prURL string) (CodeReviewLookup, error) {
+// common non-closing "Refs owner/repo/issues/123" convention. A variable so
+// tests can stand in for gh.
+var FetchCodeReviewLookup = fetchCodeReviewLookup
+
+func fetchCodeReviewLookup(prURL string) (CodeReviewLookup, error) {
 	out, err := Gh([]string{
 		"pr", "view", prURL, "--json",
 		"title,body,url,headRefName,closingIssuesReferences",
@@ -164,24 +182,54 @@ func FetchCodeReviewLookup(prURL string) (CodeReviewLookup, error) {
 	return lookup, nil
 }
 
-// ResolveSingleCodeReviewTarget accepts either the PR being reviewed or the
-// target issue directly. A PR must name exactly one issue: silently picking one
-// of several would file time against the wrong work item.
-func ResolveSingleCodeReviewTarget(raw string) (string, CodeReviewLookup, error) {
-	if prURL, ok := CanonicalPullRequestURL(raw); ok {
+// PullRequestForRef asks GitHub whether owner/repo#123 is a pull request, and
+// returns its canonical link when it is. Issues and PRs share one numbering,
+// so the shorthand alone cannot say. Any failure reads as "not a PR": the ref
+// is then treated as the issue it looks like, which is what it was before.
+// A variable so tests can stand in for gh.
+var PullRequestForRef = func(ref string) (string, bool) {
+	owner, repo, num, err := SplitIssue(ref)
+	if err != nil {
+		return "", false
+	}
+	out, err := Gh([]string{
+		"api", fmt.Sprintf("repos/%s/%s/issues/%d", owner, repo, num),
+		"--jq", `if .pull_request then "pr" else "issue" end`,
+	})
+	if err != nil || strings.TrimSpace(out) != "pr" {
+		return "", false
+	}
+	return fmt.Sprintf("https://github.com/%s/%s/pull/%d", owner, repo, num), true
+}
+
+// CodeReviewTargets lists the issues a single review could be filed under.
+// The input is the PR being reviewed or the issue itself, in any spelling
+// IssueRefFromAny or CanonicalPullRequestURL reads. owner/repo#123 is checked
+// with GitHub, since it may be either.
+//
+// A PR that names several issues returns all of them, in the order the PR
+// gives them, and the person picks one: choosing for them would file the time
+// against the wrong work item as often as not. A PR that names none is an
+// error, as there is nothing to file under.
+func CodeReviewTargets(raw string) (CodeReviewLookup, error) {
+	raw = strings.TrimSpace(raw)
+	prURL, isPR := CanonicalPullRequestURL(raw)
+	if !isPR && issRe.MatchString(raw) {
+		prURL, isPR = PullRequestForRef(raw)
+	}
+	if isPR {
 		lookup, err := FetchCodeReviewLookup(prURL)
 		if err != nil {
-			return "", lookup, err
+			return lookup, err
 		}
-		switch len(lookup.IssueRefs) {
-		case 0:
-			return "", lookup, GhErr("This PR does not reference an issue. Add a Refs line to the PR, or paste the issue link here instead.")
-		case 1:
-			return lookup.IssueRefs[0], lookup, nil
-		default:
-			return "", lookup, GhErr("This PR references more than one issue (%s). Paste the issue you want to worklog under.", strings.Join(lookup.IssueRefs, ", "))
+		if len(lookup.IssueRefs) == 0 {
+			return lookup, GhErr("This PR does not reference an issue. Add a Refs line to the PR, or paste the issue link here instead.")
 		}
+		return lookup, nil
 	}
 	ref, err := IssueRefFromAny(raw)
-	return ref, CodeReviewLookup{}, err
+	if err != nil {
+		return CodeReviewLookup{}, err
+	}
+	return CodeReviewLookup{IssueRefs: []string{ref}}, nil
 }

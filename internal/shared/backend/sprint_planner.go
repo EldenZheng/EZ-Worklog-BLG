@@ -97,9 +97,11 @@ func PlannerIssueFinished(it SprintItem, task SprintTask) bool {
 }
 
 type SprintPlan struct {
-	Boards         []SprintBoard
+	// Boards and Fetched live in memory only: the boards are refetched from
+	// GitHub each run, so saving them would only grow sprint-planner.json.
+	Boards         []SprintBoard `json:"-"`
 	Tasks          map[string]SprintTask
-	Fetched        string
+	Fetched        string    `json:"-"`
 	CalendarMode   string    `json:",omitempty"`
 	CalendarSprint string    `json:",omitempty"`
 	KanbanColumns  *[]string `json:",omitempty"`

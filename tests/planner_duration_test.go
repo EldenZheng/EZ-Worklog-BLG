@@ -122,7 +122,7 @@ func TestSprintDurationRulerFollowsResizeAndUsesMinuteLabels(t *testing.T) {
 	}
 	grip.DragEnd()
 	saved, err := ui.Store.LoadSprintPlan()
-	if err != nil || saved.Tasks[c.Key].Blocks[0].Minutes != 30 || saved.Boards[0].Items[0].Effort != 90 {
+	if err != nil || saved.Tasks[c.Key].Blocks[0].Minutes != 30 || k.Plan.Boards[0].Items[0].Effort != 90 {
 		t.Fatal("resize must persist locally and preserve GitHub effort", err)
 	}
 }

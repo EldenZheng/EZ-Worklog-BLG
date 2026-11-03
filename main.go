@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/assemble"
 	"worklog/internal/menus/commitlist"
@@ -27,6 +28,11 @@ import (
 
 func main() {
 	assemble.WireHooks()
+	// The binary the last update replaced was kept running until this one
+	// started; nothing uses it now.
+	if exe, err := backend.ExecutablePath(); err == nil {
+		backend.RemovePreviousBinary(exe)
+	}
 	a := app.NewWithID("com.eldenz.worklog")
 	a.Settings().SetTheme(shell.GoldTheme{Theme: theme.DefaultTheme()})
 	a.SetIcon(fyne.NewStaticResource("icon.png", shell.AppIconPNG))
@@ -108,13 +114,18 @@ func main() {
 			w.Close()
 			return
 		}
-		dialog.ShowConfirm("Changes still saving",
-			fmt.Sprintf("%d Kanban change(s) have not reached GitHub yet. Close anyway and lose them?", n),
-			func(close bool) {
-				if close {
-					w.Close()
-				}
-			}, w)
+		// Built from the shared buttons rather than Fyne's stock confirm, whose Yes
+		// is Fyne's default blue. Closing anyway throws the changes away, so it
+		// is the red removal pill.
+		msg := widget.NewLabel(fmt.Sprintf("%d Kanban change(s) have not reached GitHub yet. Close anyway and lose them?", n))
+		msg.Wrapping = fyne.TextWrapWord
+		var d dialog.Dialog
+		keep := widget.NewButton("Keep waiting", func() { d.Hide() })
+		quit := widget.NewButton("Close anyway", func() { w.Close() })
+		d = dialog.NewCustomWithoutButtons("Changes still saving",
+			container.NewVBox(msg, shell.DialogButtons(keep, shell.DestructiveButton(quit))), w)
+		d.Resize(fyne.NewSize(480, d.MinSize().Height))
+		d.Show()
 	})
 
 	logwork.DrawRecent(ui)
@@ -129,6 +140,8 @@ func main() {
 		fyne.Do(func() {
 			ui.LoadSavedIssueInfos()
 			ui.LoadPending(false)
+			// Quiet: it only shows itself if there is an update to offer.
+			settings.CheckForUpdates(ui, false)
 			if sprintcalendar.PruneSupportWeeks(ui) {
 				logwork.DrawWeekStrip(ui)
 			}

@@ -494,7 +494,7 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	where.Wrapping = fyne.TextWrapBreak
 
 	push, edit, del := rowActions(ui, r, refresh)
-	leadingItems := []fyne.CanvasObject{shell.CompactPush(push)}
+	leadingItems := []fyne.CanvasObject{shell.CompactGitHubButton(push)}
 	if shell.RowPartlySaved(r) {
 		leadingItems = append(leadingItems, shell.SavedTag("partly saved"))
 	}

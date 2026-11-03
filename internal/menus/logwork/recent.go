@@ -398,7 +398,7 @@ func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 		caption(state)))
 
 	push, edit, del := rowActions(ui, r, refresh)
-	actionItems := []fyne.CanvasObject{shell.CompactPush(push)}
+	actionItems := []fyne.CanvasObject{shell.CompactGitHubButton(push)}
 	if shell.RowPartlySaved(r) {
 		actionItems = append(actionItems, shell.SavedTag("partly saved"))
 	}
@@ -429,7 +429,6 @@ func rowActions(ui *shell.UI, r backend.Row, refresh func()) (push, edit, del *w
 		label = "Re-push"
 	}
 	push = widget.NewButton(label, func() { pushRow(ui, r, refresh) })
-	push.Importance = widget.HighImportance
 	if r["issue"] == "" && !backend.PushableWithoutIssue(r) {
 		push.Disable() // nothing to push to; the editor is where a ref is added
 	}
@@ -537,13 +536,18 @@ func repushRow(ui *shell.UI, id string, refresh func()) {
 }
 
 // showPushFailedDialog is the popup for a push that did not finish: what went
-// wrong, and a button to push the same entry again.
+// wrong, and a button to push the same entry again. Push again writes to
+// GitHub, so it wears the same green pill as every other push button; the
+// stock confirm dialog would have painted it Fyne's default blue.
 func showPushFailedDialog(ui *shell.UI, title string, content fyne.CanvasObject, repush func()) {
-	d := dialog.NewCustomConfirm(title, "Push again", "Close", content, func(again bool) {
-		if again {
-			repush()
-		}
-	}, ui.Win)
+	var d dialog.Dialog
+	closeBtn := widget.NewButton("Close", func() { d.Hide() })
+	again := widget.NewButton("Push again", func() {
+		d.Hide()
+		repush()
+	})
+	d = dialog.NewCustomWithoutButtons(title,
+		container.NewVBox(content, shell.DialogButtons(closeBtn, shell.GitHubButton(again))), ui.Win)
 	d.Show()
 }
 

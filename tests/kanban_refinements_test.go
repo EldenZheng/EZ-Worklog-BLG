@@ -114,7 +114,7 @@ func TestSprintResizeGripChangesOnlyLocalDuration(t *testing.T) {
 	if err != nil || p.Tasks[c.Key].Blocks[0].Minutes != 120 {
 		t.Fatal("resized duration not saved")
 	}
-	if p.Boards[0].Items[0].Effort != 90 || k.Busy {
+	if k.Plan.Boards[0].Items[0].Effort != 90 || k.Busy {
 		t.Fatal("resize changed GitHub estimate")
 	}
 	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{c.Sprint.StartDate, 720, 60}}}
@@ -208,10 +208,52 @@ func TestLiveSprintConfiguredFilterReadOnly(t *testing.T) {
 	if b.Filter != filter {
 		t.Fatal("custom filter replaced")
 	}
+	current := b.Current(shell.Today()).ID
 	for _, it := range b.Items {
-		if it.Status == "Done" {
-			t.Fatalf("custom filter not applied: %s", it.Status)
+		if it.Status == "Done" && it.SprintID != current {
+			t.Fatalf("Done item outside the current sprint: %s", it.Title)
 		}
 	}
 	t.Logf("Custom project filter returned %d issues", len(b.Items))
+}
+
+func TestHiddenDoneKeepsOnlyCurrentSprintDone(t *testing.T) {
+	f := backend.SprintField{Name: "Sprint"}
+	f.Configuration.CompletedIterations = []backend.SprintIteration{{ID: "old", StartDate: "2026-10-19", Duration: 14}}
+	f.Configuration.Iterations = []backend.SprintIteration{{ID: "now", StartDate: "2026-11-02", Duration: 14}, {ID: "next", StartDate: "2026-11-16", Duration: 14}}
+	b := backend.SprintBoard{Fields: []backend.SprintField{f}}
+	cases := []struct {
+		it   backend.SprintItem
+		want bool
+	}{
+		{backend.SprintItem{Status: "Done", SprintID: "now"}, false},
+		{backend.SprintItem{Status: " done ", SprintID: "now"}, false},
+		{backend.SprintItem{Status: "Done", SprintID: "old"}, true},
+		{backend.SprintItem{Status: "Done", SprintID: "next"}, true},
+		{backend.SprintItem{Status: "Done"}, true},
+		{backend.SprintItem{Status: "In Progress", SprintID: "old"}, false},
+		{backend.SprintItem{Status: "Created"}, false},
+	}
+	for _, c := range cases {
+		if got := b.HiddenDone(c.it, "2026-11-05"); got != c.want {
+			t.Errorf("HiddenDone(%+v) = %v, want %v", c.it, got, c.want)
+		}
+	}
+	if !b.HiddenDone(backend.SprintItem{Status: "Done", SprintID: "now"}, "2027-01-01") {
+		t.Error("Done shown with no sprint running")
+	}
+}
+
+func TestCurrentDoneFilterOverridesStatusTerms(t *testing.T) {
+	cases := map[string]string{
+		"assignee:@me is:open -status:Done": "assignee:@me status:Done sprint:@current",
+		"":                                  "status:Done sprint:@current",
+		`repo:o/r status:"In Progress",Created label:"a b"`: `repo:o/r label:"a b" status:Done sprint:@current`,
+		"assignee:@me sprint:@next -no:sprint has:status":   "assignee:@me status:Done sprint:@current",
+	}
+	for in, want := range cases {
+		if got := backend.CurrentDoneFilter(in); got != want {
+			t.Errorf("CurrentDoneFilter(%q) = %q, want %q", in, got, want)
+		}
+	}
 }

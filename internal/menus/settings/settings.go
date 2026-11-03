@@ -230,7 +230,6 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		toast.show("Settings saved")
 	})
-	save.Importance = widget.HighImportance
 
 	rate := widget.NewButton("Fetch exchange rate", func() {
 		if !ui.HasCfg {
@@ -273,7 +272,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// top-right so they render at their own natural height rather than
 	// stretching to match the tall logo block.
 	actions := container.NewVBox(
-		container.NewHBox(layout.NewSpacer(), rate, shell.OvalPush(save)),
+		container.NewHBox(layout.NewSpacer(), rate, save),
 		container.NewHBox(layout.NewSpacer(), rateReadout),
 	)
 	header := container.NewBorder(nil, nil, nil, actions, settingsHeading())
@@ -392,8 +391,12 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// height while the column itself stretches to whatever height ratioRow
 	// hands it. The padding around each column adds a real gap between the
 	// two cards on top of ratioRow's own inter-column spacing.
+	// The update panel stands at the foot of the sidebar, under the identity
+	// fields, wherever the window's height leaves the foot.
+	sidebar := container.NewBorder(nil, updatePanel(ui), nil, nil, sidebarContent)
+	ui.Update.Frame = sidebar
 	body := container.New(widgets.NewRatioRow(0.2, 0.8),
-		container.NewPadded(sidebarContent),
+		container.NewPadded(sidebar),
 		container.NewVScroll(container.NewPadded(mainBubble)),
 	)
 	top := container.NewVBox(header, ui.SettingsProgress.View)

@@ -22,7 +22,7 @@ Built with [Fyne](https://fyne.io). All GitHub access goes through the
 
 | Tab | What it does |
 | --- | --- |
-| **Log work** | Commits plus manual entries. **Code Review** accepts one PR URL, resolves its `Refs` issue and files the worklog there (a direct issue link also works). **Bulk Review** is a growing two-column PR-link/minutes sheet and creates one daily `<Name> Code Review: <date>` issue. |
+| **Log work** | Commits plus manual entries. Every issue or PR field takes `owner/repo#123`, `owner/repo/issues/123` (or `/pull/123`) and the full GitHub link alike. **Code Review** takes one PR, resolves its `Refs` issue and files the worklog there (a direct issue also works); when the PR names several issues, a dropdown beside the link lets you pick one. **Bulk Review** is a growing two-column PR/minutes sheet and creates one daily `<Name> Code Review: <date>` issue. |
 | **Status** | A month calendar; each day fills towards the daily target, coloured by organisation. |
 | **Report** | A payroll period — the 21st to the 20th — as stat tiles, a per-day bar chart, and the split by organisation. |
 | **Settings** | Everything below. |
@@ -299,6 +299,23 @@ The script builds a private copy of the pinned Fyne version under `.build`;
 it does not modify the shared module cache or the project's dependencies.
 A plain `go build` uses Fyne's default cursors and button foreground colours.
 
+### Versions and updates
+
+`build.ps1` stamps the exe with its version: `git describe` output for an
+ordinary build (for example `v1.4.0-3-gabc1234-dirty`), shown at the foot of the
+Settings sidebar. To ship a build to everyone:
+
+```
+.\build.ps1 -Release v1.4.1
+```
+
+This refuses uncommitted or unpushed work and an existing tag, runs the tests,
+and publishes `Worklog.exe` as a GitHub release. On start-up every copy of the
+app asks GitHub (through `gh`) for the latest release. When it is newer, the
+Settings gear gets a green dot and the sidebar offers **Update to v1.4.1**,
+which downloads the exe, swaps it in for the running one and restarts. Nothing
+in `data` is touched. **Check for updates** asks again on demand.
+
 > **Use `go build`, not `go run .`** — the app keeps its data in a `data`
 > folder beside the binary, and `go run` builds into a temporary directory that is
 > deleted afterwards, so everything you log is thrown away on exit. If you want
@@ -386,6 +403,14 @@ Each menu has its own package; anything two menus share lives under `shared`.
 | `internal/shared/widgets` | small Fyne widgets with no app state |
 | `internal/shared/backend` | storage, GitHub, sprint planning model, exports |
 | `tests` | the test suite |
+
+Buttons take their look from the roles in `internal/shared/shell/buttons.go`,
+chosen by what the button does: green pill for anything that writes to GitHub
+(`GitHubButton`, `CompactGitHubButton`), red pill for removals
+(`DestructiveButton`, `RemovalButtons`), plain gold for local actions and reads,
+and no fill for icon buttons (`QuietButton`). Menus never set a button's
+Importance colour or use Fyne's stock confirm dialogs, and
+`tests/button_roles_test.go` enforces both.
 
 Shared code never imports a menu. Where it has to call one (redrawing Log
 Work after a push, say) it goes through `shell.Hooks`, which
