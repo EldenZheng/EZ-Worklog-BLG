@@ -755,32 +755,35 @@ func (ui *UI) LoadProject(key, fromDate, toDate string, force bool) {
 	ui.ProjLoading[key] = true
 	ui.ProjErr[key] = nil
 	progress, finish := ui.BeginFetch(key, "Loading project boards")
-	go func() {
-		defer ui.recoverToDialog("load project")
-		items, err := backend.FetchProjectWorklogs(ui.Cfg, ui.Cfg.WorklogOwner, fromDate, toDate, progress)
-		fyne.Do(func() {
-			defer finish()
-			ui.ProjLoading[key] = false
-			ui.ProjErr[key] = err
-			if err == nil {
-				ui.ProjItems[key] = items
-				ui.ProjLoaded[key] = true
-			}
-			Hooks.DrawCalendar(ui)
-			Hooks.DrawReport(ui)
-			// The Log tab scores today against this same data, so it has to be
-			// redrawn when a month lands or it stays stuck on "checking…".
-			Hooks.DrawRecent(ui)
-			// A push landed while this fetch was in the air, so what came back is
-			// already known to be one worklog short. It is drawn — it is still the
-			// best answer on hand — and then asked for again.
-			if ui.ProjStale[key] {
-				delete(ui.ProjStale, key)
-				delete(ui.ProjLoaded, key)
-				ui.LoadProject(key, fromDate, toDate, true)
-			}
-		})
-	}()
+	var items []backend.WorklogItem
+	var err error
+	// The error is kept on the month, not shown: Status and Report say it
+	// where the month would be.
+	ui.Async(func() error {
+		items, err = backend.FetchProjectWorklogs(ui.Cfg, ui.Cfg.WorklogOwner, fromDate, toDate, progress)
+		return nil
+	}, func() {
+		defer finish()
+		ui.ProjLoading[key] = false
+		ui.ProjErr[key] = err
+		if err == nil {
+			ui.ProjItems[key] = items
+			ui.ProjLoaded[key] = true
+		}
+		Hooks.DrawCalendar(ui)
+		Hooks.DrawReport(ui)
+		// The Log tab scores today against this same data, so it has to be
+		// redrawn when a month lands or it stays stuck on "checking…".
+		Hooks.DrawRecent(ui)
+		// A push landed while this fetch was in the air, so what came back is
+		// already known to be one worklog short. It is drawn — it is still the
+		// best answer on hand — and then asked for again.
+		if ui.ProjStale[key] {
+			delete(ui.ProjStale, key)
+			delete(ui.ProjLoaded, key)
+			ui.LoadProject(key, fromDate, toDate, true)
+		}
+	})
 }
 
 func (ui *UI) LoadStatus(force bool) {
@@ -1061,12 +1064,45 @@ func (ui *UI) Errf(err error) {
 	dialog.ShowError(err, ui.Win)
 }
 
+// RunAsyncInline makes Async do its work and then apply the result on the
+// calling goroutine instead of a background one. Only the tests set it. Fyne's
+// test driver runs fyne.Do on whichever goroutine calls it, so work left
+// running in the background by one test would draw text while the next test
+// draws too, and Fyne's text shaper crashes when two goroutines use it at
+// once. The app itself always does the work in the background.
+var RunAsyncInline = false
+
+// TypingPause is how long a field waits after the last keystroke before
+// asking GitHub about what was typed. Without it, typing PR 123 would look up
+// PR 1, then 12, then 123.
+const TypingPause = 350 * time.Millisecond
+
+// AfterTyping runs f on the UI thread once typing has paused. Callers check f
+// still applies (the field has not changed since) before acting. Under
+// RunAsyncInline it runs f at once, for the same reason Async does.
+func AfterTyping(f func()) {
+	if RunAsyncInline {
+		f()
+		return
+	}
+	time.AfterFunc(TypingPause, func() {
+		defer func() { _ = recover() }() // the app may close meanwhile
+		fyne.Do(f)
+	})
+}
+
 // run a slow func off the UI thread, then apply result on the UI thread
 func (ui *UI) Async(work func() error, done func()) {
-	go func() {
+	run := func(f func()) { go f() }
+	apply := fyne.Do
+	if RunAsyncInline {
+		run = func(f func()) { f() }
+		apply = func(f func()) { f() }
+	}
+	run(func() {
 		defer ui.recoverToDialog("background task")
 		err := work()
-		fyne.Do(func() {
+		apply(func() {
 			defer ui.recoverToDialog("UI update")
 			if err != nil {
 				ui.Errf(err)
@@ -1076,7 +1112,7 @@ func (ui *UI) Async(work func() error, done func()) {
 				done()
 			}
 		})
-	}()
+	})
 }
 
 // PushSpinner puts a thin progress bar with a caption and percentage in front

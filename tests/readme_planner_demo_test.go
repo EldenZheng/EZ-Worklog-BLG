@@ -34,7 +34,7 @@ func TestReadmePlannerDemoFrames(t *testing.T) {
 	w := a.NewWindow(shell.WindowTitle)
 	defer w.Close()
 	w.Resize(fyne.NewSize(1560, 1000))
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.CurrentPeriod(), HasCfg: true, ProfileLoaded: true}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.CurrentPeriod(), HasCfg: true, ProfileLoaded: true}
 	ui.Cfg = backend.Config{Repos: []string{"acme-corp", "acme-support"}, WorklogOwner: "demo-user", ProjectURL: "https://github.com/orgs/acme-corp/projects/1", ExtraProjectURLs: []string{"https://github.com/orgs/acme-support/projects/2"}, KanbanBoards: []backend.KanbanSource{}, OrgColors: map[string]string{"acme-corp": "#397FCE", "acme-support": "#D64A4A"}}
 	plan := seedPlannerDemo(t, ui)
 	assemble.BuildAllTabs(ui)

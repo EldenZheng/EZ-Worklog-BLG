@@ -76,7 +76,11 @@ func AiCompact(cfg Config, text string) (string, error) {
 
 // ---- currency ----
 
-func FetchRate(base, target string) (float64, error) {
+// FetchRate reads today's exchange rate from a public API. A variable so the
+// tests can stay offline.
+var FetchRate = fetchRate
+
+func fetchRate(base, target string) (float64, error) {
 	url := "https://open.er-api.com/v6/latest/" + base
 	client := &http.Client{Timeout: 20 * time.Second}
 	resp, err := client.Get(url)

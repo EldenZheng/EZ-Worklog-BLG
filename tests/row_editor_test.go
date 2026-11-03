@@ -93,7 +93,7 @@ func tapButton(t *testing.T, o fyne.CanvasObject, label string) {
 func editorUI(t *testing.T) *shell.UI {
 	t.Helper()
 	w := test.NewApp().NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(logwork.BuildLogTab(ui))
 	return ui

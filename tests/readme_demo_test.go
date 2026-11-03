@@ -174,7 +174,7 @@ func TestReadmeDemoFrames(t *testing.T) {
 	// strip's seven columns no longer fit side by side.
 	w.Resize(fyne.NewSize(1920, 1080))
 
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		CalMonth: shell.ThisMonth(), RepMonth: shell.CurrentPeriod()}
 	ui.Cfg = backend.Config{
 		Repos:           []string{"acme-corp", "acme-support"},

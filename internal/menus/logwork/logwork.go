@@ -211,30 +211,27 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			input.issue.SetText("")
 			if prURL, ok := backend.PullRequestURLFromAny(source); ok {
 				input.issue.SetText("Finding referenced issue…")
-				time.AfterFunc(350*time.Millisecond, func() {
-					defer func() { _ = recover() }()
-					fyne.Do(func() {
+				shell.AfterTyping(func() {
+					if version != input.lookupVersion || input.pr.Text != source {
+						return
+					}
+					var lookup backend.CodeReviewLookup
+					var lookupErr error
+					ui.Async(func() error {
+						lookup, lookupErr = backend.FetchCodeReviewLookup(prURL)
+						return nil
+					}, func() {
 						if version != input.lookupVersion || input.pr.Text != source {
 							return
 						}
-						var lookup backend.CodeReviewLookup
-						var lookupErr error
-						ui.Async(func() error {
-							lookup, lookupErr = backend.FetchCodeReviewLookup(prURL)
-							return nil
-						}, func() {
-							if version != input.lookupVersion || input.pr.Text != source {
-								return
-							}
-							switch {
-							case lookupErr != nil:
-								input.issue.SetText(lookupErr.Error())
-							case len(lookup.IssueRefs) == 0:
-								input.issue.SetText("No referenced issue found")
-							default:
-								input.issue.SetText("Issue: " + strings.Join(lookup.IssueRefs, ", "))
-							}
-						})
+						switch {
+						case lookupErr != nil:
+							input.issue.SetText(lookupErr.Error())
+						case len(lookup.IssueRefs) == 0:
+							input.issue.SetText("No referenced issue found")
+						default:
+							input.issue.SetText("Issue: " + strings.Join(lookup.IssueRefs, ", "))
+						}
 					})
 				})
 			}

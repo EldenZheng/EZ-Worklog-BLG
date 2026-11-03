@@ -26,7 +26,7 @@ func TestARefreshThatFindsCommitsMakesRoomForThem(t *testing.T) {
 	defer a.Quit()
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(logwork.BuildLogTab(ui))

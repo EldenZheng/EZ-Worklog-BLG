@@ -183,9 +183,9 @@ func TestWeekMailTextLeadsWithBoardsThenTheSummary(t *testing.T) {
 // the mail client's attach dialog opens. A missing Downloads must not fail the
 // export — the file goes to the app's own folder instead.
 func TestDownloadsDirFallsBackWhenThereIsNoDownloads(t *testing.T) {
-	fallback := t.TempDir()
+	fallback := tempDir(t)
 
-	home := t.TempDir()
+	home := tempDir(t)
 	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	t.Setenv("HOME", home)
 	if got := backend.DownloadsDir(fallback); got != fallback {
@@ -201,7 +201,7 @@ func TestDownloadsDirFallsBackWhenThereIsNoDownloads(t *testing.T) {
 	}
 
 	// A file of that name where the folder should be is not a folder.
-	other := t.TempDir()
+	other := tempDir(t)
 	t.Setenv("USERPROFILE", other)
 	t.Setenv("HOME", other)
 	if err := os.WriteFile(filepath.Join(other, "Downloads"), []byte("not a dir"), 0o644); err != nil {
@@ -246,7 +246,7 @@ func TestCommitsAreBucketedOnTheWorkingDayNotTheCalendarDay(t *testing.T) {
 // An empty week must still produce a file and a readable mail: a week off is a
 // thing to report, not an error.
 func TestExportWeekWritesAFileEvenWithNothingOnTheBoard(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempDir(t)
 	path, n, text, err := backend.ExportWeek(sampleExportConfig(), dir, "team-alex", "2026-08-24", "2026-08-30", nil)
 	if err != nil {
 		t.Fatal(err)

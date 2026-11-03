@@ -40,7 +40,7 @@ func TestMeetingSidebarIsFixedAtTenPercent(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(meeting.BuildMeetingTab(ui))
 	meeting.DrawMeeting(ui)

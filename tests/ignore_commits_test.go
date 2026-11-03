@@ -33,7 +33,7 @@ func flowGrids(o fyne.CanvasObject) []*fyne.Container {
 func pendingUI(t *testing.T) *shell.UI {
 	t.Helper()
 	w := test.NewApp().NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(logwork.BuildLogTab(ui))
 	return ui
@@ -166,7 +166,7 @@ func TestGroupPendingMarksIgnoredWithoutDropping(t *testing.T) {
 // The ignore set is its own file: there is no worklog row to hang a skipped
 // commit off, and no minutes to invent for one.
 func TestIgnoredShasRoundTrip(t *testing.T) {
-	s := backend.NewStore(t.TempDir())
+	s := backend.NewStore(tempDir(t))
 
 	set, err := s.IgnoredShas()
 	if err != nil || len(set) != 0 {

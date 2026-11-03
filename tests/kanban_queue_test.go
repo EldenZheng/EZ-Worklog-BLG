@@ -270,7 +270,7 @@ func TestGhGivesUpAfterTimeout(t *testing.T) {
 	old := backend.GhTimeout
 	backend.GhTimeout = time.Nanosecond
 	t.Cleanup(func() { backend.GhTimeout = old })
-	_, err := backend.Gh([]string{"--version"})
+	_, err := backend.RunGh([]string{"--version"}) // the real runner: TestMain keeps Gh offline
 	if err == nil || !strings.Contains(err.Error(), "did not answer") {
 		t.Fatal("expected a timeout error, got", err)
 	}

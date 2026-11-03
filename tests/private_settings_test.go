@@ -17,7 +17,7 @@ import (
 )
 
 func TestPrivateSettingsStartEmpty(t *testing.T) {
-	cfg, _ := backend.NewStore(t.TempDir()).LoadConfig()
+	cfg, _ := backend.NewStore(tempDir(t)).LoadConfig()
 	if cfg.BaseSalary != 0 || cfg.SupportSetPay != 0 || cfg.MeetingRepo != "" ||
 		cfg.BulkCodeReviewRepo != "" || len(cfg.BoardViewURLs) != 0 {
 		t.Fatal("fresh installs must not inherit personal destinations or pay")
@@ -70,7 +70,7 @@ func TestSettingsSavePrivateDestinationsAndPay(t *testing.T) {
 	cfg.BaseSalary, cfg.SupportSetPay = 1234, 125
 	cfg.MeetingRepo, cfg.BulkCodeReviewRepo = "exampleorg/meetings", "exampleorg/reviews"
 	cfg.BoardViewURLs = []string{"https://github.com/orgs/exampleorg/projects/3/views/2"}
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: a.NewWindow("settings"), Cfg: cfg}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: a.NewWindow("settings"), Cfg: cfg}
 	view := settings.BuildSettingsTab(ui)
 	updates := map[string]string{
 		"1234": "2345", "125": "187.50",

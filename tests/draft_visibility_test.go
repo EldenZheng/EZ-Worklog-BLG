@@ -22,7 +22,7 @@ func TestDraftMinutesCountOnlyUnpushedRowsInRange(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 
 	if _, err := ui.Store.AppendRows([]backend.Row{

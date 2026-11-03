@@ -51,12 +51,12 @@ func TestNewerRelease(t *testing.T) {
 // running copy steps aside, the download takes its name, and the next start
 // clears the old one away.
 func TestInstallUpdateSwapsTheBinary(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempDir(t)
 	exe := filepath.Join(dir, "Worklog.exe")
 	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	dl := filepath.Join(t.TempDir(), "Worklog.exe")
+	dl := filepath.Join(tempDir(t), "Worklog.exe")
 	if err := os.WriteFile(dl, []byte("new"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestSettingsUpdatePanelInstallsTheLatestRelease(t *testing.T) {
 	defer fyne.CurrentApp().Quit()
 	ui.Tabs = shell.NewPillTabs(container.NewTabItem(shell.SettingsTabName, widget.NewLabel("settings")))
 
-	dir := t.TempDir()
+	dir := tempDir(t)
 	exe := filepath.Join(dir, "Worklog.exe")
 	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
@@ -117,7 +117,7 @@ func TestSettingsUpdatePanelInstallsTheLatestRelease(t *testing.T) {
 		return backend.Release{Tag: "v1.1.0", Published: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)}, nil
 	}
 	backend.DownloadRelease = func(tag string) (string, error) {
-		path := filepath.Join(t.TempDir(), "Worklog.exe")
+		path := filepath.Join(tempDir(t), "Worklog.exe")
 		return path, os.WriteFile(path, []byte("new "+tag), 0o755)
 	}
 	backend.ExecutablePath = func() (string, error) { return exe, nil }

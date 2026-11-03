@@ -21,7 +21,7 @@ func TestRender(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}, WorklogOwner: "team-alex", DefaultMode: "subissue"}
 	content := logwork.BuildLogTab(ui)
 	w.SetContent(content)
@@ -66,7 +66,7 @@ func TestDropLoggedCommitsKeepsUnpicked(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(logwork.BuildLogTab(ui))
 

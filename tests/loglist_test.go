@@ -16,7 +16,7 @@ func logListUI(t *testing.T) *shell.UI {
 	t.Helper()
 	w := test.NewApp().NewWindow("t")
 	test.ApplyTheme(t, theme.DefaultTheme())
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		CalMonth: "2026-08", RepMonth: "2026-08", WeekStart: "2026-08-24"}
 	ui.Cfg = backend.Config{
 		BoardViewURLs: boardViewURLs,

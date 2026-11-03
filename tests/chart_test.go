@@ -166,7 +166,7 @@ func TestTabNamesAndIndicesMatchTheBarThatIsBuilt(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		CalMonth: "2026-08", RepMonth: "2026-08"}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}} // no project URL: stays offline
 	assemble.BuildAllTabs(ui)
@@ -196,7 +196,7 @@ func TestOpenDayOnCalendarSwitchesTabs(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		CalMonth: "2026-08", RepMonth: "2026-08"}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}} // no project URL: stays offline
 	assemble.BuildAllTabs(ui)
@@ -226,7 +226,7 @@ func TestDayPanelNamesTheParentIssue(t *testing.T) {
 	// asks for one: laying it out under that theme panics inside the painter.
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(status.BuildStatusTab(ui))
 
@@ -276,7 +276,7 @@ func TestDayPanelPutsTheBiggestWorklogOnTop(t *testing.T) {
 	defer a.Quit()
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(status.BuildStatusTab(ui))
 
@@ -310,7 +310,7 @@ func TestDayPanelHoldsItsPlaceWithNoSelection(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: "2026-08", RepMonth: "2026-08"}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(status.BuildStatusTab(ui))
 
@@ -351,7 +351,7 @@ func TestChartReadoutNamesTheDay(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		Cfg: backend.Config{Repos: []string{"exampleorg", "Example-Support"}}}
 
 	days := []report.ChartDay{{
@@ -395,7 +395,7 @@ func TestRefreshRateOnlyOncePerDay(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, HasCfg: true,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, HasCfg: true,
 		CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Currency: "RM", DisplayCurrency: "USD", FxRate: 4.2, FxUpdated: shell.Today()}
 

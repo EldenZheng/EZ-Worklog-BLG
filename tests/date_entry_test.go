@@ -312,7 +312,7 @@ func TestPickedDateSurvivesStoreRoundTrip(t *testing.T) {
 	w.SetContent(e)
 	picked := logwork.IsoDate(e)
 
-	store := backend.NewStore(t.TempDir())
+	store := backend.NewStore(tempDir(t))
 	if _, err := store.AppendRows([]backend.Row{{
 		"date": picked, "minutes": "480", "type": "commit", "refs": "05c9cae",
 	}}); err != nil {

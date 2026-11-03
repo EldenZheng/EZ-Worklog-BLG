@@ -69,7 +69,7 @@ func TestLogTabRefreshCoversEveryMonthTheWeekTouches(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
 
 	// A week that straddles the turn of a month needs both of them.
@@ -152,7 +152,7 @@ func TestRefreshTodayScoreDropsTheStatusMonth(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
 
 	ui.EnsureProjectCache()
@@ -231,7 +231,7 @@ func TestAPushDuringAFetchMarksItStale(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/9"}
 
 	ui.EnsureProjectCache()
@@ -265,7 +265,7 @@ func TestPushSpinnerCoversTheWindowUntilStopped(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	w.SetContent(widget.NewLabel("behind"))
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w}
 
 	_, stop := ui.PushSpinner("Pushing to GitHub…")
 	if w.Canvas().Overlays().Top() == nil {

@@ -10,7 +10,7 @@ import (
 )
 
 func TestUpdateIssueTitlesMigratesOldRowsAndKeepsBackup(t *testing.T) {
-	dir := t.TempDir()
+	dir := tempDir(t)
 	oldHeader := backend.FieldOrder[:len(backend.FieldOrder)-1]
 	path := filepath.Join(dir, "worklog.csv")
 	f, err := os.Create(path)

@@ -16,7 +16,7 @@ import (
 func TestCommitWeekFitsWindowWithLongIssueReferences(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: a.NewWindow("t")}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: a.NewWindow("t")}
 	long := "someorganisation/a-very-long-repository-name-for-services#123456"
 	byDay := map[string][]backend.Commit{}
 	days := shell.WeekDates(backend.WeekStartOf(shell.Today()))

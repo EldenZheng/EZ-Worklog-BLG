@@ -21,7 +21,7 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 	defer a.Quit()
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
-	store := backend.NewStore(t.TempDir())
+	store := backend.NewStore(tempDir(t))
 	if _, err := store.AppendRows([]backend.Row{{
 		"date": "2026-08-12", "minutes": "240", "owner": "sample-owner",
 		"issue_url": "https://github.com/exampleorg/work/issues/2",

@@ -56,7 +56,7 @@ func TestReportOpensOnThePeriodTodayIsIn(t *testing.T) {
 // is the one wrong number that looks right — every other figure on the Report
 // is real, so a made-up rate reads as this month's actual money.
 func TestAFreshInstallAssumesNoSalary(t *testing.T) {
-	s := backend.NewStore(t.TempDir())
+	s := backend.NewStore(tempDir(t))
 	cfg, exists := s.LoadConfig()
 	if exists {
 		t.Fatal("an empty directory has no config to load")
@@ -98,7 +98,7 @@ func TestTheReportCarriesAnUnfinishedSupportSetAcrossTheCutOff(t *testing.T) {
 	defer a.Quit()
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, HasCfg: true,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, HasCfg: true,
 		CalMonth: "2026-08", RepMonth: "2026-09",
 		Cfg: backend.Config{Repos: []string{"exampleorg"}, SupportSetPay: 125, BaseSalary: 2800, Currency: "RM"}}
 	w.SetContent(report.BuildReportTab(ui))
@@ -141,7 +141,7 @@ func TestTheReportNamesWhatCarriesToTheNextPeriod(t *testing.T) {
 	defer a.Quit()
 	test.ApplyTheme(t, theme.DefaultTheme())
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, HasCfg: true,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, HasCfg: true,
 		CalMonth: "2026-08", RepMonth: "2026-09",
 		Cfg: backend.Config{Repos: []string{"exampleorg"}, SupportSetPay: 125, BaseSalary: 2800, Currency: "RM"}}
 	w.SetContent(report.BuildReportTab(ui))
@@ -239,7 +239,7 @@ func statusUI(t *testing.T) *shell.UI {
 	// The test theme defines no bold monospace face, and the day panel asks for
 	// one; laying it out under that theme panics inside the painter.
 	test.ApplyTheme(t, theme.DefaultTheme())
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		CalMonth: "2026-08", RepMonth: "2026-08"}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg", "Example-Support"}}
 	w.SetContent(status.BuildStatusTab(ui))

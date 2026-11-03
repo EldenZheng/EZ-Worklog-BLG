@@ -116,7 +116,7 @@ func TestSettingsScrollsOnlyRightAndColorPickerPersists(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("settings")
 	defer w.Close()
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, Cfg: backend.Config{GithubAuthor: "example", Repos: []string{"exampleorg"}}}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, Cfg: backend.Config{GithubAuthor: "example", Repos: []string{"exampleorg"}}}
 	view := settings.BuildSettingsTab(ui)
 	w.SetContent(view)
 	w.Resize(fyne.NewSize(1400, 900))
@@ -161,7 +161,7 @@ func TestSettingsScreenshots(t *testing.T) {
 	a.Settings().SetTheme(shell.GoldTheme{Theme: theme.DefaultTheme()})
 	w := a.NewWindow("settings")
 	defer w.Close()
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, Cfg: backend.Config{GithubAuthor: "example", Repos: []string{"bigledger", "BigLedger-Support"}, ProjectURL: backend.SprintBoardURLs[0], ExtraProjectURLs: []string{backend.SprintBoardURLs[1]}}}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, Cfg: backend.Config{GithubAuthor: "example", Repos: []string{"bigledger", "BigLedger-Support"}, ProjectURL: backend.SprintBoardURLs[0], ExtraProjectURLs: []string{backend.SprintBoardURLs[1]}}}
 	w.SetContent(settings.BuildSettingsTab(ui))
 	w.Resize(fyne.NewSize(1560, 1000))
 	captureSprintPNG(t, w, filepath.Join(dir, "settings.png"))

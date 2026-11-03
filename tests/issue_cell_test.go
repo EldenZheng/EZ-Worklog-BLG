@@ -30,7 +30,7 @@ func TestRowTilePushButtonTracksPushedState(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w,
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w,
 		Cfg: backend.Config{Repos: []string{"exampleorg"}}}
 
 	for _, c := range []struct {
@@ -206,7 +206,7 @@ func TestRowTileShowsRawMinutes(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, Cfg: backend.Config{Repos: []string{"exampleorg"}}}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, Cfg: backend.Config{Repos: []string{"exampleorg"}}}
 
 	tile := logwork.RowTile(ui, backend.Row{
 		"id": "1", "date": "2026-08-11", "minutes": "90",
@@ -226,7 +226,7 @@ func TestDeleteConfirmationUsesCompactPopup(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("t")
 	w.Resize(fyne.NewSize(1200, 800))
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w}
 
 	sz := ui.RemovalPopupSize(widget.NewLabel("Delete this entry?"))
 	if sz.Width > 640 || sz.Width < 400 || sz.Height >= 400 {

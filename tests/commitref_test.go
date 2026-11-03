@@ -56,7 +56,7 @@ func TestParseCommitRefsReadsBothSpellings(t *testing.T) {
 // commit already logged must not be offered again because its entry now records
 // the repo too.
 func TestLoggedShasIgnoresTheRepoHalf(t *testing.T) {
-	s := backend.NewStore(t.TempDir())
+	s := backend.NewStore(tempDir(t))
 	if _, err := s.AppendRows([]backend.Row{
 		{"date": "2026-08-31", "minutes": "300", "refs": "exampleorg/applet@aaa1111,bbb2222"},
 		{"date": "2026-08-30", "minutes": "60", "refs": "ccc3333"},

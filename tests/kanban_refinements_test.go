@@ -132,7 +132,7 @@ func TestSprintKanbanConfigurationPersistsAndValidates(t *testing.T) {
 	if err := backend.ValidateKanbanSources(sources); err != nil {
 		t.Fatal(err)
 	}
-	store := backend.NewStore(t.TempDir())
+	store := backend.NewStore(tempDir(t))
 	cfg := backend.Config{KanbanBoards: sources}
 	if err := store.SaveConfig(cfg); err != nil {
 		t.Fatal(err)

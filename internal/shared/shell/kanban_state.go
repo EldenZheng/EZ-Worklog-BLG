@@ -110,9 +110,12 @@ func (k *KanbanUI) Load(force bool) {
 	previousBoards := append([]backend.SprintBoard{}, k.Plan.Boards...)
 	sources := append([]backend.KanbanSource{}, backend.KanbanSources(k.Ui.Cfg)...)
 	version := k.SourceVersion
-	go func() {
-		boards := make([]backend.SprintBoard, 0, 2)
-		var errors []string
+	boards := make([]backend.SprintBoard, 0, 2)
+	var errors []string
+	// Async rather than a bare goroutine, so the tests can run it in step:
+	// the save at the end writes the planner file, and one landing after its
+	// test had finished wrote into a folder already being deleted.
+	k.Ui.Async(func() error {
 		for _, source := range sources {
 			u := source.URL
 			b, err := backend.FetchSprintBoardWithFilter(u, source.Filter)
@@ -127,36 +130,36 @@ func (k *KanbanUI) Load(force bool) {
 				boards = append(boards, b)
 			}
 		}
-		fyne.Do(func() {
-			k.Loading = false
-			if version != k.SourceVersion {
-				k.Load(true)
-				return
+		return nil
+	}, func() {
+		k.Loading = false
+		if version != k.SourceVersion {
+			k.Load(true)
+			return
+		}
+		k.Loaded = len(errors) == 0
+		p := k.Plan
+		p.Boards = boards
+		p.Fetched = time.Now().Format(time.RFC3339)
+		if k.Save(p) {
+			k.SetMessage("")
+			if len(errors) > 0 {
+				k.SetMessage("Refresh incomplete; saved data retained for unavailable boards. " + strings.Join(errors, "; "))
 			}
-			k.Loaded = len(errors) == 0
-			p := k.Plan
-			p.Boards = boards
-			p.Fetched = time.Now().Format(time.RFC3339)
-			if k.Save(p) {
-				k.SetMessage("")
-				if len(errors) > 0 {
-					k.SetMessage("Refresh incomplete; saved data retained for unavailable boards. " + strings.Join(errors, "; "))
-				}
-				// Fresh statuses: drop plans for issues that have left the
-				// boards. Today's planned issues are started only when the
-				// fetch came from the Sprint Calendar or app start, never from
-				// Kanban, where status changes are made by dragging.
-				k.PrunePlan()
-				if k.AutoStartPending {
-					k.AutoStartPending = false
-					Hooks.KanbanUIStartPlannedToday(k)
-				}
+			// Fresh statuses: drop plans for issues that have left the
+			// boards. Today's planned issues are started only when the
+			// fetch came from the Sprint Calendar or app start, never from
+			// Kanban, where status changes are made by dragging.
+			k.PrunePlan()
+			if k.AutoStartPending {
+				k.AutoStartPending = false
+				Hooks.KanbanUIStartPlannedToday(k)
 			}
-			Hooks.KanbanUIDraw(k)
-			// Writes made while the boards loaded can go now.
-			Hooks.KanbanKick(k)
-		})
-	}()
+		}
+		Hooks.KanbanUIDraw(k)
+		// Writes made while the boards loaded can go now.
+		Hooks.KanbanKick(k)
+	})
 }
 
 func (k *KanbanUI) SetMessage(text string) {

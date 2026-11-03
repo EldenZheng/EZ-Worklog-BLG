@@ -9,7 +9,7 @@ import (
 )
 
 func TestDataDirPrefersDataFolderAndKeepsOldInstalls(t *testing.T) {
-	fresh := t.TempDir()
+	fresh := tempDir(t)
 	if got := shell.DataDirIn(fresh); got != filepath.Join(fresh, "data") {
 		t.Fatalf("a new install should use a data folder: %s", got)
 	}
@@ -17,7 +17,7 @@ func TestDataDirPrefersDataFolderAndKeepsOldInstalls(t *testing.T) {
 		t.Fatal("the data folder was not created")
 	}
 
-	old := t.TempDir()
+	old := tempDir(t)
 	if err := os.WriteFile(filepath.Join(old, "worklog.csv"), []byte("id\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}

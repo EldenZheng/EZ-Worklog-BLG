@@ -143,7 +143,7 @@ func TestSprintMutationUsesSourceProjectIDs(t *testing.T) {
 }
 
 func TestSprintPlanSaveReloadAndOfflineUI(t *testing.T) {
-	s := backend.NewStore(t.TempDir())
+	s := backend.NewStore(tempDir(t))
 	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"issue": {Estimate: 90, Notes: "local only", Blocks: []backend.PlanBlock{{"2026-11-02", 540, 90}}}}, Boards: []backend.SprintBoard{{ID: "project", Title: "Example", Fields: []backend.SprintField{{Name: "Status", Options: []backend.FieldOption{{Name: "In Progress"}}}}, Items: []backend.SprintItem{{ID: "i", Title: "Example task", Status: "In Progress"}}}}}
 	if err := s.SaveSprintPlan(p); err != nil {
 		t.Fatal(err)
@@ -179,7 +179,7 @@ func TestSprintDragTargetsAndCancellation(t *testing.T) {
 	defer a.Quit()
 	w := a.NewWindow("drag")
 	defer w.Close()
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w}
 	w.SetContent(kanban.BuildKanbanTab(ui))
 	w.Resize(fyne.NewSize(1200, 800))
 	k := ui.Kanban
@@ -249,7 +249,7 @@ func TestSprintScreenshots(t *testing.T) {
 	a.Settings().SetTheme(shell.GoldTheme{Theme: a.Settings().Theme()})
 	w := a.NewWindow("planner")
 	defer w.Close()
-	s := backend.NewStore(t.TempDir())
+	s := backend.NewStore(tempDir(t))
 	b := backend.SprintBoard{ID: "p", URL: backend.SprintBoardURLs[0], Title: "BigLedger", Fields: []backend.SprintField{{Name: "Status", Options: []backend.FieldOption{{Name: "Created"}, {Name: "In Progress"}, {Name: "In Review"}}}, {Name: "Sprint"}}, Items: []backend.SprintItem{{ID: "1", URL: "https://github.com/bigledger/example/issues/1", Title: "Improve invoice search and date filters", Status: "In Progress", SprintID: "s", Effort: 120}, {ID: "2", URL: "https://github.com/bigledger/example/issues/2", Title: "Review customer report", Status: "Created", SprintID: "s", Complexity: "S - 30 mins"}}}
 	b.Fields[1].Configuration.Iterations = []backend.SprintIteration{{ID: "s", Title: "Current sprint", StartDate: backend.WeekStartOf(shell.Today()), Duration: 14}}
 	b.Items = append(b.Items, backend.SprintItem{ID: "pr", Kind: "PullRequest", URL: "https://github.com/bigledger/example/pull/4", Title: "Review invoice search improvements", Status: "In Review", SprintID: "s", Effort: 45, Complexity: "S - 30 mins"})

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/color"
 	"strings"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -70,13 +69,10 @@ func (t *reviewTarget) changed(source string) {
 	} else {
 		t.Status.SetText("Finding the referenced issue on GitHub…")
 	}
-	time.AfterFunc(350*time.Millisecond, func() {
-		defer func() { _ = recover() }() // the app may close meanwhile
-		fyne.Do(func() {
-			if version == t.version && t.Entry.Text == source {
-				t.lookup(source, version, nil)
-			}
-		})
+	shell.AfterTyping(func() {
+		if version == t.version && t.Entry.Text == source {
+			t.lookup(source, version, nil)
+		}
 	})
 }
 

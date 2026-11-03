@@ -94,7 +94,7 @@ func TestRecentShowsOnlyUnpushed(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(logwork.BuildLogTab(ui))
 	// The week strip holds any waiting entry dated inside the week it shows, so
@@ -147,7 +147,7 @@ func TestRecentEmptyWhenAllPushed(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(logwork.BuildLogTab(ui))
 
@@ -174,7 +174,7 @@ func TestPendingBubblesWrapIntoAGrid(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	w.SetContent(logwork.BuildLogTab(ui))
 
@@ -244,7 +244,7 @@ func TestTodayProgressSourcesFromGitHub(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, CalMonth: shell.ThisMonth(), RepMonth: shell.ThisMonth()}
 
 	if got := logwork.TodayProgress(ui, 300, 300); !strings.Contains(got, "saved locally") ||
 		!strings.Contains(got, "Settings") {

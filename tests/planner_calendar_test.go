@@ -23,7 +23,7 @@ func plannerFixture(t *testing.T) (*shell.UI, fyne.Window, backend.SprintCandida
 	b := backend.SprintBoard{ID: "p", URL: backend.SprintBoardURLs[0], Title: "Project", Fields: []backend.SprintField{{Name: "Sprint"}}, Items: []backend.SprintItem{{ID: "i", Title: "Plan me", SprintID: "s", Effort: 90}}}
 	s := backend.SprintIteration{ID: "s", Title: "Sprint", StartDate: backend.WeekStartOf(shell.Today()), Duration: 14}
 	b.Fields[0].Configuration.Iterations = []backend.SprintIteration{s}
-	ui := &shell.UI{Store: backend.NewStore(t.TempDir()), Win: w}
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w}
 	kanban.BuildKanbanTab(ui)
 	ui.Kanban.Plan = backend.SprintPlan{Boards: []backend.SprintBoard{b}, Tasks: map[string]backend.SprintTask{}}
 	w.SetContent(kanban.BuildPlannerTab(ui))

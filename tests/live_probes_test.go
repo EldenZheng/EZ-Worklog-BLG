@@ -11,6 +11,10 @@ import (
 	"worklog/internal/shared/backend"
 )
 
+// These probes are the tests meant to reach GitHub; TestMain keeps the rest
+// offline.
+func init() { liveGitHub = true }
+
 // Scrape the pending commits for an org and print what the Log work tab would
 // be showing.
 func TestProbe(t *testing.T) {
@@ -19,7 +23,7 @@ func TestProbe(t *testing.T) {
 			t.Fatalf("PANIC: %v", r)
 		}
 	}()
-	store := backend.NewStore(t.TempDir())
+	store := backend.NewStore(tempDir(t))
 	cfg := backend.Config{Repos: []string{"exampleorg"}, LookbackDays: 7}
 	res, err := store.FetchPending(cfg)
 	if err != nil {

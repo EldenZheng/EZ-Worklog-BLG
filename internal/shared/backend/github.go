@@ -27,8 +27,12 @@ func GhErr(f string, a ...any) *GhError { return &GhError{fmt.Sprintf(f, a...)} 
 // queue. Generous, because a paginated board fetch is one invocation.
 var GhTimeout = 3 * time.Minute
 
-// Gh runs the gh CLI and returns stdout, or a GhError.
-func Gh(args []string, extraHeaders ...string) (string, error) {
+// Gh runs the gh CLI and returns stdout, or a GhError. Every call the app
+// makes to GitHub goes through here. A variable so the tests can stay offline.
+var Gh = RunGh
+
+// RunGh is the real gh runner behind Gh.
+func RunGh(args []string, extraHeaders ...string) (string, error) {
 	full := append([]string{}, args...)
 	for _, h := range extraHeaders {
 		full = append(full, "-H", h)
