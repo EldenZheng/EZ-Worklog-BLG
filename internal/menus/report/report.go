@@ -49,13 +49,10 @@ func BuildReportTab(ui *shell.UI) fyne.CanvasObject {
 	actions := container.NewHBox(layout.NewSpacer(), refresh, exportBtn)
 	head := container.New(widgets.NewFlowGrid(360, 0, 40), navigation, actions)
 
-	ui.RepBox = container.NewVBox()
+	ui.RepBox = container.NewStack()
 	ui.ReportProgress = shell.NewLoadingIndicator()
-	ui.RepBody = container.NewVBox(head, ui.ReportProgress.View, ui.RepBox)
-	// Two-way scroll: content that will not shrink further (a metric card at
-	// its minimum, a table's date column) scrolls sideways rather than being
-	// clipped by the window's right edge. Vertical scroll stays as before.
-	return container.NewScroll(widget.NewCard("", "", ui.RepBody))
+	ui.RepBody = container.NewBorder(container.NewVBox(head, ui.ReportProgress.View), nil, nil, nil, ui.RepBox)
+	return shell.PageInset(ui.RepBody)
 }
 
 func DrawReport(ui *shell.UI) {
@@ -198,13 +195,22 @@ func DrawReport(ui *shell.UI) {
 		reportMetric(backend.HoursMins(draftTotal), "Saved here, not pushed",
 			fmt.Sprintf("÷ 8h = %.2f days · Not included in settled figures", float64(draftTotal)/backend.Target)),
 	)
+	fullCycle, fullDays := RemainingCycleProjection(ui.Cfg, projectedTotals, fromDate, toDate, shell.Today(), false)
+	weekdays, weekdayDays := RemainingCycleProjection(ui.Cfg, projectedTotals, fromDate, toDate, shell.Today(), true)
+	fullPay, weekdayPay := fullCycle.Receivable+supportBonus, weekdays.Receivable+supportBonus
 	payment := reportSection("Payment breakdown",
 		reportFact("Worklog receivable", money(rep.Receivable)),
 		reportFact("Weekend support bonus", money(supportBonus)),
 		reportText(supportNote),
 		widget.NewSeparator(),
 		reportFact("Payable days × "+money(rep.DailyRate), fmt.Sprintf("%.2f", rep.PayableDays)),
-		reportFactColored("Converted receivable", conv, widgets.LogoGold))
+		reportFactColored("Converted receivable", conv, widgets.LogoGold),
+		widget.NewSeparator(),
+		reportFact("Full remaining cycle", money(fullPay)),
+		reportText(fmt.Sprintf("%d days left including weekends at 8h/day · %s", fullDays, converted(fullPay))),
+		reportFact("Full weekdays only", money(weekdayPay)),
+		reportText(fmt.Sprintf("%d weekdays left at 8h/day · %s", weekdayDays, converted(weekdayPay))),
+		reportText("Projections include saved drafts, top up today, and keep the support bonus already earned."))
 	activity := reportSection("Period at a glance",
 		reportFact("Calendar days gone", fmt.Sprintf("%d/%d", daysGone, daysTotal)),
 		reportText(fmt.Sprintf("%d calendar days left · includes weekends; today is remaining", daysTotal-daysGone)),
@@ -319,17 +325,13 @@ func DrawReport(ui *shell.UI) {
 			backend.HoursMins(draftTotal))))
 	}
 
-	ui.RepBox.Objects = []fyne.CanvasObject{
-		stats,
-		container.NewVBox(chart),
-		container.NewVBox(split...),
-		timeStats,
-		container.New(widgets.NewFlowGrid(300, 0, 0), payment, activity),
-	}
+	top := container.NewVBox(stats, chart, container.NewVBox(split...))
+	bottom := container.NewVBox(timeStats, container.New(widgets.NewFlowGrid(300, 0, 0), payment, activity))
 	if len(dayDetails) > 0 {
-		ui.RepBox.Objects = append(ui.RepBox.Objects, container.New(widgets.NewFlowGrid(300, 0, 0), dayDetails...))
+		bottom.Add(container.New(widgets.NewFlowGrid(300, 0, 0), dayDetails...))
 	}
-	ui.RepBox.Objects = append(ui.RepBox.Objects, reportSection("How this is calculated", notes...))
+	bottom.Add(reportSection("How this is calculated", notes...))
+	ui.RepBox.Objects = []fyne.CanvasObject{container.NewBorder(top, nil, nil, nil, container.NewVScroll(bottom))}
 	ui.RepBox.Refresh()
 	shell.Relayout(ui.RepBody)
 }

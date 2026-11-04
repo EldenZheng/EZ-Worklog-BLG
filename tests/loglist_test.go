@@ -1,9 +1,11 @@
 package tests
 
 import (
+	"math"
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 
@@ -11,6 +13,47 @@ import (
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 )
+
+func TestLogListMarksFortyHoursAndMirrorsSupportRota(t *testing.T) {
+	ui := logListUI(t)
+	defer fyne.CurrentApp().Quit()
+	key := shell.StatusCacheKey("2026-08")
+	ui.ProjLoaded[key] = true
+	ui.ProjItems[key] = []backend.WorklogItem{{Date: "2026-08-25", Minutes: 720, URL: "https://github.com/exampleorg/repo/issues/1"}}
+	ui.Win.Resize(fyne.NewSize(1500, 900))
+	loglist.DrawLogList(ui)
+	if !contains(labels(ui.ListBox), "Normal work week (40h): 30% logged · 70% remaining (28h)") {
+		t.Fatalf("missing normal-week progress: %v", labels(ui.ListBox))
+	}
+	var marker *fyne.Container
+	walk(ui.ListBox, func(o fyne.CanvasObject) {
+		if c, ok := o.(*fyne.Container); ok && len(c.Objects) == 3 {
+			if label, ok := c.Objects[2].(*canvas.Text); ok && label.Text == "40h" {
+				marker = c
+			}
+		}
+	})
+	if marker == nil {
+		t.Fatal("40h marker missing")
+	}
+	wantX := marker.Size().Width*40/56 - 1
+	if math.Abs(float64(marker.Objects[1].Position().X-wantX)) > 0.1 {
+		t.Fatal("40h marker does not align with the 56h meter")
+	}
+	if ui.ListSupportView.Rota() {
+		t.Fatal("ordinary week should show the checkbox")
+	}
+	ui.ProjItems[key] = append(ui.ProjItems[key], backend.WorklogItem{Date: "2026-08-28", Title: "Alex: Weekly Support (28th August, 12PM - 3PM)"})
+	loglist.DrawLogList(ui)
+	if !ui.ListSupportView.Rota() {
+		t.Fatal("support rota should replace the checkbox with Support Week")
+	}
+	ui.WeekStart = "2026-08-17"
+	loglist.DrawLogList(ui)
+	if ui.ListSupportView.Rota() {
+		t.Fatal("walking away from a support week did not restore the checkbox")
+	}
+}
 
 func logListUI(t *testing.T) *shell.UI {
 	t.Helper()
@@ -112,7 +155,7 @@ func TestLogListDrawsBoardsAndBothColumns(t *testing.T) {
 	for _, want := range []string{
 		"Boards for this week",
 		"exampleorg · project 9 · view 19",
-		"By issue",
+		"By Issue",
 		"Chinese translation", // the board column
 		"Pending — not on the board yet",
 		"120m", // the pending column

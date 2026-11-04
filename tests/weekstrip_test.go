@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/sprintcalendar"
@@ -155,6 +156,10 @@ func TestSupportPlaceholderCoversWeekdaysWithoutOne(t *testing.T) {
 		{"Saturday", true, "2026-08-29", nil, 0},
 		{"Sunday", true, "2026-08-30", nil, 0},
 		{"switched off", false, "2026-08-24", nil, 0},
+		// The user's support week: the rota slot turns it on without a tick.
+		{"a rota slot needs no tick", false, "2026-08-28",
+			[]backend.WorklogItem{{Title: "Alex: Weekly Support (28th August, 12PM - 3PM)"}}, backend.SupportPlaceholderMins},
+		{"a logged rota slot is the shift", false, "2026-08-28", support, 0},
 		{"an unreadable date", true, "not a date", nil, 0},
 	} {
 		if got := shell.SupportPlaceholderFor(cfg, c.on, c.date, c.items); got != c.want {
@@ -815,6 +820,17 @@ func TestSupportRotaNamesTheWeek(t *testing.T) {
 	}
 	if !strings.HasPrefix(shell.SupportCheckText(false), "+180 min") {
 		t.Fatalf("another week reads %q", shell.SupportCheckText(false))
+	}
+
+	// In a support week the checkbox gives way to the label.
+	check := widget.NewCheck(shell.SupportCheckText(false), nil)
+	view := shell.SupportChoice(check, true)
+	if !view.Rota() || view.View.MinSize().Width == 0 {
+		t.Fatal("a support week shows the Support Week label")
+	}
+	view.Set(false)
+	if view.Rota() {
+		t.Fatal("another week shows the checkbox again")
 	}
 }
 

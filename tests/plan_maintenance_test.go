@@ -1,15 +1,18 @@
 package tests
 
 import (
+	"image/color"
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 
 	"worklog/internal/menus/kanban"
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/sprintcalendar"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func maintenanceBoard() backend.SprintBoard {
@@ -302,5 +305,46 @@ func TestLogWorkDayGreenWhenPlannedFillsTheDay(t *testing.T) {
 	}
 	if after.Waiting != 300 {
 		t.Fatal("planned time leaked into the draft figure the captions read")
+	}
+}
+
+// Log List colours its days by the same totals as Log Work: green once
+// logged + drafts + planned reach 480.
+func TestDayTotalFillCountsPlannedTime(t *testing.T) {
+	ui, _, _ := plannerFixture(t)
+	k := ui.Kanban
+	ds := k.Week
+	drafts := []backend.Row{{"id": "a", "date": ds, "minutes": "300"}}
+	if got := ui.DayTotalFill(ds, nil, drafts); got != shell.DayFill(0, 300) {
+		t.Fatal("300 min of drafts alone should not be green")
+	}
+	k.Plan.Tasks[shell.PlannerMeetingKey] = backend.SprintTask{Blocks: []backend.PlanBlock{{ds, 540, 180}}}
+	if got := ui.DayTotalFill(ds, nil, drafts); got != shell.DayFill(0, 480) {
+		t.Fatal("drafts + planned at 480 should turn the day green")
+	}
+}
+
+// Today's column on the Commit List (and the meeting update, which shares it)
+// is outlined in gold, the rest stay plain and none is filled.
+func TestCommitListOutlinesTodayInGold(t *testing.T) {
+	ui, _, _ := plannerFixture(t)
+	days := shell.WeekDates(backend.WeekStartOf(shell.Today()))
+	gold, plain := 0, 0
+	walkCanvas(ui.CommitDaysPanel(days, nil), func(o fyne.CanvasObject) {
+		r, ok := o.(*canvas.Rectangle)
+		if !ok || r.CornerRadius != shell.CellCornerRadius {
+			return
+		}
+		if r.FillColor != color.Transparent {
+			t.Fatal("Commit List days are not coloured in")
+		}
+		if r.StrokeColor == widgets.LogoGold {
+			gold++
+		} else {
+			plain++
+		}
+	})
+	if gold != 1 || plain != len(days)-1 {
+		t.Fatalf("want today alone in gold: gold=%d plain=%d", gold, plain)
 	}
 }

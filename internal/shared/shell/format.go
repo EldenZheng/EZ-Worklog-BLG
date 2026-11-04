@@ -27,6 +27,13 @@ func Plural(n int) string {
 // is grouped as the thing it will become rather than as nothing.
 func (ui *UI) UnfiledLabel(r backend.Row) string {
 	switch r["type"] {
+	case backend.KindBulkReview:
+		return backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+	case backend.KindCodeReview:
+		if _, err := backend.ParseCodeReviewItems(r["remarks"]); err == nil {
+			return backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+		}
+		return backend.CodeReviewTitle(r["date"])
 	case backend.KindMeeting:
 		return backend.MeetingTitle(ui.Cfg, r["date"])
 	case backend.KindIndependent:

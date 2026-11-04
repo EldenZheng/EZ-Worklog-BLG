@@ -2,12 +2,12 @@ package meeting
 
 import (
 	"fmt"
-	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
@@ -15,6 +15,7 @@ import (
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // MeetingWeekDates lists the eight days of a meeting window, previous Thursday
@@ -91,6 +92,7 @@ func BuildMeetingTab(ui *shell.UI) fyne.CanvasObject {
 }
 
 func DrawMeeting(ui *shell.UI) {
+	shell.DismissSummaryTooltip()
 	defer ui.SyncLoading()
 	if ui.MeetingBox == nil {
 		return
@@ -134,7 +136,7 @@ func DrawMeeting(ui *shell.UI) {
 	for _, c := range commits {
 		byDay[c.Date] = append(byDay[c.Date], c)
 	}
-	// The sidebar is a fixed ten percent of the tab. A custom layout keeps that
+	// The sidebar is a fixed 15 percent of the tab. A custom layout keeps that
 	// ratio exact without exposing the draggable divider of an HSplit.
 	calendarBody := container.NewBorder(top, nil, nil, nil,
 		ui.CommitDaysPanelWithIssueLabel(days, byDay, MeetingIssueLabel))
@@ -172,9 +174,9 @@ func MeetingIssueLabel(issue string) string {
 	return fmt.Sprintf("%s#%d", repo, number)
 }
 
-const MeetingRowsFraction float32 = 0.10
+const MeetingRowsFraction float32 = 0.15
 
-// MeetingColumnsLayout fixes the calendar/sidebar ratio at 90/10. Unlike an
+// MeetingColumnsLayout fixes the calendar/sidebar ratio at 85/15. Unlike an
 // HSplit it has no divider interaction, so the user cannot resize the sidebar.
 type MeetingColumnsLayout struct{}
 
@@ -207,11 +209,8 @@ func (MeetingColumnsLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 	objs[1].Resize(fyne.NewSize(rowsWidth, size.Height))
 }
 
-// meetingRowsPanel is the right column: the eight days of logged work rolled
-// up to one line per issue, showing total minutes and a link to the issue.
-// Same pattern Log List's pendingIssuesPanel uses — the meeting update reads
-// as "here is where the week went, per issue" without repeating a row for
-// every day the same issue was touched.
+// meetingRowsPanel rolls the eight days into compact cards ordered by time
+// spent, with a fixed heading and total around the scrolling issue list.
 func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 	inDays := map[string]bool{}
 	for _, d := range days {
@@ -268,82 +267,30 @@ func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 		return pairs[i].title < pairs[j].title
 	})
 
-	items := []fyne.CanvasObject{
-		widget.NewLabelWithStyle("Logged this week", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-	}
+	// Keep the heading and total visible while only the issue cards scroll.
+	title := widget.NewLabelWithStyle("Logged this week", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	title.Wrapping = fyne.TextWrapWord
+	rule := canvas.NewRectangle(widgets.LogoGold)
+	rule.SetMinSize(fyne.NewSize(0, 1))
+	head := shell.PanelHead(container.NewVBox(
+		container.NewThemeOverride(title, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold}), rule), true)
+	items := container.NewVBox()
 	if len(pairs) == 0 {
-		items = append(items, widget.NewLabel("Nothing logged yet."))
-		return shell.PanelScroll(compactVBox(items...), true)
+		empty := widget.NewLabel("Nothing logged yet.")
+		empty.Wrapping = fyne.TextWrapWord
+		items.Add(empty)
 	}
 	for _, p := range pairs {
-		items = append(items, meetingRowLine(ui, p.key, p.title, p.mins))
+		items.Add(shell.IssueSummaryCard(ui.Cfg, p.key, p.title, fmt.Sprintf("%dm", p.mins)))
 	}
-	items = append(items, widget.NewSeparator())
 	totalLine := widget.NewLabelWithStyle(
 		fmt.Sprintf("Total: %dm · %d entries · %d issues", total, entries, len(pairs)),
 		fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	totalLine.Wrapping = fyne.TextWrapWord
-	items = append(items, totalLine)
-	return shell.PanelScroll(compactVBox(items...), true)
-}
-
-// meetingRowLine is one row on the rows panel: "<minutes> · <issue title>" as
-// a single RichText paragraph so minutes and title stay inline on the same
-// line, and the whole line wraps as one block when the title runs long. The
-// title carries the hyperlink; nothing gets cut off, and the amount never
-// floats above a wrapped second line.
-//
-// Inline: true on every segment is what keeps them on the same visual line —
-// without it, each RichTextSegment starts on a new line and the amount ends
-// up on a row of its own above the title.
-func meetingRowLine(ui *shell.UI, issue, title string, mins int) fyne.CanvasObject {
-	head := &widget.TextSegment{
-		Text: fmt.Sprintf("%dm · ", mins),
-		Style: widget.RichTextStyle{
-			Inline:    true,
-			TextStyle: fyne.TextStyle{Monospace: true, Bold: true},
-		},
-	}
-	segments := []widget.RichTextSegment{head}
-	if owner, repo, num, err := backend.SplitIssue(issue); err == nil {
-		if u, e := url.Parse(fmt.Sprintf(
-			"https://github.com/%s/%s/issues/%d", owner, repo, num)); e == nil {
-			segments = append(segments, &widget.HyperlinkSegment{Text: title, URL: u})
-		} else {
-			segments = append(segments, &widget.TextSegment{Text: title,
-				Style: widget.RichTextStyle{Inline: true}})
-		}
-	} else {
-		segments = append(segments, &widget.TextSegment{Text: title,
-			Style: widget.RichTextStyle{Inline: true}})
-	}
-	rt := widget.NewRichText(segments...)
-	rt.Wrapping = fyne.TextWrapWord
-	return rt
-}
-
-// compactVBox is a VBox with a shrunk padding — the labels sit close together
-// while still respecting each child's real (wrap-aware) height, so wrapping
-// RichText rows can grow onto a second line without the row below overlapping
-// them.
-func compactVBox(objects ...fyne.CanvasObject) fyne.CanvasObject {
-	return container.NewThemeOverride(container.NewVBox(objects...),
-		tightListTheme{Theme: theme.Current()})
-}
-
-// tightListTheme shrinks VBox spacing and label inner padding so the
-// "Logged this week" column reads compact without dropping down to a
-// zero-gap layout that fights wrapping widgets over their real height.
-type tightListTheme struct{ fyne.Theme }
-
-func (t tightListTheme) Size(name fyne.ThemeSizeName) float32 {
-	switch name {
-	case theme.SizeNamePadding:
-		return 3
-	case theme.SizeNameInnerPadding:
-		return 4
-	}
-	return t.Theme.Size(name)
+	footer := container.NewPadded(container.NewVBox(widget.NewSeparator(), totalLine))
+	// The scroll owns the full sidebar width: overflow reaches its edges rather
+	// than losing another band of space to the panel's padding.
+	return container.NewBorder(head, footer, nil, nil, container.NewVScroll(items))
 }
 
 func LoadMeetingCommits(ui *shell.UI, force bool) {

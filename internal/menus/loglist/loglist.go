@@ -3,7 +3,6 @@ package loglist
 import (
 	"fmt"
 	"image/color"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,23 +19,6 @@ import (
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
 )
-
-// issueLink names an issue as a link where there is somewhere to link to, and
-// as plain text where there is not: a meeting that has not been pushed has a
-// title and no issue behind it yet.
-func issueLink(ui *shell.UI, issue, title string) fyne.CanvasObject {
-	if owner, repo, num, err := backend.SplitIssue(issue); err == nil {
-		if u, e := url.Parse(fmt.Sprintf(
-			"https://github.com/%s/%s/issues/%d", owner, repo, num)); e == nil {
-			link := widget.NewHyperlink(title, u)
-			link.Truncation = fyne.TextTruncateEllipsis
-			return link
-		}
-	}
-	lbl := widget.NewLabel(title)
-	lbl.Truncation = fyne.TextTruncateEllipsis
-	return lbl
-}
 
 // The Log List tab answers two questions side by side: what the week already
 // holds on the board, and what has not got there yet.
@@ -65,7 +47,7 @@ func BuildLogListTab(ui *shell.UI) fyne.CanvasObject {
 		ui.LoadPending(true)
 		ui.RefreshTodayScore()
 	})
-	mail := widget.NewButtonWithIcon("Export week for email", theme.MailComposeIcon(), func() {
+	mail := widget.NewButtonWithIcon("Export week", theme.MailComposeIcon(), func() {
 		days := shell.WeekDates(backend.OrDefault(ui.WeekStart, backend.WeekStartOf(shell.Today())))
 		byDay, state := shell.Hooks.WeekWorklogs(ui, days)
 		shell.Hooks.ExportWeekForEmail(ui, days, byDay, state)
@@ -82,22 +64,24 @@ func BuildLogListTab(ui *shell.UI) fyne.CanvasObject {
 		shell.Hooks.DrawWeekStrip(ui)
 	}
 	ui.ListSupport = support
+	ui.ListSupportView = shell.SupportChoice(support, false)
 
 	ui.ListTitle = widget.NewLabelWithStyle("", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	ui.ListHere = here
 	// Support sits on the left, before the spacer: on a smaller window the
 	// trailing buttons can push the right-hand end out to where the scroll
 	// clipped it, taking the checkbox with them if it stood over there.
-	head := container.NewHBox(prev, ui.ListTitle, next, here, shell.GoldChoice(support),
+	head := container.NewHBox(prev, ui.ListTitle, next, here, ui.ListSupportView.View,
 		layout.NewSpacer(), refresh, mail)
 
-	ui.ListBox = container.NewVBox()
+	ui.ListBox = container.NewStack()
 	ui.ListProgress = shell.NewLoadingIndicator()
-	ui.ListBody = container.NewVBox(head, ui.ListProgress.View, ui.ListBox)
-	return shell.NewPageScroll(shell.PageInset(ui.ListBody), ui.ListBody, ui.ListBody)
+	ui.ListBody = container.NewBorder(container.NewVBox(head, ui.ListProgress.View), nil, nil, nil, ui.ListBox)
+	return shell.PageInset(ui.ListBody)
 }
 
 func DrawLogList(ui *shell.UI) {
+	shell.DismissSummaryTooltip()
 	if ui.ListBox == nil {
 		return
 	}
@@ -128,6 +112,9 @@ func DrawLogList(ui *shell.UI) {
 	for _, d := range days {
 		weekItems = append(weekItems, byDay[d]...)
 	}
+	if ui.ListSupportView != nil {
+		ui.ListSupportView.Set(shell.OnSupportRota(ui.Cfg, weekItems))
+	}
 
 	// Side by side, equal width: neither column is the footnote of the other.
 	columns := container.NewGridWithColumns(2,
@@ -136,16 +123,9 @@ func DrawLogList(ui *shell.UI) {
 	)
 
 	ui.ListBox.Objects = []fyne.CanvasObject{
-		weekProgressPanel(ui, days, byDay, weekItems),
-		listDaysPanel(ui, days, byDay),
-		shell.VGap(theme.InnerPadding()),
-		// Everything under the week is one menu, in a rounded panel like
-		// Settings.
-		shell.Panel(container.NewVBox(
-			shell.Hooks.WeekBoardsPanel(ui, from, to),
-			widget.NewSeparator(),
-			columns,
-		)),
+		container.NewBorder(
+			container.NewVBox(weekProgressPanel(ui, days, byDay, weekItems), listDaysPanel(ui, days, byDay), shell.Hooks.WeekBoardsPanel(ui, from, to)),
+			nil, nil, nil, columns),
 	}
 	ui.ListBox.Refresh()
 	shell.Relayout(ui.ListBody)
@@ -208,10 +188,15 @@ func listDayColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local [
 
 	name := fmt.Sprintf("%s %d", t.Format("Mon"), t.Day())
 	if ds == shell.Today() {
-		name += " · today"
+		name += " · Today"
 	}
-	head := widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
+	var head fyne.CanvasObject = widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
 		fyne.TextStyle{Bold: ds == shell.Today()})
+	if ds == shell.Today() {
+		// Today is outlined and titled in gold, as on Log Work and the
+		// Commit List.
+		head = container.NewThemeOverride(head, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	}
 
 	// Left of the line is what the day holds and what is queued for it; right of
 	// it is what the two come to together — the same split the strip uses, so a
@@ -237,9 +222,14 @@ func listDayColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local [
 		}
 	}
 
-	frame := canvas.NewRectangle(shell.DayFill(mins, waiting))
+	// Green once logged + drafts + support + plans reach the target, like Log
+	// Work and the Sprint Calendar; the captions still read logged and drafts.
+	frame := canvas.NewRectangle(ui.DayTotalFill(ds, items, local))
 	frame.StrokeColor = theme.Color(theme.ColorNameInputBorder)
 	frame.StrokeWidth = 1
+	if ds == shell.Today() {
+		frame.StrokeColor, frame.StrokeWidth = widgets.LogoGold, 2
+	}
 	frame.CornerRadius = shell.CellCornerRadius
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.SetMinSize(fyne.NewSize(0, listDayMinHeight))
@@ -327,8 +317,11 @@ func weekProgressPanel(ui *shell.UI, days []string, byDay map[string][]backend.W
 
 	summary := widget.NewLabelWithStyle(line, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
 	summary.Wrapping = fyne.TextWrapWord
-	return container.NewVBox(shell.Bold("This week"), summary,
-		ui.ProgressBar("week", strings.Join(days, ","), byOrg, draftByOrg, goal, 10))
+	normal := widget.NewLabel(normalWeekProgress(banked, waiting))
+	normal.Wrapping = fyne.TextWrapWord
+	bar := ui.ProgressBar("week", strings.Join(days, ","), byOrg, draftByOrg, goal, 10)
+	return container.NewVBox(shell.Bold("This week"), summary, normal,
+		normalWeekMarker(bar, max(goal, banked+waiting)))
 }
 
 // WeekGoal is what the week is measured against: the daily target for every day
@@ -359,6 +352,8 @@ type PendingIssue struct {
 	Commits int // unlogged commits waiting to be turned into an entry
 	Minutes int // saved locally against this issue and not pushed
 	Entries int
+	Rows    []backend.Row
+	Groups  []backend.Group
 }
 
 // pendingIssuesPanel is the right-hand column: what is still owed, per issue.
@@ -368,35 +363,26 @@ type PendingIssue struct {
 // Thursday that is the whole reason to look — the point of this column is that
 // nothing waiting can go unnoticed, which a filter would undo.
 func pendingIssuesPanel(ui *shell.UI) fyne.CanvasObject {
-	rows := []fyne.CanvasObject{shell.Bold("Pending — not on the board yet")}
-
+	const title = "Pending \u2014 not on the board yet"
 	pend := PendingByIssue(ui)
 	if len(pend) == 0 {
 		note := "Nothing waiting."
 		if !ui.PendingLoaded {
-			note = "Reading your commits from GitHub…"
+			note = "Reading your commits from GitHub\u2026"
 		}
-		rows = append(rows, widget.NewLabel(note))
-		return container.NewVBox(rows...)
+		return shell.IssueSummaryPanel(title, note, container.NewVBox())
 	}
-
 	commits, mins := 0, 0
+	cards := make([]fyne.CanvasObject, 0, len(pend))
 	for _, p := range pend {
 		commits += p.Commits
 		mins += p.Minutes
+		card := shell.IssueSummaryCard(ui.Cfg, p.Issue, p.Title, PendingAmount(p), func() {
+			shell.Hooks.OpenPendingIssue(ui, p.Rows, p.Groups)
+		})
+		cards = append(cards, card)
 	}
-	rows = append(rows, widget.NewLabelWithStyle(pendingTotalLine(commits, mins, len(pend)),
-		fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
-
-	for _, p := range pend {
-		// The amount reads in whatever unit that issue actually has: minutes
-		// once an entry has been written, a commit count while it has not.
-		amount := widget.NewLabelWithStyle(PendingAmount(p),
-			fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})
-		name := issueLink(ui, p.Issue, p.Title)
-		rows = append(rows, container.New(widgets.NewRatioRow(0.28, 0.72), amount, name))
-	}
-	return container.NewVBox(rows...)
+	return shell.IssueSummaryPanel(title, pendingTotalLine(commits, mins, len(pend)), shell.IssueSummaryGrid(cards...))
 }
 
 func pendingTotalLine(commits, mins, issues int) string {
@@ -450,10 +436,14 @@ func PendingByIssue(ui *shell.UI) []PendingIssue {
 			issue := strings.TrimSpace(r["issue"])
 			if issue == "" {
 				issue = ui.UnfiledLabel(r)
+				if issue == "(no issue ref)" {
+					issue = backend.OrDefault(r["description"], backend.OrDefault(r["type"], "Saved work")) + " · " + r["date"]
+				}
 			}
 			p := get(issue)
 			p.Minutes += r.Minutes()
 			p.Entries++
+			p.Rows = append(p.Rows, r)
 		}
 	}
 
@@ -463,9 +453,14 @@ func PendingByIssue(ui *shell.UI) []PendingIssue {
 		}
 		issue := strings.TrimSpace(g.Issue)
 		if issue == "" {
-			issue = "(no issue ref)"
+			issue = "Unfiled commits · " + g.Date
+			if len(g.Commits) > 0 {
+				issue = backend.CommitSubject(g.Commits[0]) + " · " + g.Date
+			}
 		}
-		get(issue).Commits += len(g.Commits)
+		p := get(issue)
+		p.Commits += len(g.Commits)
+		p.Groups = append(p.Groups, g)
 	}
 
 	out := make([]PendingIssue, 0, len(byIssue))

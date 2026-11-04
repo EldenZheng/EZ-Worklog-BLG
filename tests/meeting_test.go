@@ -1,9 +1,11 @@
 package tests
 
 import (
+	"fmt"
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 
@@ -11,6 +13,46 @@ import (
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 )
+
+func TestMeetingLoggedOverflowUsesFullSidebarWidth(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("t")
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: w, MeetingStart: "2026-08-20", Cfg: backend.Config{Repos: []string{"exampleorg"}}}
+	var rows []backend.Row
+	for i := 1; i <= 25; i++ {
+		rows = append(rows, backend.Row{"date": "2026-08-26", "minutes": "60", "issue": fmt.Sprintf("exampleorg/repo#%d", i)})
+	}
+	if _, err := ui.Store.AppendRows(rows); err != nil {
+		t.Fatal(err)
+	}
+	w.SetContent(meeting.BuildMeetingTab(ui))
+	w.Resize(fyne.NewSize(1500, 900))
+	meeting.DrawMeeting(ui)
+	var scroll *container.Scroll
+	var card *shell.Tappable
+	walk(ui.MeetingRowsHolder, func(o fyne.CanvasObject) {
+		if s, ok := o.(*container.Scroll); ok {
+			scroll = s
+		}
+		if c, ok := o.(*shell.Tappable); ok && card == nil {
+			card = c
+		}
+	})
+	if scroll == nil || card == nil {
+		t.Fatal("logged issue list missing")
+	}
+	if scroll.Size().Width != ui.MeetingRowsHolder.Size().Width {
+		t.Fatal("padding narrowed the sidebar scroll viewport")
+	}
+	if a.Driver().AbsolutePositionForObject(card).X != a.Driver().AbsolutePositionForObject(scroll).X {
+		t.Fatal("cards have an extra scroll inset")
+	}
+	scroll.ScrollToBottom()
+	if scroll.Offset.Y <= 0 {
+		t.Fatal("logged issues should scroll when they overflow")
+	}
+}
 
 func TestMeetingIssueLabelOmitsOrgOnlyForMeeting(t *testing.T) {
 	issue := "exampleorg/sample-intranet#42"
@@ -36,7 +78,7 @@ func TestMeetingIssueLabelOmitsOrgOnlyForMeeting(t *testing.T) {
 	}
 }
 
-func TestMeetingSidebarIsFixedAtTenPercent(t *testing.T) {
+func TestMeetingSidebarIsFixedAt15Percent(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
@@ -58,14 +100,14 @@ func TestMeetingSidebarIsFixedAtTenPercent(t *testing.T) {
 
 	columns.Resize(fyne.NewSize(1000, 600))
 	// The calendar stops a gap short of the sidebar so the two panels never touch.
-	if got, want := ui.MeetingCalendarHolder.Size().Width, 900-theme.InnerPadding(); got != want {
+	if got, want := ui.MeetingCalendarHolder.Size().Width, 850-theme.InnerPadding(); got != want {
 		t.Fatalf("calendar width = %g, want %g", got, want)
 	}
-	if got := ui.MeetingRowsHolder.Size().Width; got != 100 {
-		t.Fatalf("sidebar width = %g, want 100", got)
+	if got := ui.MeetingRowsHolder.Size().Width; got != 150 {
+		t.Fatalf("sidebar width = %g, want 150", got)
 	}
-	if got := ui.MeetingRowsHolder.Position().X; got != 900 {
-		t.Fatalf("sidebar x = %g, want 900", got)
+	if got := ui.MeetingRowsHolder.Position().X; got != 850 {
+		t.Fatalf("sidebar x = %g, want 850", got)
 	}
 	if !contains(labels(ui.MeetingRowsHolder), "Logged this week") {
 		t.Fatal("fixed sidebar should always show Logged this week")

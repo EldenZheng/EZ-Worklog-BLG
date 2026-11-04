@@ -3,9 +3,7 @@ package logwork
 import (
 	"fmt"
 	"image/color"
-	"net/url"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -221,84 +219,69 @@ func DrawWeekStrip(ui *shell.UI) {
 	shell.Hooks.DrawLogList(ui)
 }
 
-// WeekBoardsPanel is the two saved board views, filtered to the shown week.
-//
-// Each one is a link to click and a button to copy, because those are two
-// different jobs: opening it here to check the week, and pasting the URL into a
-// mail. A hyperlink alone can only do the first — the text it shows is a label,
-// not the address, so there is nothing to select.
+// WeekBoardsPanel keeps the week's links in a gold bubble at the foot of Log List.
 func WeekBoardsPanel(ui *shell.UI, from, to string) fyne.CanvasObject {
-	rows := []fyne.CanvasObject{shell.Bold("Boards for this week")}
-	for _, raw := range backend.WeekBoardLinks(ui.Cfg, ui.Cfg.WorklogOwner, from, to) {
-		raw := raw
-		var open fyne.CanvasObject = widget.NewLabel(raw)
-		if u, err := url.Parse(raw); err == nil {
-			link := widget.NewHyperlink(backend.BoardLinkLabel(raw), u)
-			link.Truncation = fyne.TextTruncateEllipsis
-			open = link
-		}
-		var copyBtn *widget.Button
-		copyBtn = widget.NewButtonWithIcon("Copy link", theme.ContentCopyIcon(), func() {
-			fyne.CurrentApp().Clipboard().SetContent(raw)
-			// The clipboard gives no sign it took anything, so the button says
-			// so itself and puts its own label back.
-			copyBtn.SetText("Copied")
-			time.AfterFunc(backend.CopiedFlash, func() {
-				fyne.Do(func() { copyBtn.SetText("Copy link") })
+	links := backend.WeekBoardLinks(ui.Cfg, ui.Cfg.WorklogOwner, from, to)
+	copyAll := shell.NewHoverButton("Copy all", theme.ContentCopyIcon(), nil)
+	copyAll.OnTapped = func() {
+		app := fyne.CurrentApp()
+		app.Clipboard().SetContent(backend.WeekBoardMailText(ui.Cfg, ui.Cfg.WorklogOwner, from, to))
+		copyAll.SetText("Copied")
+		time.AfterFunc(backend.CopiedFlash, func() {
+			if fyne.CurrentApp() != app {
+				return
+			}
+			fyne.Do(func() {
+				if fyne.CurrentApp() == app {
+					copyAll.SetText("Copy all")
+				}
 			})
 		})
-		copyBtn.Importance = widget.LowImportance
-		rows = append(rows, container.NewBorder(nil, nil, nil, copyBtn, open))
 	}
-	return container.NewVBox(rows...)
+	rows := container.NewVBox()
+	for _, raw := range links {
+		raw := raw
+		open := shell.NewHoverLink(backend.BoardLinkLabel(raw), raw)
+		if link, ok := open.(*shell.HoverLink); ok {
+			link.Truncation = fyne.TextTruncateEllipsis
+		}
+		copyBtn := shell.NewHoverButton("", theme.ContentCopyIcon(), func() {
+			fyne.CurrentApp().Clipboard().SetContent(raw)
+		})
+		shell.QuietButton(&copyBtn.Button)
+		rows.Add(container.NewBorder(nil, nil, nil, copyBtn, open))
+	}
+	if len(links) == 0 {
+		rows.Add(widget.NewLabel("Set board view URLs in Settings."))
+	}
+	return shell.GoldSection("Boards for this week", copyAll, rows)
 }
 
-// WeekIssuesPanel is what the week was spent on: one line per issue, its
-// minutes, and a link to it. This is the list the weekly mail is written from,
-// so it is worth being able to read it without exporting anything.
+// WeekIssuesPanel keeps its gold heading fixed above a compact bubble grid.
 func WeekIssuesPanel(ui *shell.UI, items []backend.WorklogItem, state string) fyne.CanvasObject {
-	head := shell.Bold("By issue")
+	empty := container.NewVBox()
+	copySummary := copySummaryButton(ui, items, state)
 	switch state {
 	case "loading":
-		return container.NewVBox(head, widget.NewLabel("Reading the week from GitHub…"))
+		return shell.IssueSummaryPanel("By Issue", "Reading the week from GitHub\u2026", empty, copySummary)
 	case "off":
-		return container.NewVBox(head,
-			widget.NewLabel("Set a project URL in Settings to see the week by issue."))
+		return shell.IssueSummaryPanel("By Issue", "Set a project URL in Settings to see the week by issue.", empty, copySummary)
 	case "error":
-		return container.NewVBox(head,
-			shell.ColorLabel("Could not read the GitHub project.", theme.ColorNameError))
+		return shell.IssueSummaryPanel("By Issue", "Could not read the GitHub project.", empty, copySummary)
 	}
-
 	totals := backend.WeekByIssue(items)
-	total := backend.WeekTotalMinutes(totals)
-	rows := []fyne.CanvasObject{
-		container.NewHBox(head, widget.NewLabelWithStyle(
-			fmt.Sprintf("%d min · %s across %d issues", total, backend.HoursMins(total), len(totals)),
-			fyne.TextAlignLeading, fyne.TextStyle{Italic: true})),
-	}
+	summary := fmt.Sprintf("%d min \u00b7 %s across %d issues", backend.WeekTotalMinutes(totals), backend.HoursMins(backend.WeekTotalMinutes(totals)), len(totals))
 	if len(totals) == 0 {
-		rows = append(rows, widget.NewLabel("Nothing on the board for this week."))
+		summary = "Nothing on the board for this week."
 	}
+	cards := make([]fyne.CanvasObject, 0, len(totals))
 	for _, t := range totals {
-		// The minutes are read down a column, so they get their own cell in a
-		// fixed-width font rather than being run into the title.
-		mins := widget.NewLabelWithStyle(strconv.Itoa(t.Minutes)+"m",
-			fyne.TextAlignTrailing, fyne.TextStyle{Monospace: true})
-		var name fyne.CanvasObject = widget.NewLabel(t.Title)
-		if t.URL != "" {
-			if u, err := url.Parse(t.URL); err == nil {
-				link := widget.NewHyperlink(t.Title, u)
-				link.Truncation = fyne.TextTruncateEllipsis
-				name = link
-			}
-		}
-		rows = append(rows, container.New(widgets.NewRatioRow(0.10, 0.90), mins, name))
+		cards = append(cards, shell.IssueSummaryCard(ui.Cfg, t.URL, t.Title, fmt.Sprintf("%dm", t.Minutes)))
 	}
-	return container.NewVBox(rows...)
+	return shell.IssueSummaryPanel("By Issue", summary, shell.IssueSummaryGrid(cards...), copySummary)
 }
 
-// ExportWeekForEmail writes the shown week's TSV and puts the mail text on the
-// clipboard, then says what it did.
+// ExportWeekForEmail saves the shown week as TSV without changing the clipboard.
 //
 // Board items only, deliberately: the mail carries links to those boards, and a
 // figure in the file that the CEO cannot find on the board it links to is worse
@@ -326,19 +309,16 @@ func ExportWeekForEmail(ui *shell.UI, days []string, byDay map[string][]backend.
 	for _, d := range days {
 		items = append(items, byDay[d]...)
 	}
-	path, n, mailText, err := backend.ExportWeek(
+	path, n, _, err := backend.ExportWeek(
 		ui.Cfg, backend.DownloadsDir(shell.DataDir()), ui.Cfg.WorklogOwner, from, to, items)
 	if err != nil {
 		ui.Errf(err)
 		return
 	}
-	fyne.CurrentApp().Clipboard().SetContent(mailText)
 
 	// Short, because the week itself is already on the tab behind this. All the
 	// dialog has to say is where the file went and what was left out of it.
-	msg := fmt.Sprintf(
-		"Boards and the summary are on the clipboard — paste them into the mail.\n\n"+
-			"%d entries saved to:\n%s", n, path)
+	msg := fmt.Sprintf("%d entries saved to:\n%s", n, path)
 	if waiting := ui.DraftMinutesByDay(from, to); len(waiting) > 0 {
 		mins := 0
 		for _, m := range waiting {
@@ -671,8 +651,9 @@ func (t *DragTile) DragEnd() {
 	moveRowToDay(t.ui, t.Row, day)
 }
 
-// weekSupportControl is the "+180 min weekday support" checkbox, "Support
-// Week" in gold when the rota puts the user on support that week. It is built
+// weekSupportControl is the "+180 min weekday support" checkbox, swapped for a
+// bold gold "Support Week" when the rota puts the user on support that week
+// (the +180 then goes on by itself, so there is nothing to tick). It is built
 // once and kept, like Log Work's other checkboxes, and only re-synced to the
 // week on each redraw. A fresh checkbox per redraw drew fine but never got the
 // mouse, so it could not be ticked.
@@ -681,23 +662,18 @@ func (t *DragTile) DragEnd() {
 // its own week (support-weeks.json) until that week's Friday passes.
 func weekSupportControl(ui *shell.UI, rota bool) fyne.CanvasObject {
 	on := shell.Hooks.SupportOn(ui, ui.WeekStart)
-	ui.WeekSupportRota = rota
 	if ui.WeekSupport == nil {
-		ui.WeekSupport = widget.NewCheck(shell.SupportCheckText(rota), nil)
+		ui.WeekSupport = widget.NewCheck(shell.SupportCheckText(false), nil)
 		// Seeded before the handler is attached: SetChecked fires OnChanged.
 		ui.WeekSupport.SetChecked(on)
 		ui.WeekSupport.OnChanged = func(on bool) {
 			shell.Hooks.SetSupport(ui, on, ui.WeekStart)
 			DrawWeekStrip(ui)
 		}
-		ui.WeekSupportView = shell.SupportChoice(ui.WeekSupport, &ui.WeekSupportRota)
-		return ui.WeekSupportView
+		ui.WeekSupportView = shell.SupportChoice(ui.WeekSupport, rota)
+		return ui.WeekSupportView.View
 	}
-	if text := shell.SupportCheckText(rota); ui.WeekSupport.Text != text {
-		ui.WeekSupport.SetText(text)
-	} else {
-		ui.WeekSupport.Refresh() // the label's colour follows the rota
-	}
+	ui.WeekSupportView.Set(rota)
 	if ui.WeekSupport.Checked != on {
 		// Re-sync quietly: walking to another week must not tick or untick it.
 		changed := ui.WeekSupport.OnChanged
@@ -705,7 +681,7 @@ func weekSupportControl(ui *shell.UI, rota bool) fyne.CanvasObject {
 		ui.WeekSupport.SetChecked(on)
 		ui.WeekSupport.OnChanged = changed
 	}
-	return ui.WeekSupportView
+	return ui.WeekSupportView.View
 }
 
 // dayEdge is a day's outline at rest: today edged in gold, as on the Sprint

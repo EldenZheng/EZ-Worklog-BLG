@@ -343,11 +343,15 @@ func DrawDayPanel(ui *shell.UI) {
 	ui.DayPanel.Objects = []fyne.CanvasObject{container.NewVBox(body...)}
 	ui.DayPanel.Refresh()
 	// A day's detail can run past the panel, so it gets the scroll the prompt
-	// does not want.
+	// does not want, at three times the wheel's usual step: a busy day is
+	// long and the default crawled through it.
 	ui.DaySwap.Objects = []fyne.CanvasObject{
-		shell.NoScrollShadow(shell.PanelScroll(ui.DayPanel, false))}
+		shell.NoScrollShadow(shell.FastPanelScroll(ui.DayPanel, false, statusPanelScrollBoost))}
 	ui.DaySwap.Refresh()
 }
+
+// statusPanelScrollBoost is how much faster the wheel moves the day panel.
+const statusPanelScrollBoost = 3
 
 // dayPanelHint is what the side panel shows with no day picked: centred, so an
 // empty panel reads as waiting rather than as a heading with nothing under it.

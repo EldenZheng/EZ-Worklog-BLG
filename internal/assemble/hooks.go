@@ -22,6 +22,7 @@ func WireHooks() {
 	shell.Hooks.DrawRecent = logwork.DrawRecent
 	shell.Hooks.DrawReport = report.DrawReport
 	shell.Hooks.DrawWeekStrip = logwork.DrawWeekStrip
+	shell.Hooks.OpenPendingIssue = logwork.OpenPendingIssue
 	shell.Hooks.DropLoggedSupportWeek = sprintcalendar.DropLoggedSupportWeek
 	shell.Hooks.ExportWeekForEmail = logwork.ExportWeekForEmail
 	shell.Hooks.KanbanUIBubbleContents = kanban.BubbleContents

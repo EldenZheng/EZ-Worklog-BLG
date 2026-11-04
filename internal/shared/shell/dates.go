@@ -83,14 +83,16 @@ func SupportCheckText(rota bool) string {
 }
 
 // SupportPlaceholderFor is the minutes to pencil onto one day: a weekday shift
-// where the placeholder is switched on and the board does not already hold one.
+// where the placeholder is switched on, or the rota has put an empty slot on
+// the day (the user's support week, which needs no ticking), and the board
+// does not already hold a logged one.
 //
 // Nothing is written anywhere. It is a sketch of a rota that has been worked but
 // not yet logged, so the week can be read as it will stand rather than as it
 // stands before a known piece of work goes on — and switching it off, or walking
 // to another week, takes it straight back off again.
 func SupportPlaceholderFor(cfg backend.Config, on bool, ds string, items []backend.WorklogItem) int {
-	if !on {
+	if !on && !OnSupportRota(cfg, items) {
 		return 0
 	}
 	t, err := time.Parse("2006-01-02", ds)

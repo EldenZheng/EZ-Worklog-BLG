@@ -102,12 +102,13 @@ type UI struct {
 	ShowPushed *widget.Check
 	DraftSort  string // Duration or Created (earliest first)
 
-	CalTitle    *widget.Label
-	CalSummary  *widget.Label
-	RepTitle    *widget.Label
-	ListTitle   *widget.Label
-	ListHere    *widget.Button // "This week" on Log List, greyed when already there
-	ListSupport *widget.Check  // mirror of the Log Work support checkbox, kept in sync
+	CalTitle        *widget.Label
+	CalSummary      *widget.Label
+	RepTitle        *widget.Label
+	ListTitle       *widget.Label
+	ListHere        *widget.Button // "This week" on Log List, greyed when already there
+	ListSupport     *widget.Check  // mirror of the Log Work support checkbox, kept in sync
+	ListSupportView *SupportView
 
 	CommitTitle *widget.Label
 	CommitHere  *widget.Button // "This week" on Commit List
@@ -181,12 +182,10 @@ type UI struct {
 	// passed or its weekdays all hold logged support. Never pushed anywhere.
 	SupportWeeks map[string]bool
 	// WeekSupport is Log Work's support checkbox, kept across redraws, and
-	// WeekSupportView the gold wrapper it is shown in.
+	// WeekSupportView what shows it: the checkbox, or a gold "Support Week" in
+	// its place while the week shown is the user's support week.
 	WeekSupport     *widget.Check
-	WeekSupportView fyne.CanvasObject
-	// WeekSupportRota is set while the week shown is the user's support week,
-	// which turns the checkbox into a gold "Support Week".
-	WeekSupportRota bool
+	WeekSupportView *SupportView
 
 	// Organisations tapped out of the colour key, lowercased. One filter for the
 	// whole app rather than one per tab: hiding an employer is a decision about

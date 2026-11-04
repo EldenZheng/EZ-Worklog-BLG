@@ -14,6 +14,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
+	"worklog/internal/shared/widgets"
 )
 
 // CommitWeekSummary is the line above the day grid: how many commits landed and
@@ -64,9 +65,15 @@ func (ui *UI) commitDayColumn(ds string, commits []backend.Commit,
 	if n := len(commits); n > 0 {
 		name += fmt.Sprintf(" · %d commit%s", n, Plural(n))
 	}
-	head := widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
+	label := widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
 		fyne.TextStyle{Bold: ds == Today()})
-	head.Truncation = fyne.TextTruncateEllipsis
+	label.Truncation = fyne.TextTruncateEllipsis
+	var head fyne.CanvasObject = label
+	if ds == Today() {
+		// Today is outlined and titled in gold, like Log Work's day cards and
+		// the Sprint Calendar.
+		head = container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	}
 
 	inner := container.NewVBox()
 	if len(commits) == 0 {
@@ -82,6 +89,9 @@ func (ui *UI) commitDayColumn(ds string, commits []backend.Commit,
 	frame := canvas.NewRectangle(color.Transparent)
 	frame.StrokeColor = theme.Color(theme.ColorNameInputBorder)
 	frame.StrokeWidth = 1
+	if ds == Today() {
+		frame.StrokeColor, frame.StrokeWidth = widgets.LogoGold, 2
+	}
 	frame.CornerRadius = CellCornerRadius
 
 	body := container.NewBorder(head, nil, nil, nil, scroll)

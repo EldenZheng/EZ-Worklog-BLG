@@ -23,6 +23,8 @@ func labels(o fyne.CanvasObject) []string {
 	switch v := o.(type) {
 	case *widget.Label:
 		out = append(out, v.Text)
+	case *shell.SummaryTitle:
+		out = append(out, v.Text)
 	case *widget.Hyperlink:
 		out = append(out, v.Text)
 	case *shell.HoverLink:
@@ -64,6 +66,8 @@ func labels(o fyne.CanvasObject) []string {
 			out = append(out, labels(c)...)
 		}
 	case *container.Scroll:
+		out = append(out, labels(v.Content)...)
+	case *shell.PlannerFastScroll:
 		out = append(out, labels(v.Content)...)
 	case *container.ThemeOverride:
 		out = append(out, labels(v.Content)...)

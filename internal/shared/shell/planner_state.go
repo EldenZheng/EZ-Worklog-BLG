@@ -292,14 +292,36 @@ func RestoreScroll(o fyne.CanvasObject, offset fyne.Position) {
 	}
 }
 
-// Only Month mode boosts wheel/trackpad movement. Scrollbar dragging remains
-// native, and the rest of the app keeps its normal speed.
-type PlannerFastScroll struct{ container.Scroll }
+// PlannerFastScroll boosts wheel/trackpad movement: Boost times the usual
+// step (6 when left zero, the calendar's Month mode). Scrollbar dragging
+// remains native, and the rest of the app keeps its normal speed.
+type PlannerFastScroll struct {
+	container.Scroll
+	Boost float32
+}
 
 func (s *PlannerFastScroll) Scrolled(e *fyne.ScrollEvent) {
 	boosted := *e
-	boosted.Scrolled.DY *= 6
+	boosted.Scrolled.DY *= s.WheelSpeed()
 	s.Scroll.Scrolled(&boosted)
+}
+
+// WheelSpeed marks an explicitly boosted scroll for the native wheel handler,
+// so the app-wide default speed does not multiply it a second time.
+func (s *PlannerFastScroll) WheelSpeed() float32 {
+	boost := s.Boost
+	if boost == 0 {
+		boost = 6
+	}
+	return boost
+}
+
+// FastPanelScroll is PanelScroll with the wheel moving boost times as far.
+func FastPanelScroll(content fyne.CanvasObject, tight bool, boost float32) *PlannerFastScroll {
+	s := &PlannerFastScroll{Scroll: container.Scroll{Direction: container.ScrollVerticalOnly,
+		Content: PanelScroll(content, tight).Content}, Boost: boost}
+	s.ExtendBaseWidget(s)
+	return s
 }
 
 var PlannerPlanColor = color.NRGBA{R: 151, G: 112, B: 207, A: 255}

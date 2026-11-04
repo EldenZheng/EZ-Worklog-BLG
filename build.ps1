@@ -122,6 +122,9 @@ func (c *$($control.Type)) Cursor() desktop.Cursor {
         go test -modfile $buildMod -tags cursors ./...
         if ($LASTEXITCODE -ne 0) { throw 'Tests failed' }
     }
+    # Linking over the old exe in place left it cut short (1.4 MB of 27) and
+    # the app would not open, so start from no file.
+    if (Test-Path -LiteralPath $Output) { Remove-Item -LiteralPath $Output -Force }
     go build -modfile $buildMod -ldflags "-H windowsgui -s -w -X worklog/internal/shared/backend.Version=$version" -o $Output .
     if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
     if ($Release) {

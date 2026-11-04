@@ -17,6 +17,7 @@ var Hooks struct {
 	DrawRecent                        func(*UI)
 	DrawReport                        func(*UI)
 	DrawWeekStrip                     func(*UI)
+	OpenPendingIssue                  func(*UI, []backend.Row, []backend.Group)
 	DropLoggedSupportWeek             func(*UI, string, map[string][]backend.WorklogItem, string)
 	ExportWeekForEmail                func(*UI, []string, map[string][]backend.WorklogItem, string)
 	KanbanUIBubbleContents            func(*KanbanUI, fyne.CanvasObject, fyne.CanvasObject, string) fyne.CanvasObject

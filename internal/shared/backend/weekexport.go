@@ -205,6 +205,17 @@ func WeekMailText(cfg Config, owner, fromDate, toDate string, items []WorklogIte
 	return b.String()
 }
 
+// WeekBoardMailText copies only the introduction and the selected week's board
+// links. Exporting the TSV is a separate action and leaves the clipboard alone.
+func WeekBoardMailText(cfg Config, owner, fromDate, toDate string) string {
+	var b strings.Builder
+	b.WriteString("I have attached the worklog combined for last week in this email\nhere is the github project link:")
+	for _, link := range WeekBoardLinks(cfg, owner, fromDate, toDate) {
+		b.WriteString("\n- " + link)
+	}
+	return b.String()
+}
+
 func WeekTotalMinutes(totals []issueTotal) int {
 	total := 0
 	for _, t := range totals {

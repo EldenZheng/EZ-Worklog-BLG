@@ -225,6 +225,7 @@ func (t *pillTabs) SelectIndex(index int) {
 	if index < 0 || index >= len(t.Items) || index == t.current || t.Items[index].Disabled() {
 		return
 	}
+	DismissSummaryTooltip()
 	if old := t.Selected(); old != nil {
 		old.Content.Hide()
 	}

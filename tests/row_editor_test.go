@@ -46,6 +46,8 @@ func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 		}
 	case *container.Scroll:
 		walk(v.Content, fn)
+	case *shell.PlannerFastScroll:
+		walk(v.Content, fn)
 	case *container.ThemeOverride:
 		walk(v.Content, fn)
 	case *report.DayChart:

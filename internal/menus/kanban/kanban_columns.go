@@ -49,9 +49,12 @@ func KanbanHeaderFill(name string) color.Color {
 	return shell.BlendColor(theme.Color(theme.ColorNameInputBackground), KanbanStatusColor(name), 0.30)
 }
 
-// KanbanHeaderHover is the capsule while the pointer is in its column.
+// KanbanHeaderHover is the capsule while the pointer is in its column: more of
+// the status hue, lifted a touch toward white so even the dark hues (navy, plum)
+// visibly brighten.
 func KanbanHeaderHover(name string) color.Color {
-	return shell.BlendColor(theme.Color(theme.ColorNameInputBackground), KanbanStatusColor(name), 0.48)
+	hue := shell.BlendColor(theme.Color(theme.ColorNameInputBackground), KanbanStatusColor(name), 0.56)
+	return shell.BlendColor(hue, color.White, 0.08)
 }
 
 func KanbanColumnBorder(name string) color.Color {

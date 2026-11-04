@@ -19,6 +19,10 @@ import (
 
 const wheelGlide = 160 * time.Millisecond
 
+// Match Status's day sidebar throughout the app. Explicitly boosted scrollers
+// retain their own speed (including Sprint Calendar's faster month view).
+const defaultWheelBoost = 3
+
 type wheelReach interface {
 	CanScrollBy(dx, dy float32) bool
 }
@@ -33,6 +37,11 @@ var wheel struct {
 }
 
 func (w *window) processMouseScrolled(xoff float64, yoff float64) {
+	// Hover previews must not capture the wheel. Remove them before hit testing
+	// so this very event reaches the real scroller under the pointer.
+	if preview, ok := w.canvas.Overlays().Top().(interface{ DismissForScroll() }); ok {
+		preview.DismissForScroll()
+	}
 	if math.Abs(xoff) >= scrollAccelerateCutoff {
 		xoff *= scrollAccelerateRate
 	}
@@ -66,6 +75,10 @@ func (w *window) processMouseScrolled(xoff float64, yoff float64) {
 	_, pos, _ := w.findObjectAtPositionMatching(w.canvas, mousePos, func(object fyne.CanvasObject) bool {
 		return object == target
 	})
+	if _, custom := target.(interface{ WheelSpeed() float32 }); !custom {
+		dx *= defaultWheelBoost
+		dy *= defaultWheelBoost
+	}
 	glideWheel(target.(fyne.Scrollable), pos, mousePos, dx, dy)
 }
 

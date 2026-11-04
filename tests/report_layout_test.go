@@ -46,9 +46,34 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 		})
 	}
 	ui.ProjLoaded[key] = true
+	w.Resize(fyne.NewSize(1500, 1000))
 	report.DrawReport(ui)
 
-	top, ok := ui.RepBox.Objects[0].(*fyne.Container)
+	var bottomScroll *container.Scroll
+	var topArea *fyne.Container
+	walk(ui.RepBox, func(o fyne.CanvasObject) {
+		if s, ok := o.(*container.Scroll); ok && contains(labels(s.Content), "Time logged") {
+			bottomScroll = s
+		}
+		if c, ok := o.(*fyne.Container); ok && len(c.Objects) == 3 && contains(labels(c.Objects[0]), "Payable") && contains(labels(c.Objects[2]), "By organisation") {
+			topArea = c
+		}
+	})
+	if topArea == nil || bottomScroll == nil {
+		t.Fatal("report should keep money/chart/legend above the scrolling lower report")
+	}
+	if bottomScroll.Size().Height <= 0 {
+		t.Fatal("fixed report header left no room for the lower scroll area")
+	}
+	before := a.Driver().AbsolutePositionForObject(topArea)
+	bottomScroll.ScrollToBottom()
+	if a.Driver().AbsolutePositionForObject(topArea) != before {
+		t.Fatal("scrolling report details moved the top report")
+	}
+	if !contains(labels(bottomScroll.Content), "Full remaining cycle") || !contains(labels(bottomScroll.Content), "Full weekdays only") {
+		t.Fatal("payment breakdown should contain both remaining-cycle projections")
+	}
+	top, ok := topArea.Objects[0].(*fyne.Container)
 	if !ok || len(top.Objects) != 3 {
 		t.Fatalf("top row should contain the three money cards, got %T", ui.RepBox.Objects[0])
 	}
@@ -121,10 +146,10 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 	if got := labels(top); contains(got, "Time logged") || contains(got, "Saved here, not pushed") {
 		t.Fatalf("time cards should no longer be above the chart: %v", got)
 	}
-	if got := labels(ui.RepBox.Objects[2]); !contains(got, "By organisation") {
+	if got := labels(topArea.Objects[2]); !contains(got, "By organisation") {
 		t.Fatalf("the organisation legend should immediately follow the chart: %v", got)
 	}
-	if got := labels(ui.RepBox.Objects[3]); !contains(got, "Time logged") ||
+	if got := labels(bottomScroll.Content); !contains(got, "Time logged") ||
 		!contains(got, "÷ 8h = 1.25 days") || !contains(got, "Saved here, not pushed") ||
 		!contains(got, "÷ 8h = 0.50 days") {
 		t.Fatalf("time cards should sit below the legend with 8-hour day equivalents: %v", got)

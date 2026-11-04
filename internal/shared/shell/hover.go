@@ -244,6 +244,7 @@ func elideToWidth(s string, width, size float32, style fyne.TextStyle) string {
 type StripeBubble struct {
 	widget.BaseWidget
 	Body    fyne.CanvasObject
+	Compact bool // summary bubbles use less inset than editable worklog cards
 	accent  color.Color
 	bg      *canvas.Rectangle
 	stripe  *canvas.Rectangle
@@ -376,6 +377,8 @@ func AttachHoverChildren(obj fyne.CanvasObject, hover func(on bool)) {
 		AttachHoverChildren(o.Content, hover)
 	case *container.Scroll:
 		AttachHoverChildren(o.Content, hover)
+	case *PlannerFastScroll:
+		AttachHoverChildren(o.Content, hover)
 	case *Wipe:
 		AttachHoverChildren(o.Content, hover)
 	case *SprintDragCard:
@@ -501,6 +504,9 @@ type stripeBubbleRenderer struct{ b *StripeBubble }
 
 func (r *stripeBubbleRenderer) insets() (left, top, right float32) {
 	pad := theme.Padding()
+	if r.b.Compact {
+		return 2*pad + stripeWidth, pad, pad
+	}
 	return 3*pad + stripeWidth, 2 * pad, 2 * pad
 }
 
