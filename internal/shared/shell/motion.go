@@ -34,7 +34,18 @@ func NewCardTappable(content fyne.CanvasObject, onTap func()) *Tappable {
 	return t
 }
 
+// NewBubbleTappable is a clickable StripeBubble: the shared card look, lit
+// under the pointer, with links and buttons inside it keeping it lit.
+func NewBubbleTappable(bubble *StripeBubble, onTap func()) *Tappable {
+	t := NewTappable(bubble, onTap)
+	t.Bubble = bubble
+	return t
+}
+
 func (t *Tappable) MouseIn(*desktop.MouseEvent) {
+	if t.Bubble != nil {
+		t.Bubble.SetHover(true)
+	}
 	if t.Feedback != nil {
 		t.Feedback.hovered = true
 		t.Feedback.fade(0.24)
@@ -44,6 +55,9 @@ func (t *Tappable) MouseIn(*desktop.MouseEvent) {
 func (t *Tappable) MouseMoved(*desktop.MouseEvent) {}
 
 func (t *Tappable) MouseOut() {
+	if t.Bubble != nil {
+		t.Bubble.SetHover(false)
+	}
 	if t.Feedback != nil {
 		t.Feedback.hovered = false
 		t.Feedback.fade(0)

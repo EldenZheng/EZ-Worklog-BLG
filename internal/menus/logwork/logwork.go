@@ -628,7 +628,10 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	formReflow = reflow(logCard)
 	savedHead, savedArea := shell.CollapsibleTitle("Saved locally", savedList, false, nil,
 		func(final bool) { reflow(recentCard)(final) })
-	recentCard = container.NewVBox(savedHead, shell.PanelDivider(), savedArea,
+	// Room above and below the title, so it reads as a heading between the
+	// form's panel and its divider rather than squeezed between them.
+	savedHeadRoom := container.New(layout.NewCustomPaddedLayout(gap, gap, 0, 0), savedHead)
+	recentCard = container.NewVBox(savedHeadRoom, shell.PanelDivider(), savedArea,
 		container.New(layout.NewCustomPaddedLayout(gap, 0, gap, gap), ui.WeekBox),
 		ui.LogLegend)
 
@@ -990,7 +993,7 @@ func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasOb
 	if g.Ignored {
 		action = "Restore"
 	}
-	skip := widget.NewButton(action, func() { SetIgnored(ui, g, !g.Ignored) })
+	skip := shell.NewHoverButton(action, nil, func() { SetIgnored(ui, g, !g.Ignored) })
 	skip.Importance = widget.LowImportance
 	// The title gets the full width. The secondary action has its own short
 	// row so it cannot squeeze every line of a long title into a narrow column.
@@ -998,26 +1001,14 @@ func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasOb
 	alignedFooter := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), footer)
 	body := container.NewBorder(nil, container.NewVBox(alignedFooter, actionRow), nil, nil, titleLbl)
 
-	// A plain Card is near-invisible on the dark theme — dark text on a dark
-	// surface against a dark window. Tint the surface towards the org's colour
-	// and give it a matching stripe, so each tile reads as its own tappable
-	// thing and says which organisation it belongs to without a word.
+	// The card look every worklog bubble shares, the week strip's included: a
+	// dark org tint at rest that lightens under the pointer, the org bar
+	// sliding in down the left. It still says which organisation the tile
+	// belongs to without a word. No inset here: flowGrid puts real space
+	// between cells, so the tile fills the one it is given.
 	accent := shell.OrgColor(ui.Cfg, shell.OrgOf(g.Issue))
-	bg := canvas.NewRectangle(shell.BlendColor(
-		theme.Color(theme.ColorNameInputBackground), accent, 0.16))
-	bg.StrokeColor = shell.BlendColor(theme.Color(theme.ColorNameInputBorder), accent, 0.5)
-	bg.StrokeWidth = 1
-	bg.CornerRadius = 10
-
-	stripe := canvas.NewRectangle(accent)
-	stripe.SetMinSize(fyne.NewSize(4, 0))
-	stripe.CornerRadius = 2
-
-	// No inset here: flowGrid puts real space between cells, so the tile fills
-	// the one it is given rather than shrinking inside it.
-	inner := container.NewBorder(nil, nil, stripe, nil, container.NewPadded(body))
-	tile := container.NewStack(bg, container.NewPadded(inner))
-	return shell.NewCardTappable(tile, func() { OpenGroupEditor(ui, g) })
+	bubble := shell.NewStripeBubble(accent, body)
+	return shell.NewBubbleTappable(bubble, func() { OpenGroupEditor(ui, g) })
 }
 
 // ShortIssueLabel drops the org from a ref. Every repo in view belongs to the

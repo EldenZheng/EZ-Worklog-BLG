@@ -29,6 +29,9 @@ type Tappable struct {
 	// OnTapAt, if set, hears where the tap landed (window coordinates)
 	// before the tap itself runs, for a ripple from that point.
 	OnTapAt func(at fyne.Position)
+	// Bubble, if set, is the bubble the tappable is drawn as; it lights up
+	// while the pointer is on it.
+	Bubble Lightable
 }
 
 func NewTappable(content fyne.CanvasObject, onTap func()) *Tappable {

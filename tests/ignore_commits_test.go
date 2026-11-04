@@ -191,3 +191,44 @@ func TestIgnoredShasRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A pending tile is the shared card look: it lights up under the pointer,
+// stays lit on its Ignore button, and still opens the editor on a click.
+func TestPendingTileIsAHoverBubble(t *testing.T) {
+	ui := pendingUI(t)
+	defer fyne.CurrentApp().Quit()
+	shell.ReleaseBubble()
+	g := backend.Group{Date: "2026-08-10", Issue: "exampleorg/sample-intranet#42",
+		Commits: []backend.Commit{{Sha: "abc1234", Repo: "exampleorg/sample-intranet", Message: "cap the dropdown"}}}
+
+	tile, ok := logwork.GroupBubble(ui, g, false).(*shell.Tappable)
+	if !ok {
+		t.Fatal("a pending tile should be clickable")
+	}
+	bubble, ok := tile.Content.(*shell.StripeBubble)
+	if !ok || tile.Bubble != bubble {
+		t.Fatal("a pending tile should be drawn as the shared bubble")
+	}
+	var ignore *shell.HoverButton
+	walkRendered(bubble, func(o fyne.CanvasObject) {
+		if b, ok := o.(*shell.HoverButton); ok && b.Text == "Ignore" {
+			ignore = b
+		}
+	})
+	if ignore == nil {
+		t.Fatal("no Ignore button on the tile")
+	}
+	tile.MouseIn(nil)
+	if !bubble.Lit() {
+		t.Fatal("the tile should light up under the pointer")
+	}
+	tile.MouseOut() // onto the Ignore button
+	ignore.MouseIn(nil)
+	if !bubble.Lit() {
+		t.Fatal("the tile should stay lit on its Ignore button")
+	}
+	ignore.MouseOut()
+	if bubble.Lit() {
+		t.Fatal("the tile should go dark once the pointer leaves it")
+	}
+}
