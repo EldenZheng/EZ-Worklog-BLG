@@ -387,6 +387,39 @@ func AttachHoverChildren(obj fyne.CanvasObject, hover func(on bool)) {
 	}
 }
 
+// HoverButton is a button that keeps the bubble it sits on lit while the
+// pointer is on it, as a plain button would not: Fyne tells only the button.
+type HoverButton struct {
+	widget.Button
+	parent func(on bool)
+}
+
+// NewHoverButton is widget.NewButtonWithIcon as a HoverButton; icon may be nil.
+func NewHoverButton(label string, icon fyne.Resource, tapped func()) *HoverButton {
+	b := &HoverButton{}
+	b.Text = label
+	b.Icon = icon
+	b.OnTapped = tapped
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *HoverButton) SetHoverParent(f func(on bool)) { b.parent = f }
+
+func (b *HoverButton) MouseIn(e *desktop.MouseEvent) {
+	b.Button.MouseIn(e)
+	if b.parent != nil {
+		b.parent(true)
+	}
+}
+
+func (b *HoverButton) MouseOut() {
+	b.Button.MouseOut()
+	if b.parent != nil {
+		b.parent(false)
+	}
+}
+
 // HoverLink is a hyperlink that keeps the bubble it sits in lit while the
 // pointer is on it.
 type HoverLink struct {

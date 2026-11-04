@@ -78,8 +78,21 @@ func GitHubButton(button *widget.Button) fyne.CanvasObject {
 // where it shares a line with icon buttons. It keeps its own height, so taller
 // neighbours do not stretch it.
 func CompactGitHubButton(button *widget.Button) fyne.CanvasObject {
+	return compactGitHub(button, button)
+}
+
+// CompactGitHubHoverButton is CompactGitHubButton for a HoverButton, one that
+// keeps the card it sits on lit while the pointer is on it.
+func CompactGitHubHoverButton(button *HoverButton) fyne.CanvasObject {
+	return compactGitHub(button, &button.Button)
+}
+
+func compactGitHub(control interface {
+	fyne.CanvasObject
+	Disabled() bool
+}, button *widget.Button) fyne.CanvasObject {
 	button.Importance = widget.HighImportance
-	styled := container.NewThemeOverride(widgets.WithPointerCursor(button), gitHubTheme{Theme: theme.Current(), compact: true})
+	styled := container.NewThemeOverride(widgets.WithPointerCursor(control), gitHubTheme{Theme: theme.Current(), compact: true})
 	return container.New(compactButtonLayout{}, styled)
 }
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -792,5 +793,109 @@ func TestWeekAcrossTwoMonthsReadsBoth(t *testing.T) {
 	}
 	if !contains(got, strconv.Itoa(31)) {
 		t.Fatalf("the week should still start on the 31st: %v", got)
+	}
+}
+
+// A week the rota puts the user on support says so: its slots are on the
+// board from the start, at 0 minutes, before any of it is logged.
+func TestSupportRotaNamesTheWeek(t *testing.T) {
+	cfg := backend.Config{WorklogOwner: "team-alex"}
+	slot := []backend.WorklogItem{{Title: "Alex: Weekly Support (28th August, 12PM - 3PM)"}}
+	if !shell.OnSupportRota(cfg, slot) {
+		t.Fatal("an empty rota slot still means it is the user's support week")
+	}
+	if shell.OnSupportRota(cfg, []backend.WorklogItem{{ParentTitle: "Chinese translation", Minutes: 60}}) {
+		t.Fatal("other work is not the rota")
+	}
+	if shell.OnSupportRota(backend.Config{}, slot) {
+		t.Fatal("with no display name there is no prefix to match on")
+	}
+	if shell.SupportCheckText(true) != "Support Week" {
+		t.Fatalf("a support week reads %q", shell.SupportCheckText(true))
+	}
+	if !strings.HasPrefix(shell.SupportCheckText(false), "+180 min") {
+		t.Fatalf("another week reads %q", shell.SupportCheckText(false))
+	}
+}
+
+// Dropping a card onto another card still lands on that card's day: the day
+// is found from where the pointer is, not from hovering, which the cards in
+// a day take for themselves.
+func TestDroppingOntoACardLandsOnItsDay(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	if _, err := ui.Store.AppendRows([]backend.Row{
+		{"date": "2026-08-10", "minutes": "60", "description": "carried"},
+		{"date": "2026-08-12", "minutes": "30", "description": "already there"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := test.NewWindow(ui.WeekBox)
+	defer w.Close()
+	w.Resize(fyne.NewSize(1600, 900))
+	logwork.DrawRecent(ui)
+
+	carried := dragTilesIn(ui.WeekCols["2026-08-10"])[0]
+	onWednesday := dragTilesIn(ui.WeekCols["2026-08-12"])[0]
+	at := fyne.CurrentApp().Driver().AbsolutePositionForObject(onWednesday).
+		Add(fyne.NewPos(onWednesday.Size().Width/2, onWednesday.Size().Height/2))
+	carried.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{AbsolutePosition: at}, Dragged: fyne.NewDelta(4, 4)})
+	if ui.HoverDay != "2026-08-12" {
+		t.Fatalf("over Wednesday's card the drop should aim at Wednesday, aims at %q", ui.HoverDay)
+	}
+	carried.DragEnd()
+
+	rows, _ := ui.Store.ReadRows()
+	for _, r := range rows {
+		if r["description"] == "carried" && r["date"] != "2026-08-12" {
+			t.Fatalf("the card should have landed on Wednesday, is on %s", r["date"])
+		}
+	}
+}
+
+// The card on a day stays lit while the pointer is on its Push, edit or
+// delete button, not only on the card around them.
+func TestDayCardStaysLitOverItsButtons(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	shell.ReleaseBubble()
+	if _, err := ui.Store.AppendRows([]backend.Row{{
+		"date": "2026-08-10", "minutes": "60", "description": "triage",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	logwork.DrawRecent(ui)
+
+	var area *shell.HoverArea
+	var buttons []*shell.HoverButton
+	walk(ui.WeekCols["2026-08-10"], func(o fyne.CanvasObject) {
+		switch x := o.(type) {
+		case *shell.HoverArea:
+			area = x
+		}
+	})
+	if area == nil {
+		t.Fatal("the day's card should be a hover bubble")
+	}
+	walkRendered(area, func(o fyne.CanvasObject) {
+		if b, ok := o.(*shell.HoverButton); ok {
+			buttons = append(buttons, b)
+		}
+	})
+	if len(buttons) != 3 {
+		t.Fatalf("the card should carry Push, edit and delete, found %d", len(buttons))
+	}
+	bubble := area.Content.(*shell.StripeBubble)
+	for _, b := range buttons {
+		area.MouseIn(&desktop.MouseEvent{})
+		area.MouseOut() // the pointer moves onto the button
+		b.MouseIn(&desktop.MouseEvent{})
+		if !bubble.Lit() {
+			t.Fatalf("the card went dark under its %q button", b.Text)
+		}
+		b.MouseOut()
+		if bubble.Lit() {
+			t.Fatal("the card should go dark once the pointer leaves it")
+		}
 	}
 }

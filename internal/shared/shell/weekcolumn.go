@@ -38,7 +38,7 @@ func (c *DayColumn) CreateRenderer() fyne.WidgetRenderer {
 
 func (c *DayColumn) MouseIn(*desktop.MouseEvent) {
 	c.Ui.HoverDay = c.Date
-	Hooks.MarkDropTargets(c.Ui)
+	queueDropMarks(c.Ui)
 }
 
 func (c *DayColumn) MouseMoved(*desktop.MouseEvent) {}
@@ -48,8 +48,25 @@ func (c *DayColumn) MouseOut() {
 	// new column's MouseIn first, and blindly clearing would undo it.
 	if c.Ui.HoverDay == c.Date {
 		c.Ui.HoverDay = ""
-		Hooks.MarkDropTargets(c.Ui)
+		queueDropMarks(c.Ui)
 	}
+}
+
+var dropMarksQueued bool
+
+// queueDropMarks repaints the drop targets once the pointer move being handled
+// is done. Moving onto a card in a day reaches the day as "left" and the card
+// dragged over it then finds the day again; painting in between restarted
+// the day's pulse on every card it crossed.
+func queueDropMarks(ui *UI) {
+	if dropMarksQueued {
+		return
+	}
+	dropMarksQueued = true
+	fyne.Do(func() {
+		dropMarksQueued = false
+		Hooks.MarkDropTargets(ui)
+	})
 }
 
 // pulsePeriod is one breath of the day under a carried card. Slow enough to read

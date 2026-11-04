@@ -94,7 +94,7 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 	}
 }
 
-// Check for updates finds the newer release, the gear gets its dot, and
+// Check for updates finds the newer release, the gear opens its Update Available badge, and
 // Update downloads it, swaps it in and restarts into it.
 func TestSettingsUpdatePanelInstallsTheLatestRelease(t *testing.T) {
 	ui := editorUI(t)
@@ -134,7 +134,7 @@ func TestSettingsUpdatePanelInstallsTheLatestRelease(t *testing.T) {
 	if check == nil {
 		t.Fatal("no Check for updates button")
 	}
-	if ui.Update.InstallView.Visible() || ui.Tabs.UpdateDot.Visible() {
+	if ui.Update.InstallView.Visible() || ui.Tabs.UpdateShown() {
 		t.Fatal("nothing should be offered before a check")
 	}
 	test.Tap(check)
@@ -142,9 +142,9 @@ func TestSettingsUpdatePanelInstallsTheLatestRelease(t *testing.T) {
 	if !strings.HasPrefix(ui.Update.Status.Text, "v1.1.0 is available") {
 		t.Fatalf("status = %q", ui.Update.Status.Text)
 	}
-	if !ui.Tabs.UpdateDot.Visible() || !ui.Update.InstallView.Visible() || ui.Update.Install.Text != "Update to v1.1.0" {
+	if !ui.Tabs.UpdateShown() || !ui.Update.InstallView.Visible() || ui.Update.Install.Text != "Update to v1.1.0" {
 		t.Fatalf("an update should light the gear and show Update to v1.1.0 (dot %v, button %v %q)",
-			ui.Tabs.UpdateDot.Visible(), ui.Update.InstallView.Visible(), ui.Update.Install.Text)
+			ui.Tabs.UpdateShown(), ui.Update.InstallView.Visible(), ui.Update.Install.Text)
 	}
 	ok, c := primaryAround(view, "Update to v1.1.0", nil)
 	if !ok || c != shell.GitHubGreen {

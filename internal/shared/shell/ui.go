@@ -181,6 +181,9 @@ type UI struct {
 	// WeekSupportView the gold wrapper it is shown in.
 	WeekSupport     *widget.Check
 	WeekSupportView fyne.CanvasObject
+	// WeekSupportRota is set while the week shown is the user's support week,
+	// which turns the checkbox into a gold "Support Week".
+	WeekSupportRota bool
 
 	// Organisations tapped out of the colour key, lowercased. One filter for the
 	// whole app rather than one per tab: hiding an employer is a decision about
@@ -201,7 +204,7 @@ type UI struct {
 
 // UpdateState belongs to the update panel at the foot of the Settings sidebar.
 // It lives on the UI because the check runs at start-up, before anyone opens
-// Settings, and its answer also lights the dot on the gear.
+// Settings, and its answer also lights the badge on the gear.
 type UpdateState struct {
 	Status         *widget.Label
 	Check, Install *widget.Button

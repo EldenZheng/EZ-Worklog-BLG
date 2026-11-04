@@ -316,10 +316,27 @@ Settings sidebar. To ship a build to everyone:
 
 This refuses uncommitted or unpushed work and an existing tag, runs the tests,
 and publishes `Worklog.exe` as a GitHub release. On start-up every copy of the
-app asks GitHub (through `gh`) for the latest release. When it is newer, the
-Settings gear gets a green dot and the sidebar offers **Update to v1.4.1**,
+app asks GitHub (through `gh`) for the latest release. When it is newer, a gold
+**Update Available** capsule opens by the Settings gear and the sidebar offers
+**Update to v1.4.1**,
 which downloads the exe, swaps it in for the running one and restarts. Nothing
 in `data` is touched. **Check for updates** asks again on demand.
+
+`-Release` needs `gh` signed in to the repo owner's account. Without it,
+release by hand, in this order:
+
+```
+git tag v1.4.1
+git push origin v1.4.1
+git describe --tags --always --dirty   # must print exactly v1.4.1
+.\build.ps1
+```
+
+then on GitHub draft a release from the tag and attach `..\Worklog.exe` (named
+`Worklog.exe`). Tag before building: an exe built before the tag exists
+locally, or with uncommitted changes, is stamped with the old version plus
+`-dirty`, and every copy keeps offering the update. Run the tests first; this
+path skips them.
 
 > **Use `go build`, not `go run .`** — the app keeps its data in a `data`
 > folder beside the binary, and `go run` builds into a temporary directory that is

@@ -46,7 +46,7 @@ func updatePanel(ui *shell.UI) fyne.CanvasObject {
 func showUpdateState(ui *shell.UI) {
 	u := &ui.Update
 	if ui.Tabs != nil {
-		ui.Tabs.ShowUpdateDot(u.Available)
+		ui.Tabs.ShowUpdate(u.Available)
 	}
 	if u.Status == nil {
 		return

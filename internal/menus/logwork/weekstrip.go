@@ -112,6 +112,10 @@ func DrawWeekStrip(ui *shell.UI) {
 	days := shell.WeekDates(ui.WeekStart)
 	byDay, state := WeekWorklogs(ui, days)
 	shell.Hooks.DropLoggedSupportWeek(ui, ui.WeekStart, byDay, state)
+	rota := false
+	for _, d := range days[:5] {
+		rota = rota || shell.OnSupportRota(ui.Cfg, byDay[d])
+	}
 	if ui.LogSearch != "" {
 		filtered := map[string][]backend.WorklogItem{}
 		for date, items := range byDay {
@@ -191,7 +195,7 @@ func DrawWeekStrip(ui *shell.UI) {
 		ui.RefreshTodayScore()
 	})
 
-	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), weekSupportControl(ui), mail, refresh,
+	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), weekSupportControl(ui, rota), mail, refresh,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
 
 	// Any column about to be thrown away stops breathing first: an animation left
@@ -490,7 +494,7 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	where.Wrapping = fyne.TextWrapBreak
 
 	push, edit, del := rowActions(ui, r, refresh)
-	leadingItems := []fyne.CanvasObject{shell.CompactGitHubButton(push)}
+	leadingItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
 	if shell.RowPartlySaved(r) {
 		leadingItems = append(leadingItems, shell.SavedTag("partly saved"))
 	}
@@ -621,6 +625,33 @@ func (t *DragTile) Dragged(e *fyne.DragEvent) {
 		MarkDropTargets(t.ui)
 	}
 	moveGhost(t.ui, e.AbsolutePosition)
+	// The day is found from the pointer, not from hovering: the cards and
+	// links inside a day take the hover, so the day alone heard only the
+	// empty space around them. Fyne sends the drag after the hover events of
+	// the same move, so this has the last word.
+	if day, measured := dayUnder(t.ui, e.AbsolutePosition); measured && day != t.ui.HoverDay {
+		t.ui.HoverDay = day
+		MarkDropTargets(t.ui)
+	}
+}
+
+// dayUnder is the day in the strip at the canvas position at, and whether
+// the strip is laid out at all (it is not in tests that never show it).
+func dayUnder(ui *shell.UI, at fyne.Position) (string, bool) {
+	driver := fyne.CurrentApp().Driver()
+	measured := false
+	for ds, col := range ui.WeekCols {
+		size := col.Size()
+		if size.IsZero() || !col.Visible() {
+			continue
+		}
+		measured = true
+		p := driver.AbsolutePositionForObject(col)
+		if at.X >= p.X && at.X < p.X+size.Width && at.Y >= p.Y && at.Y < p.Y+size.Height {
+			return ds, true
+		}
+	}
+	return "", measured
 }
 
 func (t *DragTile) DragEnd() {
@@ -640,26 +671,32 @@ func (t *DragTile) DragEnd() {
 	moveRowToDay(t.ui, t.Row, day)
 }
 
-// weekSupportControl is the "+180 min weekday support" checkbox. It is built
+// weekSupportControl is the "+180 min weekday support" checkbox, "Support
+// Week" in gold when the rota puts the user on support that week. It is built
 // once and kept, like Log Work's other checkboxes, and only re-synced to the
 // week on each redraw. A fresh checkbox per redraw drew fine but never got the
 // mouse, so it could not be ticked.
 //
 // Display only, and it says so: nothing is pushed. The tick is remembered for
 // its own week (support-weeks.json) until that week's Friday passes.
-func weekSupportControl(ui *shell.UI) fyne.CanvasObject {
+func weekSupportControl(ui *shell.UI, rota bool) fyne.CanvasObject {
 	on := shell.Hooks.SupportOn(ui, ui.WeekStart)
+	ui.WeekSupportRota = rota
 	if ui.WeekSupport == nil {
-		ui.WeekSupport = widget.NewCheck(
-			fmt.Sprintf("+%d min weekday support (display only)", backend.SupportPlaceholderMins), nil)
+		ui.WeekSupport = widget.NewCheck(shell.SupportCheckText(rota), nil)
 		// Seeded before the handler is attached: SetChecked fires OnChanged.
 		ui.WeekSupport.SetChecked(on)
 		ui.WeekSupport.OnChanged = func(on bool) {
 			shell.Hooks.SetSupport(ui, on, ui.WeekStart)
 			DrawWeekStrip(ui)
 		}
-		ui.WeekSupportView = shell.GoldChoice(ui.WeekSupport)
+		ui.WeekSupportView = shell.SupportChoice(ui.WeekSupport, &ui.WeekSupportRota)
 		return ui.WeekSupportView
+	}
+	if text := shell.SupportCheckText(rota); ui.WeekSupport.Text != text {
+		ui.WeekSupport.SetText(text)
+	} else {
+		ui.WeekSupport.Refresh() // the label's colour follows the rota
 	}
 	if ui.WeekSupport.Checked != on {
 		// Re-sync quietly: walking to another week must not tick or untick it.

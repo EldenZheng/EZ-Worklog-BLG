@@ -320,7 +320,13 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		periodNote.SetText("Worklogs: " + shell.Truncate(work.detail, 180))
 	}
 	periodNote.Wrapping = fyne.TextWrapWord
-	support := widget.NewCheck(fmt.Sprintf("+%d min weekday support (display only)", backend.SupportPlaceholderMins), nil)
+	// "Support Week" in gold when the rota puts the user on support in the
+	// period shown.
+	rota := false
+	for _, day := range work.Days {
+		rota = rota || shell.OnSupportRota(k.Ui.Cfg, day.Logged)
+	}
+	support := widget.NewCheck(shell.SupportCheckText(rota), nil)
 	// Saved per week, shared with Log Work: ticked when every week shown is on,
 	// and ticking it sets every week in the shown period.
 	supportWeeks := supportDates(calendarRange(k))
@@ -338,7 +344,7 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	// Work keep theirs by their controls.
 	// The legend scrolls sideways, so it takes the row's free width; beside the
 	// checkbox as a left part it was squeezed to nothing.
-	noteRow := container.NewBorder(nil, nil, nil, shell.GoldChoice(support), k.ProjectLegend(true))
+	noteRow := container.NewBorder(nil, nil, nil, shell.SupportChoice(support, &rota), k.ProjectLegend(true))
 	shell.ShowIf(periodNote, periodNote.Text != "")
 	legend := container.NewBorder(nil, nil, nil, shell.WeekCaption("Projects: GitHub · Gold: drafts/support · Purple: plans"), nil)
 	return container.NewBorder(container.NewVBox(toolbar, periodNote, noteRow), legend, sidebar, nil, dates)

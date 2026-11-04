@@ -29,6 +29,8 @@ func labels(o fyne.CanvasObject) []string {
 		out = append(out, v.Text)
 	case *widget.Button:
 		out = append(out, v.Text)
+	case *shell.HoverButton:
+		out = append(out, v.Text)
 	case *widget.Check:
 		out = append(out, v.Text)
 	case *canvas.Text:

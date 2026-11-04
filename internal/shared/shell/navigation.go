@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -124,28 +125,39 @@ type pillTabs struct {
 	Buttons    []*widget.Button
 	page       *fyne.Container
 	body       *fyne.Container
-	// UpdateDot sits on the gear while a newer release is waiting.
-	UpdateDot *canvas.Circle
+	// badge wraps the gear and says when a newer release is waiting.
+	badge    *updateBadge
+	settings int
 }
 
 func NewPillTabs(items ...*container.TabItem) *pillTabs {
 	t := &pillTabs{Items: items}
 	t.ExtendBaseWidget(t)
-	row := container.NewHBox()
-	right := container.NewHBox()
+	// The bar's gaps are fixed from the pill theme rather than read while
+	// laying out, so the update badge can relayout the bar on every frame of
+	// its animation without the gaps snapping to the app theme's.
+	pill := PillTheme{Theme: GoldTheme{Theme: theme.DefaultTheme()}}
+	gap := pill.Size(theme.SizeNamePadding)
+	row := container.New(layout.NewCustomPaddedHBoxLayout(gap))
+	right := container.New(layout.NewCustomPaddedHBoxLayout(gap))
 	var settings fyne.CanvasObject
 	for i, item := range items {
 		i := i
-		button := widget.NewButtonWithIcon(item.Text, item.Icon, func() { t.SelectIndex(i) })
+		var button *widget.Button
+		if item.Text == SettingsTabName {
+			gear := newGearButton(item.Icon, func() { t.SelectIndex(i) })
+			button = &gear.Button
+			t.badge = newUpdateBadge(gear, pill)
+			t.badge.onTap = func() { t.SelectIndex(i) }
+			t.badge.onInk = func() { t.styleButton(i) }
+			t.settings = i
+		} else {
+			button = widget.NewButtonWithIcon(item.Text, item.Icon, func() { t.SelectIndex(i) })
+		}
 		t.Buttons = append(t.Buttons, button)
 		t.styleButton(i)
 		if item.Text == SettingsTabName {
-			button.SetText("")
-			t.UpdateDot = canvas.NewCircle(GitHubGreen)
-			t.UpdateDot.StrokeColor = color.White
-			t.UpdateDot.StrokeWidth = 1.5
-			t.UpdateDot.Hide()
-			settings = container.NewCenter(container.New(cornerDotLayout{}, button, t.UpdateDot))
+			settings = container.NewCenter(t.badge)
 		} else {
 			if item.Text == KanbanTabName || item.Text == PlannerTabName {
 				right.Add(button)
@@ -164,8 +176,11 @@ func NewPillTabs(items ...*container.TabItem) *pillTabs {
 	if settings != nil {
 		right.Add(settings)
 	}
-	bar := container.NewBorder(nil, nil, nil, right, container.NewHScroll(row))
-	header := container.NewPadded(container.NewThemeOverride(bar, PillTheme{Theme: GoldTheme{Theme: theme.DefaultTheme()}}))
+	bar := container.New(tabBarLayout{gap: gap}, container.NewHScroll(row), right)
+	if t.badge != nil {
+		t.badge.relayout = func(final bool) { Reflow(final, bar, right, settings) }
+	}
+	header := container.NewPadded(container.NewThemeOverride(bar, pill))
 	t.body = container.NewBorder(header, nil, nil, nil, t.page)
 	return t
 }
@@ -177,6 +192,12 @@ func (t *pillTabs) styleButton(index int) {
 		name := theme.ColorNameForeground
 		if index == t.current {
 			name = theme.ColorNamePrimary
+		}
+		if t.badge != nil {
+			t.badge.setSelected(index == t.current)
+		}
+		if t.badge != nil && t.badge.inked {
+			name = theme.ColorNameForegroundOnPrimary
 		}
 		button.SetIcon(theme.NewColoredResource(theme.SettingsIcon(), name))
 	} else if index == t.current {
@@ -220,34 +241,30 @@ func (t *pillTabs) SelectIndex(index int) {
 	}
 }
 
-// ShowUpdateDot marks the gear while an update is waiting, so it is seen from
-// any tab, not only from Settings.
-func (t *pillTabs) ShowUpdateDot(show bool) {
-	if t.UpdateDot == nil {
-		return
-	}
-	ShowIf(t.UpdateDot, show)
-	t.UpdateDot.Refresh()
+// tabBarLayout puts the scrolling row of tabs on the left, filling what the
+// right-hand group (Kanban, Sprint Calendar, the gear) leaves of the width.
+type tabBarLayout struct{ gap float32 }
+
+func (l tabBarLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	row, right := objects[0].MinSize(), objects[1].MinSize()
+	return fyne.NewSize(row.Width+l.gap+right.Width, max(row.Height, right.Height))
 }
 
-// cornerDotLayout sizes itself to its first object, an icon-only button, and
-// pins the second, a small dot, on the top-right of the icon at its centre.
-type cornerDotLayout struct{}
-
-const cornerDotSize = 10
-
-func (cornerDotLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	return objects[0].MinSize()
-}
-
-func (cornerDotLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	objects[0].Resize(size)
+func (l tabBarLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	width := objects[1].MinSize().Width
+	objects[1].Move(fyne.NewPos(size.Width-width, 0))
+	objects[1].Resize(fyne.NewSize(width, size.Height))
 	objects[0].Move(fyne.NewPos(0, 0))
-	if len(objects) > 1 {
-		objects[1].Resize(fyne.NewSquareSize(cornerDotSize))
-		icon := theme.IconInlineSize()
-		objects[1].Move(fyne.NewPos(
-			size.Width/2+icon/2-cornerDotSize/2,
-			size.Height/2-icon/2-cornerDotSize/2))
+	objects[0].Resize(fyne.NewSize(max(size.Width-width-l.gap, 0), size.Height))
+}
+
+// ShowUpdate lights the gear and opens its "Update Available" capsule while
+// a newer release is waiting, so it is seen from any tab, not only Settings.
+func (t *pillTabs) ShowUpdate(show bool) {
+	if t.badge != nil {
+		t.badge.Set(show)
 	}
 }
+
+// UpdateShown says whether the gear is announcing an update.
+func (t *pillTabs) UpdateShown() bool { return t.badge != nil && t.badge.Shown() }

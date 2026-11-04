@@ -348,7 +348,7 @@ func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 		caption(state)))
 
 	push, edit, del := rowActions(ui, r, refresh)
-	actionItems := []fyne.CanvasObject{shell.CompactGitHubButton(push)}
+	actionItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
 	if shell.RowPartlySaved(r) {
 		actionItems = append(actionItems, shell.SavedTag("partly saved"))
 	}
@@ -372,21 +372,22 @@ func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 // strip, so the two never drift apart.
 //
 // Push doubles as re-push once a row has been sent: the fields on the board are
-// overwritten, and the sub-issue is reused rather than made twice.
-func rowActions(ui *shell.UI, r backend.Row, refresh func()) (push, edit, del *widget.Button) {
+// overwritten, and the sub-issue is reused rather than made twice. All three
+// keep the card they sit on lit while the pointer is on them.
+func rowActions(ui *shell.UI, r backend.Row, refresh func()) (push, edit, del *shell.HoverButton) {
 	label := "Push"
 	if r["pushed_at"] != "" {
 		label = "Re-push"
 	}
-	push = widget.NewButton(label, func() { pushRow(ui, r, refresh) })
+	push = shell.NewHoverButton(label, nil, func() { pushRow(ui, r, refresh) })
 	if r["issue"] == "" && !backend.PushableWithoutIssue(r) {
 		push.Disable() // nothing to push to; the editor is where a ref is added
 	}
-	edit = widget.NewButtonWithIcon("", theme.DocumentCreateIcon(), func() {
+	edit = shell.NewHoverButton("", theme.DocumentCreateIcon(), func() {
 		openRowEditor(ui, r, refresh)
 	})
 	edit.Importance = widget.LowImportance
-	del = widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+	del = shell.NewHoverButton("", theme.DeleteIcon(), func() {
 		ConfirmDelete(ui, r, refresh)
 	})
 	del.Importance = widget.LowImportance

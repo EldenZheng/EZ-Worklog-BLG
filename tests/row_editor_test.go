@@ -38,6 +38,8 @@ func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 		walk(v.Body, fn)
 	case *logwork.DragTile:
 		walk(v.Content, fn)
+	case *shell.HoverButton:
+		fn(&v.Button)
 	case *widget.Card:
 		if v.Content != nil {
 			walk(v.Content, fn)

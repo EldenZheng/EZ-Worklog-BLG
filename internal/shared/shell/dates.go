@@ -43,12 +43,24 @@ func MeetingWeekStartOf(date string) string {
 // week look fully covered, so ticking the placeholder was undone at once and
 // the +180 never showed.
 func HasWeeklySupport(cfg backend.Config, items []backend.WorklogItem) bool {
+	return supportItems(cfg, items, true)
+}
+
+// OnSupportRota reports whether items include the user's weekday support
+// shift at all, an empty rota slot included: the rota puts a slot on every
+// weekday of the user's support week up front, so this is how the week is
+// known to be theirs before any of it is logged.
+func OnSupportRota(cfg backend.Config, items []backend.WorklogItem) bool {
+	return supportItems(cfg, items, false)
+}
+
+func supportItems(cfg backend.Config, items []backend.WorklogItem, logged bool) bool {
 	prefix := strings.ToLower(strings.TrimSpace(backend.SupportTitlePrefix(cfg)))
 	if prefix == ":: weekly support" || strings.HasPrefix(prefix, ": ") {
 		return false // no display name configured; nothing to match on
 	}
 	for _, it := range items {
-		if it.Minutes <= 0 {
+		if logged && it.Minutes <= 0 {
 			continue // an empty rota slot, not a logged shift
 		}
 		for _, title := range []string{it.ParentTitle, it.Title} {
@@ -58,6 +70,16 @@ func HasWeeklySupport(cfg backend.Config, items []backend.WorklogItem) bool {
 		}
 	}
 	return false
+}
+
+// SupportCheckText is what the weekday support checkbox says: "Support Week"
+// when the rota puts the user on support in the week shown, otherwise what
+// ticking it does.
+func SupportCheckText(rota bool) string {
+	if rota {
+		return "Support Week"
+	}
+	return fmt.Sprintf("+%d min weekday support (display only)", backend.SupportPlaceholderMins)
 }
 
 // SupportPlaceholderFor is the minutes to pencil onto one day: a weekday shift
