@@ -80,6 +80,16 @@ func AiCompact(cfg Config, text string) (string, error) {
 // tests can stay offline.
 var FetchRate = fetchRate
 
+// CurrencyCode is a saved currency as the rate service spells it. "RM" is the
+// salary label this app has always defaulted to; the code for it is MYR.
+func CurrencyCode(currency string) string {
+	code := strings.ToUpper(strings.TrimSpace(currency))
+	if code == "RM" {
+		return "MYR"
+	}
+	return code
+}
+
 func fetchRate(base, target string) (float64, error) {
 	url := "https://open.er-api.com/v6/latest/" + base
 	client := &http.Client{Timeout: 20 * time.Second}

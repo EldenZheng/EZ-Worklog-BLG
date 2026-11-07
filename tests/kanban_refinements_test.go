@@ -193,6 +193,8 @@ func walkCanvas(o fyne.CanvasObject, visit func(fyne.CanvasObject)) {
 		walkCanvas(x.Content, visit)
 	case *shell.SprintDragCard:
 		walkCanvas(x.Content, visit)
+	case *shell.ProjectChip:
+		walkCanvas(x.Chip, visit)
 	case *shell.PlannerDragCard:
 		walkCanvas(x.Content, visit)
 	case *sprintcalendar.DurationRuler:

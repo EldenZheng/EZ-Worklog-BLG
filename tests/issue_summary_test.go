@@ -107,6 +107,12 @@ func TestIssueBubblesFitSideBySideAndRevealFullTitlesOnHover(t *testing.T) {
 	if len(overlays) != 1 || !fullTitle {
 		t.Fatalf("hover should retain a tooltip with the complete title: first=%d, now=%d, full title=%v", firstCount, len(overlays), fullTitle)
 	}
+	for _, obj := range []fyne.CanvasObject{cards[0], peek, overlays[0]} {
+		cursor, ok := obj.(desktop.Cursorable)
+		if !ok || cursor.Cursor() != desktop.PointerCursor {
+			t.Errorf("%T should keep the pointer cursor, including while the tooltip is visible", obj)
+		}
+	}
 	test.MoveMouse(w.Canvas(), fyne.NewPos(0, 290))
 	if len(w.Canvas().Overlays().List()) != 0 {
 		t.Fatal("title tooltip remained after leaving the button")

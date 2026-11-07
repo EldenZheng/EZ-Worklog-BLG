@@ -226,7 +226,8 @@ func entryTable(ui *shell.UI, rows []backend.Row, refresh func()) fyne.CanvasObj
 		}
 		tiles = append(tiles, tile)
 	}
-	return container.New(widgets.NewFlowGrid(BubbleMinWidth, BubbleMaxWidth, rowTileHeight), tiles...)
+	return container.New(widgets.NewFlowGrid(BubbleMinWidth, BubbleMaxWidth, rowTileHeight).
+		Compact(BubbleCompactBelow, BubbleCompactMinWidth), tiles...)
 }
 
 // rowTileHeight fits two wrapped lines of description over a footer and a row
@@ -302,11 +303,7 @@ func RowTitle(ui *shell.UI, r backend.Row) string {
 func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	accent := shell.RowAccentColor(ui.Cfg, r)
 	muted := theme.Color(theme.ColorNamePlaceHolder)
-	caption := func(s string) *canvas.Text {
-		t := canvas.NewText(shell.Truncate(s, 56), muted)
-		t.TextSize = theme.CaptionTextSize()
-		return t
-	}
+	caption := func(s string) fyne.CanvasObject { return fitCaption(shell.Truncate(s, 56), muted) }
 
 	what := RowTitle(ui, r)
 	title := widget.NewLabelWithStyle(shell.Truncate(what, BubbleTitleChars),

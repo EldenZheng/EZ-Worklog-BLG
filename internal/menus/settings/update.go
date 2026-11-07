@@ -32,7 +32,7 @@ func updatePanel(ui *shell.UI) fyne.CanvasObject {
 	version.Wrapping = fyne.TextWrapBreak
 	showUpdateState(ui)
 	return container.NewVBox(
-		widget.NewSeparator(),
+		container.NewThemeOverride(widget.NewSeparator(), sidebarLineTheme{Theme: theme.Current()}),
 		shell.Bold("Updates"),
 		version,
 		u.Status,

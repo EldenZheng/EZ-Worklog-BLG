@@ -106,6 +106,9 @@ type SprintPlan struct {
 	CalendarSprint string    `json:",omitempty"`
 	KanbanColumns  *[]string `json:",omitempty"`
 	KanbanTypes    *[]string `json:",omitempty"`
+	// ProjectOrder is the board IDs in the order the Kanban and Sprint Calendar
+	// legends show them.
+	ProjectOrder []string `json:",omitempty"`
 }
 
 func (s *Store) LoadSprintPlan() (SprintPlan, error) {

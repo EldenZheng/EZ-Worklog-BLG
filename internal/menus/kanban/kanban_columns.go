@@ -8,9 +8,32 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 
+	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
 )
+
+// ColumnCard is one card a status column shows.
+type ColumnCard struct {
+	Board backend.SprintBoard
+	Item  backend.SprintItem
+}
+
+// ColumnOrder lists a status column's cards merged by position: a project's
+// position is its place among its own cards in this column.
+func ColumnOrder(k *shell.KanbanUI, status string) []ColumnCard {
+	var projects [][]ColumnCard
+	for _, b := range k.OrderedBoards() {
+		var cards []ColumnCard
+		for _, it := range b.Items {
+			if PendingStatus(k, b, it) == status && Matches(k, b, it) {
+				cards = append(cards, ColumnCard{b, it})
+			}
+		}
+		projects = append(projects, cards)
+	}
+	return shell.MergeByPosition(projects)
+}
 
 var PrimaryKanbanStatuses = []string{"Created", "Analysis - Investigation", "In Progress", "Pending Customer Feedback", "Pending Test", "Server Update Required", "In Review", "Done"}
 

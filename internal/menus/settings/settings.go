@@ -44,11 +44,19 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	boardViews.SetMinRowsVisible(2)
 	boardViews.SetPlaceHolder("https://github.com/orgs/exampleorg/projects/1/views/1")
 	kanbanFields, readKanbanSources := backend.KanbanSourceEditor(backend.KanbanSources(ui.Cfg))
-	cur := widget.NewEntry()
-	cur.SetPlaceHolder("RM")
-	disp := widget.NewEntry()
-	disp.SetPlaceHolder("USD")
+	savedCurrency := backend.OrDefault(ui.Cfg.Currency, "RM")
+	cur := currencyPicker(savedCurrency)
+	disp := currencyPicker(backend.OrDefault(ui.Cfg.DisplayCurrency, "USD"))
+	// Unticked, the Report drops its converted figures. A blank currency saved
+	// earlier meant the same thing, so it opens unticked.
+	showDisp := widget.NewCheck("Show", nil)
+	showDisp.SetChecked(!ui.Cfg.HideConversion && strings.TrimSpace(ui.Cfg.DisplayCurrency) != "")
+	if !showDisp.Checked {
+		disp.Disable()
+	}
 	back := widget.NewEntry()
+	cleanup := widget.NewEntry()
+	cleanup.SetPlaceHolder("Blank keeps everything")
 	mode := widget.NewSelect([]string{"Create Worklog sub-issue", "Write on the issue itself"}, nil)
 	key := widget.NewPasswordEntry()
 	key.SetPlaceHolder("sk-ant-...")
@@ -95,12 +103,13 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	meetingDest.SetText(c.MeetingRepo)
 	reviewDest.SetText(c.BulkCodeReviewRepo)
 	boardViews.SetText(strings.Join(c.BoardViewURLs, "\n"))
-	cur.SetText(backend.OrDefault(c.Currency, "RM"))
-	disp.SetText(backend.OrDefault(c.DisplayCurrency, "USD"))
 	if c.LookbackDays > 0 {
 		back.SetText(strconv.Itoa(c.LookbackDays))
 	} else {
 		back.SetText("7")
+	}
+	if c.CleanupDays > 0 {
+		cleanup.SetText(strconv.Itoa(c.CleanupDays))
 	}
 	if c.DefaultMode == "issue" {
 		mode.SetSelected("Write on the issue itself")
@@ -120,17 +129,34 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	rateReadout := canvas.NewText("", widgets.LogoGold)
 	rateReadout.TextSize = theme.TextSize()
 	rateReadout.TextStyle = fyne.TextStyle{Bold: true}
+	// With the conversion unticked there is no rate to read or fetch. This follows
+	// the tick rather than the saved setting, so they go as soon as it is unticked.
+	var rate *widget.Button
+	var actions *fyne.Container
 	refreshRateReadout := func() {
-		if ui.Cfg.FxRate > 0 {
+		switch {
+		case !showDisp.Checked:
+			rateReadout.Text = ""
+		case ui.Cfg.FxRate > 0:
 			rateReadout.Text = fmt.Sprintf("1 %s = %s %s (%s)",
 				backend.OrDefault(ui.Cfg.Currency, "RM"), shell.CommaAmount(ui.Cfg.FxRate),
 				backend.OrDefault(ui.Cfg.DisplayCurrency, "USD"), ui.Cfg.FxUpdated)
-		} else {
+		default:
 			rateReadout.Text = "Exchange rate not set — press Fetch exchange rate."
 		}
 		rateReadout.Refresh()
+		shell.ShowIf(rate, showDisp.Checked)
+		actions.Refresh()
 	}
-	refreshRateReadout()
+	showDisp.OnChanged = func(on bool) {
+		if on {
+			disp.Enable()
+		} else {
+			disp.Disable()
+			msg.SetText("") // it may still be saying what the last fetch found
+		}
+		refreshRateReadout()
+	}
 
 	save := widget.NewButton("Save settings", func() {
 		salF, err := backend.ParsePaySetting(sal.Text)
@@ -167,6 +193,15 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		if backN < 1 {
 			backN = 7
 		}
+		cleanupN := 0
+		if text := strings.TrimSpace(cleanup.Text); text != "" {
+			n, err := strconv.Atoi(text)
+			if err != nil || n < 1 {
+				msg.SetText("Clean up after: enter a number of days, or leave it blank to keep everything.")
+				return
+			}
+			cleanupN = n
+		}
 		m := "subissue"
 		if mode.Selected == "Write on the issue itself" {
 			m = "issue"
@@ -190,9 +225,23 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		newCfg.BulkCodeReviewRepo = strings.TrimSpace(reviewDest.Text)
 		newCfg.BoardViewURLs = views
 		newCfg.KanbanBoards = kanbanBoards
-		newCfg.Currency = backend.OrDefault(strings.TrimSpace(cur.Text), "RM")
-		newCfg.DisplayCurrency = strings.ToUpper(strings.TrimSpace(disp.Text))
+		// The dropdown says MYR where the saved label may say RM. Leaving a label
+		// alone unless another currency is picked keeps the Report reading as it did.
+		newCfg.Currency = cur.Selected
+		if cur.Selected == backend.CurrencyCode(savedCurrency) {
+			newCfg.Currency = savedCurrency
+		}
+		newCfg.DisplayCurrency = disp.Selected
+		newCfg.HideConversion = !showDisp.Checked
+		// A rate belongs to one pair of currencies. Kept after a switch, it would
+		// print the old pair's figure beside the new code as if it were converted.
+		pairChanged := backend.CurrencyCode(newCfg.Currency) != backend.CurrencyCode(ui.Cfg.Currency) ||
+			newCfg.DisplayCurrency != backend.CurrencyCode(ui.Cfg.DisplayCurrency)
+		if pairChanged {
+			newCfg.FxRate, newCfg.FxUpdated = 0, ""
+		}
 		newCfg.LookbackDays = backN
+		newCfg.CleanupDays = cleanupN
 		newCfg.DefaultMode = m
 		newCfg.AnthropicAPIKey = strings.TrimSpace(key.Text)
 		// First line stays the main board so an older build of this app, and
@@ -229,19 +278,19 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 			redrawBubbles()
 		}
 		toast.show("Settings saved")
+		if pairChanged && !newCfg.HideConversion {
+			rate.OnTapped()
+		}
 	})
 
-	rate := widget.NewButton("Fetch exchange rate", func() {
+	rate = widget.NewButton("Fetch exchange rate", func() {
 		if !ui.HasCfg {
 			msg.SetText("Save settings first.")
 			return
 		}
 		msg.SetText("Fetching rate…")
 		_, finish := ui.BeginFetch("settings-rate", "Fetching exchange rate")
-		base := strings.ToUpper(strings.TrimSpace(ui.Cfg.Currency))
-		if base == "RM" {
-			base = "MYR"
-		}
+		base := backend.CurrencyCode(ui.Cfg.Currency)
 		disp := backend.OrDefault(ui.Cfg.DisplayCurrency, "USD")
 		var r float64
 		var fetchErr error
@@ -265,16 +314,17 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	})
 
 	ui.SettingsProgress = shell.NewLoadingIndicator()
-	ui.ProfileBox = container.NewVBox(widget.NewLabel("GitHub profile loads when Settings opens."))
+	profileNote := widget.NewLabel("GitHub profile loads when Settings opens.")
+	profileNote.Wrapping = fyne.TextWrapWord
+	ui.ProfileBox = container.NewVBox(profileNote)
 
 	// Header row: Worklog / Settings on the left, action buttons on the right
 	// stacked over the exchange rate readout. Border pins the buttons to the
 	// top-right so they render at their own natural height rather than
 	// stretching to match the tall logo block.
-	actions := container.NewVBox(
-		container.NewHBox(layout.NewSpacer(), rate, save),
-		container.NewHBox(layout.NewSpacer(), rateReadout),
-	)
+	actionRow := container.NewHBox(layout.NewSpacer(), rate, save)
+	actions = container.NewVBox(actionRow, container.NewHBox(layout.NewSpacer(), rateReadout))
+	refreshRateReadout()
 	header := container.NewBorder(nil, nil, nil, actions, settingsHeading())
 
 	// Only the GitHub profile card carries a bubble in the sidebar, and it is
@@ -284,9 +334,9 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	sidebarContent := container.NewVBox(
 		shell.Bold("Identity"),
 		goldPanel(ui.ProfileBox),
-		shell.Labeled("GitHub username (optional — auto from gh)", user),
-		shell.Labeled("Worklog owner", owner),
-		shell.Labeled("Name on meeting issues (optional)", dispName),
+		sidebarField("GitHub username (optional — auto from gh)", user),
+		sidebarField("Worklog owner", owner),
+		sidebarField("Name on meeting issues (optional)", dispName),
 	)
 
 	// Color chips share the app's org mapping. Their three-dot controls open
@@ -354,14 +404,15 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	)
 	sourcesSection := container.NewVBox(
 		shell.SectionTitle("Sources"),
-		container.New(widgets.NewRatioRow(0.72, 0.28), fieldsCol, legendCol),
+		container.New(widgets.NewFluidRow(0.72, 0.28), fieldsCol, legendCol),
 	)
 	salarySection := container.NewVBox(
 		shell.SectionTitle("Salary"),
 		container.NewGridWithColumns(3,
 			shell.LabeledHint("Base salary", "Paid per 21 working days.", sal),
-			shell.LabeledHint("Currency", "Currency the salary is paid in.", cur),
-			shell.LabeledHint("Display in", "Also show pay in this currency.", disp),
+			shell.LabeledHint("Currency", "Currency the salary is paid in.", outlined(cur)),
+			shell.LabeledHint("Display in", "Also show pay in this currency. Untick to hide the conversion.",
+				container.NewBorder(nil, nil, shell.GoldChoice(showDisp), nil, outlined(disp))),
 		),
 		shell.LabeledHint("Support payment per set", "Paid per seven qualifying support issues, in the salary currency. Blank means unset.", supportPay),
 	)
@@ -372,6 +423,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 			shell.LabeledHint("Default push mode", "Sub-issue creates a linked child. Issue writes on the parent itself.", outlinedSelect(mode)),
 			shell.LabeledHint("Anthropic API key", "Enables the AI Compact-remarks button. Leave blank to disable.", key),
 		),
+		shell.LabeledHint("Clean up after (days)", "Forgets ignored commits, and the commit list on pushed entries, after this many days, or the look back if longer. The entries themselves stay. Blank keeps everything.", cleanup),
 		msg,
 	)
 
@@ -396,7 +448,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// fields, wherever the window's height leaves the foot.
 	sidebar := container.NewBorder(nil, updatePanel(ui), nil, nil, sidebarContent)
 	ui.Update.Frame = sidebar
-	body := container.New(widgets.NewRatioRow(0.2, 0.8),
+	body := container.New(widgets.NewFluidRow(0.2, 0.8),
 		container.NewPadded(sidebar),
 		container.NewPadded(mainBubble),
 	)
@@ -407,16 +459,28 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	return container.NewStack(container.NewBorder(top, nil, nil, nil, body), toast.layer)
 }
 
+// sidebarField is a field whose label wraps, so the longest label does not set
+// how narrow the sidebar can get.
+func sidebarField(label string, field fyne.CanvasObject) fyne.CanvasObject {
+	caption := widget.NewLabel(label)
+	caption.Wrapping = fyne.TextWrapWord
+	return container.NewVBox(caption, field)
+}
+
 // outlinedSelect wraps a Select in a bordered rectangle so it reads as a form
 // control alongside Entries. Fyne's default Select renderer paints no visible
 // outline on the app's gold theme, which made the "Default push mode" box
 // blend into the panel background beside the neighbouring Entry.
 func outlinedSelect(sel *widget.Select) fyne.CanvasObject {
+	return outlined(shell.WideSelect(sel))
+}
+
+func outlined(control fyne.CanvasObject) fyne.CanvasObject {
 	border := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
 	border.StrokeColor = theme.Color(theme.ColorNameInputBorder)
 	border.StrokeWidth = 1
 	border.CornerRadius = theme.InputRadiusSize()
-	return container.NewStack(border, shell.WideSelect(sel))
+	return container.NewStack(border, control)
 }
 
 // goldPanel is a rounded panel with a low-alpha gold background, for content
@@ -437,6 +501,25 @@ func (t chunkySettingsTheme) Size(name fyne.ThemeSizeName) float32 {
 		return 10
 	}
 	return t.Theme.Size(name)
+}
+
+// Lines on the main panel are gold, matching its section headings.
+func (t chunkySettingsTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNameSeparator {
+		return widgets.LogoGold
+	}
+	return t.Theme.Color(name, variant)
+}
+
+// sidebarLineTheme makes a line in the sidebar grey: the app's muted text colour,
+// so it stays readable in the light and dark themes alike.
+type sidebarLineTheme struct{ fyne.Theme }
+
+func (t sidebarLineTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNameSeparator {
+		return t.Theme.Color(theme.ColorNamePlaceHolder, variant)
+	}
+	return t.Theme.Color(name, variant)
 }
 
 // settingsOrgChip uses an explicit menu control to open the color picker.

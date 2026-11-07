@@ -1,6 +1,6 @@
 package widget
 
-// Worklog patch, copied into the private Fyne build by build.ps1. The go tool
+// Worklog patch, copied into the private Fyne build by tools/patchfyne. The go tool
 // skips folders that start with "_", so this file only builds there.
 
 // CanScrollBy reports whether a wheel delta would move this scroller's content

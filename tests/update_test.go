@@ -47,6 +47,28 @@ func TestNewerRelease(t *testing.T) {
 	}
 }
 
+// Each platform updates from its own file; a Windows exe is never offered to
+// anything else.
+func TestReleaseAssetPerPlatform(t *testing.T) {
+	if got := backend.ReleaseAssetFor("windows"); got != "Worklog.exe" {
+		t.Fatal(got)
+	}
+	if got := backend.ReleaseAssetFor("darwin"); got != "Worklog-macos" {
+		t.Fatal(got)
+	}
+	if got := backend.ReleaseAssetFor("linux"); got == "Worklog.exe" {
+		t.Fatal("linux must not download the Windows build")
+	}
+	err := backend.ReleaseDownloadError("v1.2.3", "Worklog-macos", backend.GhErr("no assets match the file pattern"))
+	if !strings.Contains(err.Error(), "try again shortly") {
+		t.Fatal(err)
+	}
+	other := backend.GhErr("network down")
+	if backend.ReleaseDownloadError("v1.2.3", "Worklog-macos", other) != other {
+		t.Fatal("other failures should pass through")
+	}
+}
+
 // Windows will not overwrite a running exe, but it will rename one: the
 // running copy steps aside, the download takes its name, and the next start
 // clears the old one away.

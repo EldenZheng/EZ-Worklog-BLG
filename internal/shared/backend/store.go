@@ -104,13 +104,19 @@ type Config struct {
 	DisplayCurrency    string         `json:"display_currency"`
 	FxRate             float64        `json:"fx_rate"`
 	FxUpdated          string         `json:"fx_updated"`
-	LookbackDays       int            `json:"lookback_days"`
-	WorklogOwner       string         `json:"worklog_owner"`
-	DefaultMode        string         `json:"default_mode"`
-	AnthropicAPIKey    string         `json:"anthropic_api_key"`
-	AnthropicModel     string         `json:"anthropic_model"`
-	ProjectURL         string         `json:"project_url"`
-	ExtraProjectURLs   []string       `json:"extra_project_urls"`
+	// HideConversion takes the Display in figures off the Report. A hide rather
+	// than a show, so a config saved before this option keeps its conversion.
+	HideConversion bool `json:"hide_conversion,omitempty"`
+	LookbackDays   int  `json:"lookback_days"`
+	// CleanupDays is how long ignored commits and the commit lists on pushed
+	// entries are kept. Zero, the default, keeps them forever.
+	CleanupDays      int      `json:"cleanup_days,omitempty"`
+	WorklogOwner     string   `json:"worklog_owner"`
+	DefaultMode      string   `json:"default_mode"`
+	AnthropicAPIKey  string   `json:"anthropic_api_key"`
+	AnthropicModel   string   `json:"anthropic_model"`
+	ProjectURL       string   `json:"project_url"`
+	ExtraProjectURLs []string `json:"extra_project_urls"`
 	// DisplayName is the name a meeting issue is titled with — "Alex" in
 	// "Alex Meeting & ad hocs: 2026-08-25". Blank means derive it from the
 	// worklog owner; see displayName.
@@ -459,6 +465,22 @@ func (s *Store) SetIgnored(sha string, ignored bool) error {
 	} else {
 		delete(set, sha)
 	}
+	if err := s.writeIgnoredLocked(set); err != nil {
+		return err
+	}
+	dates, err := s.readIgnoredDatesLocked()
+	if err != nil {
+		return err
+	}
+	if ignored {
+		dates[sha] = time.Now().Format("2006-01-02")
+	} else {
+		delete(dates, sha)
+	}
+	return s.writeIgnoredDatesLocked(dates)
+}
+
+func (s *Store) writeIgnoredLocked(set map[string]bool) error {
 	shas := make([]string, 0, len(set))
 	for k := range set {
 		shas = append(shas, k)
@@ -469,6 +491,133 @@ func (s *Store) SetIgnored(sha string, ignored bool) error {
 		return err
 	}
 	return os.WriteFile(s.ignoref, data, 0o644)
+}
+
+// ignored-dates.json says when each commit was ignored. It is its own file so
+// ignored.json stays the plain list of shas that older versions read.
+func (s *Store) ignoredDatesPath() string { return filepath.Join(s.Dir, "ignored-dates.json") }
+
+func (s *Store) readIgnoredDatesLocked() (map[string]string, error) {
+	dates := map[string]string{}
+	data, err := os.ReadFile(s.ignoredDatesPath())
+	if os.IsNotExist(err) {
+		return dates, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(data, &dates); err != nil {
+		return nil, err
+	}
+	return dates, nil
+}
+
+func (s *Store) writeIgnoredDatesLocked(dates map[string]string) error {
+	data, err := json.MarshalIndent(dates, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.ignoredDatesPath(), data, 0o644)
+}
+
+// cleanupCutoff is the date before which a commit can be forgotten, and false when
+// clean up is off. Never inside the lookback: a commit forgotten while the sweep
+// can still find it would come back as pending work.
+func cleanupCutoff(keepDays, lookbackDays int, today string) (string, bool) {
+	if keepDays <= 0 {
+		return "", false
+	}
+	return AddDays(today, -max(keepDays, lookbackDays)), true
+}
+
+// PruneIgnored forgets commits ignored more than keepDays ago and reports how many
+// went. keepDays of zero (Settings left blank) forgets nothing. A commit with no
+// date yet starts its clock today either way: it may be recent, and forgetting it
+// too early would put it back on the pending list.
+func (s *Store) PruneIgnored(keepDays, lookbackDays int, today string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set, err := s.readIgnoredLocked()
+	if err != nil {
+		return 0, err
+	}
+	dates, err := s.readIgnoredDatesLocked()
+	if err != nil {
+		return 0, err
+	}
+	cutoff, cleaning := cleanupCutoff(keepDays, lookbackDays, today)
+	removed, datesChanged := 0, false
+	for sha := range set {
+		date, known := dates[sha]
+		switch {
+		case !known:
+			dates[sha] = today
+			datesChanged = true
+		case cleaning && date < cutoff:
+			delete(set, sha)
+			delete(dates, sha)
+			removed++
+			datesChanged = true
+		}
+	}
+	for sha := range dates {
+		if !set[sha] {
+			delete(dates, sha)
+			datesChanged = true
+		}
+	}
+	if removed > 0 {
+		if err := s.writeIgnoredLocked(set); err != nil {
+			return 0, err
+		}
+	}
+	if datesChanged {
+		if err := s.writeIgnoredDatesLocked(dates); err != nil {
+			return removed, err
+		}
+	}
+	return removed, nil
+}
+
+// PruneCommitRefs empties the refs column of entries older than keepDays and
+// reports how many changed. keepDays of zero changes nothing.
+//
+// Only the list of commits goes; the entry itself is the user's record of the
+// work and stays whole. An entry not yet pushed keeps its refs however old it is:
+// it is still in hand, and deleting it has to put its commits back on the list.
+// Age is the newest date on the row, so an old entry just re-pushed still counts
+// as recent, and neither a backdated entry nor one with no dates is forgotten early.
+func (s *Store) PruneCommitRefs(keepDays, lookbackDays int, today string) (int, error) {
+	cutoff, cleaning := cleanupCutoff(keepDays, lookbackDays, today)
+	if !cleaning {
+		return 0, nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.readRowsLocked()
+	if err != nil {
+		return 0, err
+	}
+	cleared := 0
+	for _, r := range rows {
+		if r["refs"] == "" || r["pushed_at"] == "" {
+			continue
+		}
+		newest := ""
+		for _, stamp := range []string{r["date"], r["logged_at"], r["pushed_at"]} {
+			if len(stamp) >= 10 && stamp[:10] > newest {
+				newest = stamp[:10]
+			}
+		}
+		if newest != "" && newest < cutoff {
+			r["refs"] = ""
+			cleared++
+		}
+	}
+	if cleared == 0 {
+		return 0, nil
+	}
+	return cleared, s.writeRowsLocked(rows)
 }
 
 // CommitRef is one entry in a row's refs column: a commit, and the repo it is

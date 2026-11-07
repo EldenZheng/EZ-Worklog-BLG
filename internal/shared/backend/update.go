@@ -8,21 +8,36 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // Updates come from GitHub Releases on the app's own repository: build.ps1
-// -Release builds Worklog.exe and attaches it to a release tagged vX.Y.Z, and
+// -Release builds Worklog.exe and attaches it to a release tagged vX.Y.Z, a
+// workflow on GitHub then adds the Mac build (.github/workflows/macos.yml), and
 // a running copy compares that tag with the version it was built as. Nobody
 // needs git, Go or a compiler to update; only gh, which the app already uses.
 
 // UpdateRepo is where releases are published.
 const UpdateRepo = "EldenZheng/EZ-Worklog-BLG"
 
-// ReleaseAsset is the file attached to every release.
-const ReleaseAsset = "Worklog.exe"
+// ReleaseAsset is the file this copy of the app updates from.
+var ReleaseAsset = ReleaseAssetFor(runtime.GOOS)
+
+// ReleaseAssetFor names the file a release carries for a platform. There is none
+// for any other platform: a Windows exe is no use there, so it gets the "not
+// attached" message rather than a binary it cannot run.
+func ReleaseAssetFor(goos string) string {
+	switch goos {
+	case "windows":
+		return "Worklog.exe"
+	case "darwin":
+		return "Worklog-macos"
+	}
+	return "Worklog-" + goos
+}
 
 // Version is the version this binary was built as. build.ps1 sets it with
 // -ldflags -X: the release tag for a release build, `git describe` output such
@@ -97,8 +112,17 @@ func NewerRelease(latest, current string) bool {
 	return false
 }
 
-// DownloadRelease fetches tag's Worklog.exe into a new temporary folder and
-// returns its path. A variable so tests can stand in for gh.
+// ReleaseDownloadError says why a release could not be downloaded. A release goes
+// out before its Mac build is finished, so the file can simply not be there yet.
+func ReleaseDownloadError(tag, asset string, err error) error {
+	if strings.Contains(err.Error(), "no assets") {
+		return GhErr("Release %s has no %s yet. A new release can take a few minutes to get it; try again shortly.", tag, asset)
+	}
+	return err
+}
+
+// DownloadRelease fetches tag's file for this platform into a new temporary folder
+// and returns its path. A variable so tests can stand in for gh.
 var DownloadRelease = func(tag string) (string, error) {
 	dir, err := os.MkdirTemp("", "worklog-update-")
 	if err != nil {
@@ -107,7 +131,7 @@ var DownloadRelease = func(tag string) (string, error) {
 	if _, err := Gh([]string{"release", "download", tag, "--repo", UpdateRepo,
 		"--pattern", ReleaseAsset, "--dir", dir, "--clobber"}); err != nil {
 		os.RemoveAll(dir)
-		return "", err
+		return "", ReleaseDownloadError(tag, ReleaseAsset, err)
 	}
 	path := filepath.Join(dir, ReleaseAsset)
 	if info, err := os.Stat(path); err != nil || info.Size() == 0 {

@@ -336,7 +336,10 @@ func EnsureIssueRef(cfg Config, r Row) (Row, error) {
 	if strings.TrimSpace(r["issue"]) != "" {
 		return Row{}, nil // already filed somewhere
 	}
-	body := strings.TrimSpace(r["remarks"])
+	body := strings.TrimSpace(r["issue_body"])
+	if body == "" {
+		body = strings.TrimSpace(r["remarks"])
+	}
 	if body == "" {
 		body = strings.TrimSpace(r["description"])
 	}

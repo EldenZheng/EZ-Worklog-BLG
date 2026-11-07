@@ -12,8 +12,9 @@ import (
 //
 // GitHub keeps one order per project, not one per column: a card is placed
 // after another item of the same project (or at the very top). A column can
-// hold cards of two projects; a card can only be placed among its own
-// project's cards, so the drop line only ever appears between those.
+// hold cards of two projects, merged position by position (see ColumnOrder); a
+// card can only be placed among its own project's cards, so the drop line only
+// ever appears next to those.
 
 // updateItemPosition moves an item to just after afterID in its project, or
 // to the top when afterID is empty.

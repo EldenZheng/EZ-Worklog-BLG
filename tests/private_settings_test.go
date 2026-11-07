@@ -100,3 +100,45 @@ func TestSettingsSavePrivateDestinationsAndPay(t *testing.T) {
 		t.Fatal("Settings must persist edited private destinations and pay")
 	}
 }
+
+// Clean up starts off, saves a number of days, refuses anything else, and goes
+// back off when emptied.
+func TestSettingsCleanUpDays(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	test.ApplyTheme(t, theme.DefaultTheme())
+	cfg := backend.DefaultConfig()
+	cfg.GithubAuthor = "sample-user"
+	ui := &shell.UI{Store: backend.NewStore(tempDir(t)), Win: a.NewWindow("settings"), Cfg: cfg}
+	view := settings.BuildSettingsTab(ui)
+	var field *widget.Entry
+	var save *widget.Button
+	walk(view, func(o fyne.CanvasObject) {
+		if entry, ok := o.(*widget.Entry); ok && entry.PlaceHolder == "Blank keeps everything" {
+			field = entry
+		}
+		if button, ok := o.(*widget.Button); ok && button.Text == "Save settings" {
+			save = button
+		}
+	})
+	if field == nil || save == nil || field.Text != "" {
+		t.Fatal("the clean up field should be there and start blank")
+	}
+	field.SetText("14")
+	save.OnTapped()
+	if got, _ := ui.Store.LoadConfig(); got.CleanupDays != 14 {
+		t.Fatalf("saved %d", got.CleanupDays)
+	}
+	for _, bad := range []string{"soon", "-3", "0"} {
+		field.SetText(bad)
+		save.OnTapped()
+		if got, _ := ui.Store.LoadConfig(); got.CleanupDays != 14 {
+			t.Fatalf("%q should be refused, saved %d", bad, got.CleanupDays)
+		}
+	}
+	field.SetText("  ")
+	save.OnTapped()
+	if got, _ := ui.Store.LoadConfig(); got.CleanupDays != 0 {
+		t.Fatalf("blank should turn clean up off, saved %d", got.CleanupDays)
+	}
+}

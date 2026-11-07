@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
@@ -69,22 +68,13 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	mDesc.SetPlaceHolder("What was it? (meeting notes)")
 	mMin := widget.NewEntry()
 	mMin.SetPlaceHolder("minutes")
-	mRemarks := widget.NewMultiLineEntry()
-	mRemarks.Wrapping = fyne.TextWrapWord
-	mRemarks.SetMinRowsVisible(4)
-	mRemarks.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
-	// Live character counter — same "%d / %d" reading the row editor's popup
-	// uses, so a manual entry never surprises anyone with a silent trim on push.
-	mRemarksCount := widget.NewLabel("")
-	mRemarksCountUpdate := func() {
-		mRemarksCount.SetText(fmt.Sprintf("%d / %d", len(mRemarks.Text), backend.RemarkCap))
-	}
-	// Remarks grow with what is typed, a row at a time, instead of scrolling
-	// inside a box of four.
-	growRemarks := autoGrow(mRemarks, 4, func() { shell.Relayout(ui.LogBody) })
-	mRemarks.OnChanged = func(string) { mRemarksCountUpdate(); growRemarks() }
-	mRemarksCountUpdate()
 	mMsg := widget.NewLabel("")
+	// The popup's remarks box, with its live count and, from remarkCap up, its
+	// Separate worklog remarks tick. Here the boxes grow with what is typed, a
+	// row at a time, instead of scrolling inside a box of four.
+	mText := CommitTextEditor(ui, "", "", mMsg)
+	mText.desc.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
+	mText.growWithText(4, func() { shell.Relayout(ui.LogBody) })
 
 	// Mode selector — the same one the row editor grows. Shown for Worklog and a
 	// single Code Review, where the user is filing against an existing issue.
@@ -303,7 +293,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// resolveForPush + PushEntry, the same path the row editor uses. Reset the
 	// form only after a successful save so a failure keeps the fields for a
 	// second attempt.
-	mSaveResolved := func(push bool, codeReviewIssue, codeReviewIssueTitle string) {
+	mSaveResolved := func(push bool, reviewIssue, issueTitle string) {
 		var reviewItems []backend.CodeReviewItem
 		mins, _ := strconv.Atoi(strings.TrimSpace(mMin.Text))
 		if kind == backend.KindBulkReview {
@@ -331,18 +321,25 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		if kind == backend.KindOther || kind == backend.KindCodeReview || kind == backend.KindBulkReview || kind == backend.KindIndependent {
 			desc = autoDescFor(kind, date)
 		}
-		remarksText := strings.TrimSpace(mRemarks.Text)
+		var remarksText, issueBody string
 		if kind == backend.KindBulkReview {
+			// Written from the sheet, with no remarks box to split.
 			remarksText = backend.CodeReviewBody(reviewItems)
-		}
-		if len(remarksText) > backend.RemarkCap {
-			mMsg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarksText), backend.RemarkCap))
-			return
+			if len(remarksText) > backend.RemarkCap {
+				mMsg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarksText), backend.RemarkCap))
+				return
+			}
+		} else {
+			if why := mText.Check(); why != "" {
+				mMsg.SetText(why)
+				return
+			}
+			remarksText, issueBody = mText.Values()
 		}
 		row := backend.Row{
 			"date": date, "minutes": strconv.Itoa(mins),
 			"type": kind, "description": desc,
-			"remarks": remarksText,
+			"remarks": remarksText, "issue_body": issueBody,
 			// Every push reads Row["owner"] into the project's Worklog Owner
 			// field; a row saved with an empty owner leaves that column blank.
 			// The Settings value is the same one the row editor seeds its own
@@ -362,14 +359,15 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 				return
 			}
 			row["issue"] = ref
+			row["issue_title"] = strings.TrimSpace(issueTitle)
 			row["mode"] = mModeVal()
 		case backend.KindCodeReview:
-			if strings.TrimSpace(codeReviewIssue) == "" {
+			if strings.TrimSpace(reviewIssue) == "" {
 				mMsg.SetText("Paste a PR or issue link for this review.")
 				return
 			}
-			row["issue"] = codeReviewIssue
-			row["issue_title"] = strings.TrimSpace(codeReviewIssueTitle)
+			row["issue"] = reviewIssue
+			row["issue_title"] = strings.TrimSpace(issueTitle)
 			row["mode"] = mModeVal()
 		case backend.KindBulkReview:
 			// The daily issue is found or created on the first push, matching
@@ -395,7 +393,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		resetForm := func() {
 			mDesc.SetText("")
 			mMin.SetText("")
-			mRemarks.SetText("")
+			mText.clear()
 			mTitle.SetText("")
 			mIssue.SetText("")
 			review.Reset()
@@ -456,7 +454,50 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// already attached to the correct issue and can be pushed later unchanged.
 	// The preview usually has the answer already, so a paste-then-save does
 	// not ask GitHub twice; a PR naming several issues waits for the pick.
+	//
+	// A Worklog looks up its issue's title the same way, so its bubble says what
+	// the issue is from the moment it is saved. The title is best-effort: a
+	// failed lookup still saves, and the ref stands in until the next start-up
+	// fills the title in. The version stops a second press, or a changed link,
+	// from saving twice while the first lookup is out.
+	titleLookup := 0
+	saveWorklog := func(push bool) {
+		source := mIssue.Text
+		ref, err := backend.IssueRefFromAny(source)
+		if err != nil {
+			mMsg.SetText(err.Error())
+			return
+		}
+		if title := strings.TrimSpace(ui.IssueInfo[ref].Title); title != "" {
+			mSaveResolved(push, "", title)
+			return
+		}
+		titleLookup++
+		version := titleLookup
+		mMsg.SetText("Finding the issue's title on GitHub…")
+		var info backend.IssueInfo
+		ui.Async(func() error {
+			infos, _ := backend.FetchIssueInfos([]string{ref})
+			info = infos[ref]
+			return nil
+		}, func() {
+			if version != titleLookup || kind != backend.KindOther || mIssue.Text != source {
+				return
+			}
+			if strings.TrimSpace(info.Title) != "" {
+				if ui.IssueInfo == nil {
+					ui.IssueInfo = map[string]backend.IssueInfo{}
+				}
+				ui.IssueInfo[ref] = info
+			}
+			mSaveResolved(push, "", info.Title)
+		})
+	}
 	mSave := func(push bool) {
+		if kind == backend.KindOther {
+			saveWorklog(push)
+			return
+		}
 		if kind != backend.KindCodeReview {
 			mSaveResolved(push, "", "")
 			return
@@ -485,12 +526,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// reports GitHub minutes, pending drafts, and this review's live total without
 	// asking for a second minutes value.
 	dayReadout := dayFillReadout(ui, mDate, mMin, "")
-	// Remarks with its counter on a right-aligned row underneath, so a wall of
-	// text never surprises the pusher with a silent trim to remarkCap.
-	remarksRow := container.NewVBox(
-		shell.Labeled("Remarks", mRemarks),
-		container.NewBorder(nil, nil, nil, mRemarksCount),
-	)
+	remarksRow := mText.pane
 	manualPane := container.NewVBox(
 		dateRow,
 		dayReadout,
@@ -876,7 +912,8 @@ func bubbleGrid(ui *shell.UI, groups []backend.Group, underHeading bool) fyne.Ca
 	for i := range groups {
 		bubbles = append(bubbles, GroupBubble(ui, groups[i], underHeading))
 	}
-	return container.New(widgets.NewFlowGrid(BubbleMinWidth, BubbleMaxWidth, BubbleHeight), bubbles...)
+	return container.New(widgets.NewFlowGrid(BubbleMinWidth, BubbleMaxWidth, BubbleHeight).
+		Compact(BubbleCompactBelow, BubbleCompactMinWidth), bubbles...)
 }
 
 // SetIgnored hides a commit from the pending list, or brings it back. The
@@ -915,6 +952,10 @@ const (
 	BubbleMinWidth = 340
 	BubbleMaxWidth = 560
 	BubbleHeight   = 152
+	// Below BubbleCompactBelow of page width the tiles get narrower, and only as
+	// tall as their text needs, so more of them fit on a small screen.
+	BubbleCompactBelow    = 1500
+	BubbleCompactMinWidth = 280
 )
 
 // BubbleTitleChars is what fits in two wrapped lines of the *narrowest* tile.
@@ -939,11 +980,7 @@ const pendingTitleChars = 60
 func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasObject {
 	info := ui.IssueInfo[g.Issue]
 	muted := theme.Color(theme.ColorNamePlaceHolder)
-	caption := func(s string) *canvas.Text {
-		t := canvas.NewText(shell.Truncate(s, 56), muted)
-		t.TextSize = theme.CaptionTextSize()
-		return t
-	}
+	caption := func(s string) fyne.CanvasObject { return fitCaption(shell.Truncate(s, 56), muted) }
 
 	// Heading: the issue this is filed against. The ref stands in while the
 	// title is still loading, and the commit speaks for the tile only when
@@ -1052,8 +1089,9 @@ func OpenGroupEditor(ui *shell.UI, g backend.Group) {
 		}
 	})
 	back.Importance = widget.LowImportance
-	d = dialog.NewCustomWithoutButtons(heading, PopupShell(back, form), ui.Win)
-	d.Resize(ui.PopupSize())
+	content := PopupShell(back, form)
+	d = dialog.NewCustomWithoutButtons(ui.PopupTitle(heading), shell.FitPopup(content), ui.Win)
+	d.Resize(ui.PopupSizeFor(content))
 	d.Show()
 }
 
@@ -1224,6 +1262,38 @@ func (t *commitText) Check() string {
 	return ""
 }
 
+// growWithText sizes the boxes to their text, for a form that scrolls as a
+// whole rather than handing them a fixed pane. Ticking the split halves the
+// width, so the rows are counted again once the pair has been laid out.
+func (t *commitText) growWithText(minRows int, relayout func()) {
+	var grows []func()
+	for _, e := range []*widget.Entry{t.desc, t.Remarks} {
+		e.SetMinRowsVisible(minRows)
+		grow := autoGrow(e, minRows, relayout)
+		grows = append(grows, grow)
+		changed := e.OnChanged
+		e.OnChanged = func(text string) {
+			changed(text)
+			grow()
+		}
+	}
+	toggled := t.Separate.OnChanged
+	t.Separate.OnChanged = func(on bool) {
+		toggled(on)
+		relayout()
+		for _, grow := range grows {
+			grow()
+		}
+	}
+}
+
+// clear empties both boxes and goes back to the one box.
+func (t *commitText) clear() {
+	t.Separate.SetChecked(false)
+	t.desc.SetText("")
+	t.Remarks.SetText("")
+}
+
 func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *commitText {
 	t := &commitText{}
 	descE := widget.NewMultiLineEntry()
@@ -1242,9 +1312,8 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 		nil, nil, nil, remE)
 	t.Separate = widget.NewCheck("Separate worklog remarks", nil)
 	separateSlot := container.NewStack()
-	descPane := container.NewBorder(
-		container.NewHBox(descCaption, descCount, separateSlot),
-		nil, nil, nil, descE)
+	descHead := container.NewHBox(descCaption, descCount, separateSlot)
+	descPane := container.NewBorder(descHead, nil, nil, nil, descE)
 	// Beside, not under: the pane is the foot of the popup, and halving its
 	// width costs less than halving a height already shared with the fields.
 	// The host swaps between the lone box and the pair rather than hiding a
@@ -1263,7 +1332,12 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 		remCount.SetText(fmt.Sprintf("%d / %d", len(remE.Text), backend.RemarkCap))
 		// Offered once the text reaches the cap, and kept on screen while
 		// ticked so it can be unticked after the description is trimmed.
-		shell.ShowIf(t.Separate, t.Split() || len(descE.Text) >= backend.RemarkCap)
+		// A hidden tick takes no width, so the line has to make room for it.
+		offer := t.Split() || len(descE.Text) >= backend.RemarkCap
+		if offer != t.Separate.Visible() {
+			shell.ShowIf(t.Separate, offer)
+			descHead.Refresh()
+		}
 		want := fyne.CanvasObject(descPane)
 		if t.Split() {
 			want = pair
@@ -1412,8 +1486,9 @@ func openRowEditor(ui *shell.UI, r backend.Row, refresh func()) {
 		}
 	})
 	back.Importance = widget.LowImportance
-	d = dialog.NewCustomWithoutButtons(heading, PopupShell(back, form), ui.Win)
-	d.Resize(ui.PopupSize())
+	content := PopupShell(back, form)
+	d = dialog.NewCustomWithoutButtons(ui.PopupTitle(heading), shell.FitPopup(content), ui.Win)
+	d.Resize(ui.PopupSizeFor(content))
 	d.Show()
 }
 
@@ -1440,23 +1515,14 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	parentTitleE.SetText(r["parent_title"])
 	parentTitleE.SetPlaceHolder("Title for the standalone task")
 	descE := widget.NewEntry()
-	descE.SetText(r["description"])
+	descE.SetText(RowTitle(ui, r))
 
 	msg := widget.NewLabel("")
-	// A manual entry carries its text in description and has no remarks yet;
-	// seeding from it beats handing over an empty box that pushes as nothing.
-	// A commit entry gets the pane that can split the issue description off
-	// from the remarks; the other kinds keep the single box.
-	var text *commitText
-	var remE *widget.Entry
-	var remPane fyne.CanvasObject
-	var aiBtn *widget.Button
-	if r["type"] == "commit" {
-		text = CommitTextEditor(ui, r["remarks"], r["issue_body"], msg)
-		remPane, aiBtn = text.pane, text.aiBtn
-	} else {
-		remE, remPane, aiBtn = remarksEditor(ui, backend.OrDefault(r["remarks"], r["description"]), msg)
-	}
+	// Older rows carry their work in description with no remarks yet. Seed
+	// from that original text, independently of the issue title shown above.
+	// Every kind can keep a full issue body separate from capped remarks.
+	text := CommitTextEditor(ui, backend.OrDefault(r["remarks"], r["description"]), r["issue_body"], msg)
+	remPane, aiBtn := text.pane, text.aiBtn
 
 	modeSel := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
 	if r["mode"] == "issue" {
@@ -1483,20 +1549,11 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			msg.SetText("Pick a worklog date.")
 			return
 		}
-		var remarks, issueBody string
-		if text != nil {
-			if why := text.Check(); why != "" {
-				msg.SetText(why)
-				return
-			}
-			remarks, issueBody = text.Values()
-		} else {
-			remarks = strings.TrimSpace(remE.Text)
-			if len(remarks) > backend.RemarkCap {
-				msg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarks), backend.RemarkCap))
-				return
-			}
+		if why := text.Check(); why != "" {
+			msg.SetText(why)
+			return
 		}
+		remarks, issueBody := text.Values()
 		mins, _ := strconv.Atoi(strings.TrimSpace(minE.Text))
 		if push && mins <= 0 {
 			msg.SetText("Enter the minutes before pushing.")
@@ -1513,10 +1570,11 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			"description": strings.TrimSpace(descE.Text),
 			"issue":       issue,
 			"owner":       strings.TrimSpace(ownE.Text),
-			"remarks":     remarks, "mode": modeVal(),
+			"remarks":     remarks, "issue_body": issueBody, "mode": modeVal(),
 		}
-		if text != nil {
-			patch["issue_body"] = issueBody
+		// A title saved for the old issue would go on naming this one.
+		if issue != r["issue"] {
+			patch["issue_title"] = strings.TrimSpace(ui.IssueInfo[issue].Title)
 		}
 		if isIndependent {
 			patch["parent_repo"] = strings.TrimSpace(parentRepoE.Text)

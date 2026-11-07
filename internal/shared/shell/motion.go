@@ -64,7 +64,12 @@ func (t *Tappable) MouseOut() {
 	}
 }
 
-func (t *Tappable) Cursor() desktop.Cursor { return desktop.PointerCursor }
+func (t *Tappable) Cursor() desktop.Cursor {
+	if t.Look != nil {
+		return t.Look
+	}
+	return desktop.PointerCursor
+}
 
 func (t *Tappable) Hide() {
 	if t.Feedback != nil {

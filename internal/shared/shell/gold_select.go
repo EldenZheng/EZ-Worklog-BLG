@@ -22,6 +22,11 @@ type GoldSelect struct {
 	active int
 	Flash  *widgets.ChoiceFeedback
 	Scroll *container.Scroll
+	// Searchable tops the popup with a search field that narrows its rows, for
+	// a list too long to scroll through.
+	Searchable bool
+	Find       *choiceSearch // the open popup's search field
+	shown      []int         // the Options the popup lists; active indexes this
 }
 
 func NewGoldSelect(options []string, changed func(string)) *GoldSelect {
@@ -30,6 +35,61 @@ func NewGoldSelect(options []string, changed func(string)) *GoldSelect {
 	s.OnChanged = changed
 	s.ExtendBaseWidget(s)
 	return s
+}
+
+// choiceSearch is the popup's search field. Typing filters; the keys that work
+// the list go to the dropdown, since the field holds the focus while it is open.
+type choiceSearch struct {
+	widget.Entry
+	owner *GoldSelect
+}
+
+func newChoiceSearch(owner *GoldSelect) *choiceSearch {
+	f := &choiceSearch{owner: owner}
+	f.Wrapping = fyne.TextWrapOff
+	f.ExtendBaseWidget(f)
+	makeSearchEntry(&f.Entry, "Search", "", func(string) { owner.searchChanged() })
+	return f
+}
+
+func (f *choiceSearch) TypedKey(e *fyne.KeyEvent) {
+	switch e.Name {
+	case fyne.KeyDown, fyne.KeyUp, fyne.KeyReturn, fyne.KeyEnter, fyne.KeyEscape:
+		f.owner.TypedKey(e)
+	default:
+		f.Entry.TypedKey(e)
+	}
+}
+
+// filterChoices works out which Options the popup lists. Without a search that
+// is all of them, so active and an option's index are the same number.
+func (s *GoldSelect) filterChoices() {
+	query := ""
+	if s.Find != nil {
+		query = strings.ToLower(strings.TrimSpace(s.Find.Text))
+	}
+	s.shown = s.shown[:0]
+	for i, option := range s.Options {
+		if query == "" || strings.Contains(strings.ToLower(option), query) {
+			s.shown = append(s.shown, i)
+		}
+	}
+}
+
+func (s *GoldSelect) searchChanged() {
+	if s.Scroll == nil {
+		return
+	}
+	s.filterChoices()
+	s.active = 0
+	s.renderChoices()
+	s.Scroll.Refresh() // the list changed length under the scroller
+	s.Scroll.ScrollToTop()
+	// The field's X takes the focus when pressed. Back to the field, so the
+	// keys still work the list.
+	if c := fyne.CurrentApp().Driver().CanvasForObject(s); c != nil {
+		c.Focus(s.Find)
+	}
 }
 
 func (s *GoldSelect) Tapped(*fyne.PointEvent) {
@@ -47,7 +107,9 @@ func (s *GoldSelect) TypedKey(e *fyne.KeyEvent) {
 		s.CloseChoices()
 	case fyne.KeyReturn, fyne.KeyEnter, fyne.KeySpace:
 		if s.Popup != nil && s.Popup.Visible() {
-			s.Choose(s.active)
+			if s.active < len(s.shown) {
+				s.Choose(s.shown[s.active])
+			}
 		} else {
 			s.showChoices()
 		}
@@ -56,7 +118,7 @@ func (s *GoldSelect) TypedKey(e *fyne.KeyEvent) {
 			s.showChoices()
 			return
 		}
-		if e.Name == fyne.KeyDown && s.active < len(s.Options)-1 {
+		if e.Name == fyne.KeyDown && s.active < len(s.shown)-1 {
 			s.active++
 		}
 		if e.Name == fyne.KeyUp && s.active > 0 {
@@ -86,6 +148,7 @@ func (s *GoldSelect) CloseChoices() {
 		s.Popup = nil
 	}
 	s.Scroll = nil
+	s.Find = nil
 }
 
 func (s *GoldSelect) Hide() { s.CloseChoices(); s.Select.Hide() }
@@ -104,18 +167,31 @@ func (s *GoldSelect) showChoices() {
 	if s.active < 0 {
 		s.active = 0
 	}
+	if s.Searchable {
+		s.Find = newChoiceSearch(s)
+	}
+	s.filterChoices()
 	s.Rows = container.NewVBox()
 	s.renderChoices()
 	height := fyne.Min(s.Rows.MinSize().Height+8, 320)
 	var content fyne.CanvasObject = s.Rows
-	if s.Rows.MinSize().Height > height || strings.Contains(s.Options[0], " | ") {
+	// The blank ends let the first and last rows reach the middle of the popup.
+	// A search leaves them out: they would float a short result mid-list.
+	if !s.Searchable && (s.Rows.MinSize().Height > height || strings.Contains(s.Options[0], " | ")) {
 		top, bottom := canvas.NewRectangle(color.Transparent), canvas.NewRectangle(color.Transparent)
 		top.SetMinSize(fyne.NewSize(0, height/2))
 		bottom.SetMinSize(fyne.NewSize(0, height/2))
 		content = container.NewVBox(top, s.Rows, bottom)
 	}
 	s.Scroll = container.NewVScroll(content)
-	s.Flash = &widgets.ChoiceFeedback{Content: s.Scroll, Pulse: canvas.NewRectangle(color.Transparent)}
+	var body fyne.CanvasObject = s.Scroll
+	if s.Find != nil {
+		// Sized from the full list and kept there, so the popup does not jump
+		// about as the search narrows it.
+		height += s.Find.MinSize().Height + theme.Padding()
+		body = container.NewBorder(s.Find, nil, nil, nil, s.Scroll)
+	}
+	s.Flash = &widgets.ChoiceFeedback{Content: body, Pulse: canvas.NewRectangle(color.Transparent)}
 	s.Flash.Pulse.CornerRadius = 6
 	s.Flash.ExtendBaseWidget(s.Flash)
 	s.Popup = widget.NewPopUp(s.Flash, c)
@@ -125,12 +201,18 @@ func (s *GoldSelect) showChoices() {
 	s.Popup.ShowAtPosition(origin.Add(fyne.NewPos(0, s.Size().Height)))
 	s.centerActive()
 	s.Flash.Flash()
+	if s.Find != nil {
+		c.Focus(s.Find) // type straight away, without clicking the field first
+	}
 }
 
 func (s *GoldSelect) renderChoices() {
 	s.Rows.Objects = nil
-	for i, option := range s.Options {
-		i, option := i, option
+	if len(s.shown) == 0 {
+		s.Rows.Add(widget.NewLabel("No matches"))
+	}
+	for position, i := range s.shown {
+		i, option := i, s.Options[i]
 		selected := option == s.Selected
 		current := strings.HasSuffix(option, "- Current")
 		ink := theme.Color(theme.ColorNameForeground)
@@ -141,7 +223,7 @@ func (s *GoldSelect) renderChoices() {
 		if selected {
 			fill = widgets.LogoGold
 			ink = color.NRGBA{R: 24, G: 24, B: 24, A: 255}
-		} else if i == s.active {
+		} else if position == s.active {
 			fill = BlendColor(fill, widgets.LogoGold, 0.14)
 		}
 		label := widget.NewLabel(option)

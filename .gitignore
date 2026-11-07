@@ -13,4 +13,5 @@ config.json
 worklog.csv
 worklog-*.tsv
 ignored.json
+ignored-dates.json
 sprint-planner.json

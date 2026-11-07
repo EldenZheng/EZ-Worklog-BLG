@@ -178,11 +178,11 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	// The shown sprints and their days left, filled in below once read, sit
 	// just after Today.
 	sprintInfo := widget.NewLabel("")
-	header := container.NewHBox(container.NewThemeOverride(mode, widgets.DropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(360, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), today, sprintInfo)
+	header := container.New(&widgets.WrapRowLayout{}, container.NewHBox(container.NewThemeOverride(mode, widgets.DropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(360, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), today), sprintInfo)
 	auto := widget.NewButton("Allocate unscheduled", func() {
 		p := k.Plan
 		var unplaced []string
-		p.Tasks, unplaced = backend.AllocateSprint(p, k.CalendarItems(), shell.Today())
+		p.Tasks, unplaced = backend.AllocateSprint(p, k.OpenCalendarItems(), shell.Today())
 		if k.Save(p) {
 			shell.Hooks.KanbanUIDraw(k)
 			k.SetMessage("Local schedule saved · weekdays 09:00–17:00; existing appointments preserved.")
@@ -207,7 +207,8 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 			}
 		})
 	})
-	toolbar := container.NewBorder(nil, nil, header, container.NewHBox(clear, auto), nil)
+	tools := container.NewHBox(clear, auto)
+	toolbar := container.New(widgets.NewSidesLayout(header, tools, k.CalendarBody.Size().Width), header, tools)
 	var dates fyne.CanvasObject
 	if k.CalendarMode == "Month" || k.CalendarMode == "Sprint" {
 		weeks := container.New(PlannerRowsLayout{})
@@ -268,14 +269,11 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	axisSpacer.SetMinSize(fyne.NewSize(plannerRulerWidth, 0))
 	dates = container.NewBorder(container.NewBorder(nil, nil, axisSpacer, nil, weekdays), nil, nil, nil, dates)
 	unscheduled := []fyne.CanvasObject{PlannerCard(k, shell.PlannerMeetingCandidate(), -1)}
-	issues := 0
-	for _, c := range items {
-		t := k.Plan.Tasks[c.Key]
-		if !backend.PlannerIssueFinished(c.Item, t) {
-			unscheduled = append(unscheduled, PlannerCard(k, c, -1))
-			issues++
-		}
+	open := k.OpenCalendarItems()
+	for _, c := range open {
+		unscheduled = append(unscheduled, PlannerCard(k, c, -1))
 	}
+	issues := len(open)
 	grid := container.NewVBox(unscheduled...)
 	trayScroll := shell.PanelScroll(grid, true)
 	trayScroll.SetMinSize(fyne.NewSize(250, 0))

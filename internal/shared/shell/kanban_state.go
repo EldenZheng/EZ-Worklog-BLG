@@ -31,6 +31,8 @@ type KanbanUI struct {
 	Plan                   backend.SprintPlan
 	Root, Body, GhostLayer *fyne.Container
 	SideClip, BoardClip    fyne.CanvasObject
+	LegendClip             fyne.CanvasObject
+	CalendarLegendClip     fyne.CanvasObject
 	// CompletedOpen unfolds the finished sprints in the sidebar; folded by default.
 	CompletedOpen bool
 	// CardsShown is which cards the board last showed (filter, sprint,
@@ -494,47 +496,44 @@ func (k *KanbanUI) CombinedSprints(kanban ...bool) []CombinedSprint {
 	return result
 }
 
-func (k *KanbanUI) ProjectLegend(calendar ...bool) fyne.CanvasObject {
-	row := container.NewHBox(widget.NewLabelWithStyle("Projects", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
-	for _, b := range k.Plan.Boards {
-		b := b
-		count, minutes := 0, 0
-		hasPR := false
-		for _, it := range b.Items {
-			include := Hooks.KanbanUIMatchesIssueFilter(k, b, it)
-			if len(calendar) > 0 && calendar[0] {
-				selected := b.Current(Today())
-				if k.CalendarSprint != "" && k.CalendarSprint != "current" {
-					selected = b.SprintByKey(k.CalendarSprint)
-				}
-				include = selected.ID != "" && it.SprintID == selected.ID
+// projectTappable is a project's legend entry: its counts for the menu's
+// selection, and a tap that hides or shows the project.
+func (k *KanbanUI) projectTappable(b backend.SprintBoard, calendar bool) *Tappable {
+	count, minutes := 0, 0
+	hasPR := false
+	for _, it := range b.Items {
+		include := Hooks.KanbanUIMatchesIssueFilter(k, b, it)
+		if calendar {
+			selected := b.Current(Today())
+			if k.CalendarSprint != "" && k.CalendarSprint != "current" {
+				selected = b.SprintByKey(k.CalendarSprint)
 			}
-			if include {
-				count++
-				hasPR = hasPR || it.ItemType() == backend.KanbanPullRequests
-				minutes += backend.SprintEstimate(it, backend.SprintTask{})
-			}
+			include = selected.ID != "" && it.SprintID == selected.ID
 		}
-		quantity := "issues"
-		if count == 1 {
-			quantity = "issue"
+		if include {
+			count++
+			hasPR = hasPR || it.ItemType() == backend.KanbanPullRequests
+			minutes += backend.SprintEstimate(it, backend.SprintTask{})
 		}
-		if hasPR {
-			quantity = "items"
-			if count == 1 {
-				quantity = "item"
-			}
-		}
-		label := fmt.Sprintf("%s (%d %s | %s estimated)", b.Title, count, quantity, backend.HoursMins(minutes))
-		row.Add(LegendChip(k.Accent(b, backend.SprintItem{}), label, !k.VisibleBoard(b), func() {
-			if k.ProjectOff == nil {
-				k.ProjectOff = map[string]bool{}
-			}
-			k.ProjectOff[b.ID] = !k.ProjectOff[b.ID]
-			Hooks.KanbanUIDraw(k)
-		}))
 	}
-	return container.NewHScroll(row)
+	quantity := "issues"
+	if count == 1 {
+		quantity = "issue"
+	}
+	if hasPR {
+		quantity = "items"
+		if count == 1 {
+			quantity = "item"
+		}
+	}
+	label := fmt.Sprintf("%s (%d %s | %s estimated)", b.Title, count, quantity, backend.HoursMins(minutes))
+	return LegendChip(k.Accent(b, backend.SprintItem{}), label, !k.VisibleBoard(b), func() {
+		if k.ProjectOff == nil {
+			k.ProjectOff = map[string]bool{}
+		}
+		k.ProjectOff[b.ID] = !k.ProjectOff[b.ID]
+		Hooks.KanbanUIDraw(k)
+	})
 }
 
 func SprintDateLabel(s backend.SprintIteration) string {
@@ -552,21 +551,46 @@ func SprintDateLabel(s backend.SprintIteration) string {
 func (k *KanbanUI) CalendarItems() []backend.SprintCandidate {
 	var out []backend.SprintCandidate
 	for _, b := range k.Plan.Boards {
-		if !k.VisibleBoard(b) {
-			continue
-		}
-		s := b.Current(Today())
-		if k.CalendarSprint != "" && k.CalendarSprint != "current" {
-			s = b.SprintByKey(k.CalendarSprint)
-		}
-		if s.ID == "" {
-			continue
-		}
-		for _, it := range b.Items {
-			// Support rota issues are not planned work.
-			if it.SprintID == s.ID && !backend.IsSupportIssue(it.Title) {
-				out = append(out, backend.SprintCandidate{it.Key(b.ID), it, s})
+		out = append(out, k.calendarBoardItems(b)...)
+	}
+	return out
+}
+
+// OpenCalendarItems is the Sprint Issues list: the selected sprint's unfinished
+// issues, merged by position. A position counts only the issues left, so a
+// project's finished issues do not push its open ones down the list.
+func (k *KanbanUI) OpenCalendarItems() []backend.SprintCandidate {
+	seen := map[string]bool{}
+	var projects [][]backend.SprintCandidate
+	for _, b := range k.OrderedBoards() {
+		var open []backend.SprintCandidate
+		for _, c := range k.calendarBoardItems(b) {
+			if !seen[c.Key] && !backend.PlannerIssueFinished(c.Item, k.Plan.Tasks[c.Key]) {
+				seen[c.Key] = true
+				open = append(open, c)
 			}
+		}
+		projects = append(projects, open)
+	}
+	return MergeByPosition(projects)
+}
+
+func (k *KanbanUI) calendarBoardItems(b backend.SprintBoard) []backend.SprintCandidate {
+	if !k.VisibleBoard(b) {
+		return nil
+	}
+	s := b.Current(Today())
+	if k.CalendarSprint != "" && k.CalendarSprint != "current" {
+		s = b.SprintByKey(k.CalendarSprint)
+	}
+	if s.ID == "" {
+		return nil
+	}
+	var out []backend.SprintCandidate
+	for _, it := range b.Items {
+		// Support rota issues are not planned work.
+		if it.SprintID == s.ID && !backend.IsSupportIssue(it.Title) {
+			out = append(out, backend.SprintCandidate{it.Key(b.ID), it, s})
 		}
 	}
 	return out

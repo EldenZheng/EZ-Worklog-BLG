@@ -3,6 +3,7 @@ package main
 import (
 	_ "embed"
 	"fmt"
+	"runtime"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -37,8 +38,14 @@ func main() {
 	a.Settings().SetTheme(shell.GoldTheme{Theme: theme.DefaultTheme()})
 	a.SetIcon(fyne.NewStaticResource("icon.png", shell.AppIconPNG))
 	w := a.NewWindow(shell.WindowTitle)
-	// The size to come back to if the window is un-maximised.
-	w.Resize(fyne.NewSize(1440, 920))
+	// The size to come back to if the window is un-maximised. Only Windows gets
+	// maximised below, so elsewhere this is the size it opens at: small enough
+	// for a laptop's screen, since Fyne cannot say how big the screen is.
+	size := fyne.NewSize(1440, 920)
+	if runtime.GOOS != "windows" {
+		size = fyne.NewSize(1200, 720)
+	}
+	w.Resize(size)
 	w.CenterOnScreen()
 
 	store := backend.NewStore(shell.DataDir())
@@ -102,7 +109,7 @@ func main() {
 			settings.LoadGitHubProfile(ui, false)
 		}
 	}
-	w.SetContent(ui.Tabs)
+	shell.FitScreen(w, ui.Tabs)
 	// Kanban changes still queued for GitHub are lost if the app quits, so
 	// ask first.
 	w.SetCloseIntercept(func() {

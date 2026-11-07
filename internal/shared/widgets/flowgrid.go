@@ -25,10 +25,25 @@ type FlowGrid struct {
 	maxWidth float32
 	height   float32
 	Rows     int
+	// Below compactBelow the cells shrink to compactWidth, and to the height
+	// their content needs. width is what the last Layout was given.
+	compactBelow, compactWidth float32
+	width                      float32
 }
 
 func NewFlowGrid(minWidth, maxWidth, height float32) *FlowGrid {
 	return &FlowGrid{minWidth: minWidth, maxWidth: maxWidth, height: height, Rows: 1}
+}
+
+// Compact sets the width below which the grid packs tighter cells for a small
+// screen. At or above it nothing changes.
+func (g *FlowGrid) Compact(below, minWidth float32) *FlowGrid {
+	g.compactBelow, g.compactWidth = below, minWidth
+	return g
+}
+
+func (g *FlowGrid) compactAt(w float32) bool {
+	return g.compactBelow > 0 && w > 0 && w < g.compactBelow
 }
 
 // Gap is the space between cells. Cells no longer inset themselves, so this is
@@ -38,9 +53,13 @@ func (g *FlowGrid) Gap() float32 { return theme.Padding() * 2 }
 // Columns reports how many cells fit across w and how wide each one comes out.
 func (g *FlowGrid) Columns(w float32, count int) (cols int, cellW float32) {
 	gap := g.Gap()
+	minWidth := g.minWidth
+	if g.compactAt(w) {
+		minWidth = g.compactWidth
+	}
 	cols = 1
-	if w > g.minWidth {
-		cols = int(math.Floor(float64(w+gap) / float64(g.minWidth+gap)))
+	if w > minWidth {
+		cols = int(math.Floor(float64(w+gap) / float64(minWidth+gap)))
 	}
 	// Fewer tiles than fit across: let them share the row rather than sit at
 	// their minimum with a hole beside them.
@@ -64,6 +83,9 @@ func (g *FlowGrid) Columns(w float32, count int) (cols int, cellW float32) {
 // every tile in the grid is the same height whatever its text does.
 func (g *FlowGrid) cellHeight(objects []fyne.CanvasObject) float32 {
 	h := g.height
+	if g.compactAt(g.width) {
+		h = 0
+	}
 	for _, o := range objects {
 		if !o.Visible() {
 			continue
@@ -76,6 +98,7 @@ func (g *FlowGrid) cellHeight(objects []fyne.CanvasObject) float32 {
 }
 
 func (g *FlowGrid) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	g.width = size.Width
 	visible := 0
 	for _, o := range objects {
 		if o.Visible() {
@@ -116,7 +139,11 @@ func (g *FlowGrid) MinSize(objects []fyne.CanvasObject) fyne.Size {
 		rows = 1
 	}
 	h := g.cellHeight(objects)
-	return fyne.NewSize(g.minWidth, h*float32(rows)+g.Gap()*float32(rows-1))
+	width := g.minWidth
+	if g.compactBelow > 0 {
+		width = g.compactWidth
+	}
+	return fyne.NewSize(width, h*float32(rows)+g.Gap()*float32(rows-1))
 }
 
 // topFill stacks two children: the first takes the height it asks for, and the

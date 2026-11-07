@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
@@ -12,9 +13,10 @@ import (
 	"worklog/internal/menus/meeting"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
-func TestMeetingLoggedOverflowUsesFullSidebarWidth(t *testing.T) {
+func TestMeetingLoggedPaddingScrollsWithCards(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	w := a.NewWindow("t")
@@ -30,27 +32,60 @@ func TestMeetingLoggedOverflowUsesFullSidebarWidth(t *testing.T) {
 	w.Resize(fyne.NewSize(1500, 900))
 	meeting.DrawMeeting(ui)
 	var scroll *container.Scroll
-	var card *shell.Tappable
+	var cards []*shell.Tappable
+	var topRule, bottomRule *canvas.Rectangle
 	walk(ui.MeetingRowsHolder, func(o fyne.CanvasObject) {
 		if s, ok := o.(*container.Scroll); ok {
 			scroll = s
 		}
-		if c, ok := o.(*shell.Tappable); ok && card == nil {
-			card = c
+		if c, ok := o.(*shell.Tappable); ok {
+			cards = append(cards, c)
+		}
+		if r, ok := o.(*canvas.Rectangle); ok && r.FillColor == widgets.LogoGold && r.CornerRadius == 0 {
+			if topRule == nil {
+				topRule = r
+			} else {
+				bottomRule = r
+			}
 		}
 	})
-	if scroll == nil || card == nil {
+	if scroll == nil || len(cards) != len(rows) || topRule == nil || bottomRule == nil {
 		t.Fatal("logged issue list missing")
 	}
 	if scroll.Size().Width != ui.MeetingRowsHolder.Size().Width {
 		t.Fatal("padding narrowed the sidebar scroll viewport")
 	}
-	if a.Driver().AbsolutePositionForObject(card).X != a.Driver().AbsolutePositionForObject(scroll).X {
-		t.Fatal("cards have an extra scroll inset")
+	at := a.Driver().AbsolutePositionForObject
+	if got, want := at(scroll).Y, at(topRule).Y+topRule.Size().Height; got != want {
+		t.Fatalf("scroll top = %g, want header line bottom %g", got, want)
+	}
+	if got, want := at(scroll).Y+scroll.Size().Height, at(bottomRule).Y; got != want {
+		t.Fatalf("scroll bottom = %g, want footer line top %g", got, want)
+	}
+	first, last := cards[0], cards[len(cards)-1]
+	side, end := theme.InnerPadding(), theme.InnerPadding()*1.5
+	if got := at(first).X - at(scroll).X; got != side {
+		t.Fatalf("left card padding = %g, want %g", got, side)
+	}
+	if got := at(scroll).X + scroll.Size().Width - at(first).X - first.Size().Width; got != side {
+		t.Fatalf("right card padding = %g, want %g", got, side)
+	}
+	if got := at(first).Y - at(scroll).Y; got != end {
+		t.Fatalf("initial top padding = %g, want %g", got, end)
 	}
 	scroll.ScrollToBottom()
 	if scroll.Offset.Y <= 0 {
 		t.Fatal("logged issues should scroll when they overflow")
+	}
+	if at(first).Y >= at(scroll).Y {
+		t.Fatal("top padding should scroll out of the viewport with the cards")
+	}
+	if got := at(scroll).Y + scroll.Size().Height - at(last).Y - last.Size().Height; got != end {
+		t.Fatalf("bottom padding at the end = %g, want %g", got, end)
+	}
+	scroll.ScrollToTop()
+	if at(last).Y+last.Size().Height <= at(scroll).Y+scroll.Size().Height {
+		t.Fatal("overflowing cards should continue past the viewport's bottom edge")
 	}
 }
 

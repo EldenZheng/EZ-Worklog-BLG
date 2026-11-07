@@ -1,6 +1,6 @@
 package glfw
 
-// Worklog patch, copied into the private Fyne build by build.ps1, which also
+// Worklog patch, copied into the private Fyne build by tools/patchfyne, which also
 // renames Fyne's own processMouseScrolled so this one replaces it. The go tool
 // skips folders that start with "_", so this file only builds there.
 //
@@ -12,6 +12,7 @@ package glfw
 
 import (
 	"math"
+	"runtime"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -20,8 +21,14 @@ import (
 const wheelGlide = 160 * time.Millisecond
 
 // Match Status's day sidebar throughout the app. Explicitly boosted scrollers
-// retain their own speed (including Sprint Calendar's faster month view).
-const defaultWheelBoost = 3
+// retain their own speed (including Sprint Calendar's faster month view). A Mac
+// trackpad already sends a stream of small movements, so it keeps Fyne's speed.
+func defaultWheelBoost() float32 {
+	if runtime.GOOS == "darwin" {
+		return 1
+	}
+	return 3
+}
 
 type wheelReach interface {
 	CanScrollBy(dx, dy float32) bool
@@ -76,8 +83,8 @@ func (w *window) processMouseScrolled(xoff float64, yoff float64) {
 		return object == target
 	})
 	if _, custom := target.(interface{ WheelSpeed() float32 }); !custom {
-		dx *= defaultWheelBoost
-		dy *= defaultWheelBoost
+		dx *= defaultWheelBoost()
+		dy *= defaultWheelBoost()
 	}
 	glideWheel(target.(fyne.Scrollable), pos, mousePos, dx, dy)
 }

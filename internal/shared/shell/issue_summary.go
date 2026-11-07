@@ -22,6 +22,11 @@ import (
 // A title peek keeps long names available without growing every summary row.
 // issue can be a GitHub URL, an owner/repo#number reference, or an unfiled label.
 func IssueSummaryCard(cfg backend.Config, issue, title, amount string, actions ...func()) fyne.CanvasObject {
+	return IssueSummaryCardForRows(cfg, issue, title, amount, nil, actions...)
+}
+
+// IssueSummaryCardForRows retains the Log Work accent for locally known entries.
+func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, rows []backend.Row, actions ...func()) fyne.CanvasObject {
 	var target *url.URL
 	ref := ""
 	canonical, _ := backend.IssueRefFromAny(issue)
@@ -35,7 +40,7 @@ func IssueSummaryCard(cfg backend.Config, issue, title, amount string, actions .
 	name := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	name.Truncation = fyne.TextTruncateEllipsis
 	name.Wrapping = fyne.TextWrapWord
-	accent := OrgColor(cfg, OrgOf(issue))
+	accent := IssueSummaryAccent(cfg, issue, title, rows)
 	value := canvas.NewText(amount, widgets.LogoGold)
 	value.TextSize = theme.CaptionTextSize()
 	value.TextStyle = fyne.TextStyle{Bold: true}
@@ -201,6 +206,7 @@ type titleTooltip struct {
 }
 
 func (t *titleTooltip) CreateRenderer() fyne.WidgetRenderer { return widget.NewSimpleRenderer(t.body) }
+func (t *titleTooltip) Cursor() desktop.Cursor              { return desktop.PointerCursor }
 func (t *titleTooltip) MouseIn(e *desktop.MouseEvent)       { t.MouseMoved(e) }
 func (t *titleTooltip) MouseMoved(e *desktop.MouseEvent) {
 	p, s := e.AbsolutePosition, t.button.Size()

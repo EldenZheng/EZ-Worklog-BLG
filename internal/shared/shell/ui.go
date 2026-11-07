@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -32,6 +33,8 @@ type Tappable struct {
 	// Bubble, if set, is the bubble the tappable is drawn as; it lights up
 	// while the pointer is on it.
 	Bubble Lightable
+	// Look, if set, replaces the pointing-hand cursor.
+	Look desktop.Cursor
 }
 
 func NewTappable(content fyne.CanvasObject, onTap func()) *Tappable {
@@ -554,11 +557,22 @@ func (ui *UI) loadCommitIssueInfos(commits []backend.Commit, week string, compos
 	}, func() {
 		composer.Advance(weight)
 		defer finish()
-		for ref, info := range infos {
-			ui.IssueInfo[ref] = info
-		}
+		ui.LearnIssueInfos(infos)
 		Hooks.DrawCommitList(ui)
 	})
+}
+
+// LearnIssueInfos keeps freshly fetched issues and redraws the saved rows, which
+// name themselves by these titles too. Left undrawn, a bubble kept the bare ref
+// while its popup, built later, showed the title.
+func (ui *UI) LearnIssueInfos(infos map[string]backend.IssueInfo) {
+	if ui.IssueInfo == nil {
+		ui.IssueInfo = map[string]backend.IssueInfo{}
+	}
+	for ref, info := range infos {
+		ui.IssueInfo[ref] = info
+	}
+	Hooks.DrawRecent(ui)
 }
 
 // loadIssueInfos fills in the issue titles behind the pending refs, then
@@ -592,9 +606,7 @@ func (ui *UI) loadIssueInfos(composer *ProgressComposer, weight float64, finish 
 	}, func() {
 		composer.Advance(weight)
 		defer finish()
-		for ref, info := range infos {
-			ui.IssueInfo[ref] = info
-		}
+		ui.LearnIssueInfos(infos)
 		Hooks.RenderPending(ui)
 	})
 }
@@ -1043,19 +1055,16 @@ const WindowTitle = "Worklog"
 // fetch per visit would be a request per glance for a figure that would not
 // have changed — but a rate stamped last month quietly misstates the pay.
 func (ui *UI) RefreshRate(force bool) {
-	if !ui.HasCfg || ui.RateLoading {
+	if !ui.HasCfg || ui.RateLoading || ui.Cfg.HideConversion {
 		return
 	}
-	base := strings.ToUpper(strings.TrimSpace(ui.Cfg.Currency))
+	base := backend.CurrencyCode(ui.Cfg.Currency)
 	disp := strings.TrimSpace(ui.Cfg.DisplayCurrency)
 	if base == "" || disp == "" {
 		return // nothing to convert between
 	}
 	if !force && ui.Cfg.FxUpdated == Today() {
 		return
-	}
-	if base == "RM" {
-		base = "MYR"
 	}
 	ui.RateLoading = true
 	_, finish := ui.BeginFetch("rate", "Fetching exchange rate")

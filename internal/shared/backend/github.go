@@ -93,6 +93,9 @@ func ParseIssue(message, fallbackRepo string) string {
 	if m := refRe.FindStringSubmatch(message); m != nil {
 		return fmt.Sprintf("%s/%s#%s", m[1], m[2], m[3])
 	}
+	if refs := IssueRefsInText(message); len(refs) > 0 {
+		return refs[0]
+	}
 	if m := hashRe.FindStringSubmatch(message); m != nil && fallbackRepo != "" {
 		return fmt.Sprintf("%s#%s", fallbackRepo, m[1])
 	}
@@ -108,6 +111,7 @@ type Commit struct {
 	Message string `json:"message"`
 	Full    string `json:"full"`
 	Issue   string `json:"issue"`
+	Branch  string `json:"branch,omitempty"`
 }
 
 // Group is unlogged commits bucketed by (date, issue).
@@ -235,7 +239,7 @@ func repoCommits(repo, ref, author, since, until string) ([]Commit, string) {
 		}
 		got = append(got, Commit{
 			Sha: c.Sha, Repo: repo, Date: CommitWorkDate(c.Date),
-			Message: first, Full: c.Message, Issue: ParseIssue(c.Message, repo),
+			Message: first, Full: c.Message, Issue: ParseIssue(c.Message, repo), Branch: ref,
 		})
 	}
 	return got, ""
@@ -1127,6 +1131,10 @@ func (s *Store) FetchPending(cfg Config, progress ...func(FetchProgress)) (Pendi
 		return PendingResult{}, err
 	}
 
+	// Housekeeping only: a failure here must not cost the list. A file that cannot
+	// be read is reported by the reads just below.
+	_, _ = s.PruneIgnored(cfg.CleanupDays, days, now.Format("2006-01-02"))
+	_, _ = s.PruneCommitRefs(cfg.CleanupDays, days, now.Format("2006-01-02"))
 	done, err := s.LoggedShas()
 	if err != nil {
 		return PendingResult{}, err
@@ -1402,6 +1410,9 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time, p
 	counter.seal()
 	wg.Wait()
 
+	counter.addPhase("Resolving linked issues", 1)
+	ResolveCommitBranchIssues(commits)
+	counter.finish()
 	return commits, errs, nil
 }
 

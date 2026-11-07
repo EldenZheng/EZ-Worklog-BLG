@@ -12,6 +12,13 @@ import (
 // text is the starting search; setting it does not call onChanged.
 func NewSearchEntry(placeholder, text string, onChanged func(string)) *widget.Entry {
 	search := widget.NewEntry()
+	makeSearchEntry(search, placeholder, text, onChanged)
+	return search
+}
+
+// makeSearchEntry gives an entry the search field's X, for a type built on
+// widget.Entry as well as for a plain one.
+func makeSearchEntry(search *widget.Entry, placeholder, text string, onChanged func(string)) {
 	clearBtn := widget.NewButtonWithIcon("", theme.CancelIcon(), func() {
 		search.SetText("")
 		// Back in the field, ready for the next search.
@@ -39,5 +46,4 @@ func NewSearchEntry(placeholder, text string, onChanged func(string)) *widget.En
 			onChanged(value)
 		}
 	}
-	return search
 }

@@ -57,6 +57,11 @@ Unselected sprint rows blend into the page, with visible grey dividers between
 them. On Kanban, the icon-and-text type filters share the Projects row on the
 right; click either to hide or show that type. Both types start enabled. Choices
 are saved as `KanbanTypes` in `sprint-planner.json`, including hiding both.
+A column, and the Sprint Calendar's Sprint Issues list, shows each project's
+first card, then each project's second, and so on. Drag a chip along either
+menu's legend to choose which project comes first in each position; both menus
+share the order, saved as `ProjectOrder`. Every project starts shown; switching
+one off in a legend lasts until the app closes.
 Refresh GitHub sits
 on the right with its icon. The default columns are Created (grey), Analysis
 (dark blue), In Progress (yellow), Pending Customer Feedback (dark purple),
@@ -282,27 +287,50 @@ The frame directory is temporary and can be removed after generating the GIFs.
 ```
 git clone <this repo> worklog-go
 cd worklog-go
-go build -o Worklog .
-./Worklog
+bash build.sh        # macOS or Linux; writes ../Worklog
+../Worklog
 ```
 
-On Windows, use the application build script (and optionally run the offline tests):
+On Windows, use the PowerShell script (and optionally run the offline tests):
 
 ```
 .\build.ps1 -Test -Output ..\Worklog.exe
 ```
 
-This hides the console window and applies the application's hand-cursor policy
+Both run `tools/patchfyne`. On Windows the build also hides the console window.
+It applies the application's hand-cursor policy
 to Fyne buttons, checkboxes, radio options, dropdowns, popup menu items and tabs.
 It also gives standard gold buttons contrasting dark labels and icons, rounds
 the corners of the button press flash, and changes the mouse wheel: it scrolls
 the innermost scroller under the pointer that can still move (so a text field
 or a list at its end no longer blocks the page), and glides instead of jumping.
-The wheel code lives in `_fynepatch`, which the script copies into the Fyne copy;
+The wheel code lives in `_fynepatch`, which the tool copies into the Fyne copy;
 the go tool skips folders starting with `_`, so it builds nowhere else.
-The script builds a private copy of the pinned Fyne version under `.build`;
+On a Mac the wheel keeps Fyne's own speed, since a trackpad already sends a stream
+of small movements.
+The tool builds a private copy of the pinned Fyne version under `.build`;
 it does not modify the shared module cache or the project's dependencies.
-A plain `go build` uses Fyne's default cursors, button colours and wheel.
+A plain `go build` uses Fyne's default cursors, button colours and wheel, and on
+any page where the pointer is over a fold, the wheel does nothing.
+
+### On a Mac
+
+Every release carries a `Worklog-macos` file, for both Apple and Intel Macs, added
+by `.github/workflows/macos.yml` a few minutes after the release is published. To
+get it:
+
+```
+gh release download --repo EldenZheng/EZ-Worklog-BLG --pattern Worklog-macos
+chmod +x Worklog-macos
+./Worklog-macos
+```
+
+Download it with `gh`: a browser marks the file as quarantined and macOS refuses
+to open it, since it is not signed with a paid Apple certificate. If that has
+happened, `xattr -d com.apple.quarantine Worklog-macos` clears it. Your data goes
+in a `data` folder beside the file, and updates inside the app work as on Windows.
+To try a branch before a release, run the workflow by hand from the Actions tab;
+the file is left on the run as an artifact.
 
 ### Versions and updates
 
@@ -315,11 +343,12 @@ Settings sidebar. To ship a build to everyone:
 ```
 
 This refuses uncommitted or unpushed work and an existing tag, runs the tests,
-and publishes `Worklog.exe` as a GitHub release. On start-up every copy of the
+and publishes `Worklog.exe` as a GitHub release; the Mac build follows by itself.
+On start-up every copy of the
 app asks GitHub (through `gh`) for the latest release. When it is newer, a gold
 **Update Available** capsule opens by the Settings gear and the sidebar offers
 **Update to v1.4.1**,
-which downloads the exe, swaps it in for the running one and restarts. Nothing
+which downloads the build for that platform, swaps it in and restarts. Nothing
 in `data` is touched. **Check for updates** asks again on demand.
 
 `-Release` needs `gh` signed in to the repo owner's account. Without it,
@@ -361,6 +390,7 @@ none of them belong in a commit:
 | `config.json` | your settings — **including the Anthropic API key, if you set one** |
 | `worklog.csv` | every entry you have logged, remarks and all |
 | `ignored.json` | the commit shas you have deliberately kept off the pending list |
+| `ignored-dates.json` | when each of those commits was ignored, for Settings > Clean up after |
 
 Company repositories, board views, salary and support payments belong in local
 Settings, never in source code. `config.json` is ignored by Git but is plain text,
@@ -389,7 +419,7 @@ account and no server.
 | Meeting / Bulk review repository | Separate `owner/repo` destinations for daily meeting and bulk review issues. Required before pushing those kinds. |
 | Base salary per 21 days | Drives the Report tab's rate. A period pays for 21 working days regardless of what the calendar says. |
 | Support payment per set | Payment in the salary currency per seven qualifying issues. Blank means unset; incomplete sets still carry across periods. |
-| Currency / Also show in | The second is converted with a rate fetched from `open.er-api.com`, at most once a day. |
+| Currency / Display in | Search dropdowns of the codes `open.er-api.com` has rates for. Display in is converted with a rate fetched from it, at most once a day; untick it to hide the conversion. |
 | Look back (days) | How far back the pending-commit scan goes. |
 | Default push mode | `subissue` creates a sub-issue under the referenced issue; `issue` writes the fields onto that issue directly. |
 | Anthropic API key | Optional, only used by "Compact with AI" when remarks run past the board's 1024-character field limit. |

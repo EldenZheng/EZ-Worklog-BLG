@@ -1,0 +1,49 @@
+# Builds the Mac app. A Mac build needs Apple's libraries, so it runs on a Mac.
+#
+# Publishing a release builds that tag and attaches Worklog-macos to it, which is
+# what the app's updater downloads on a Mac. Run it by hand from the Actions tab
+# to try the current branch: the binary is left on the run as an artifact.
+name: macOS build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # git describe needs the tags for the version stamp
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Prepare the patched Fyne
+        run: go run ./tools/patchfyne
+      # Reported, not enforced: the suite is written and run on Windows, and a
+      # release has already gone out to Windows by the time this runs.
+      - name: Test
+        continue-on-error: true
+        run: go test -modfile .build/cursors/worklog.mod -tags cursors ./tests
+      # One file for both kinds of Mac.
+      - name: Build
+        run: |
+          GOARCH=arm64 bash build.sh dist/Worklog-arm64
+          GOARCH=amd64 CGO_ENABLED=1 bash build.sh dist/Worklog-amd64
+          lipo -create dist/Worklog-arm64 dist/Worklog-amd64 -output dist/Worklog-macos
+          codesign --force --sign - dist/Worklog-macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Worklog-macos
+          path: dist/Worklog-macos
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/Worklog-macos --clobber

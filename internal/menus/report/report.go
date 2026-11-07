@@ -143,8 +143,20 @@ func DrawReport(ui *shell.UI) {
 		return rep.DisplayCurrency + " " + shell.CommaAmount(v*rep.FxRate)
 	}
 	conv := converted(totalReceivable)
-	projectedConv := converted(projectedTotalReceivable)
-	supportConv := converted(supportBonus)
+	// Unticking Display in in Settings takes every converted figure off the tab.
+	showConversion := !ui.Cfg.HideConversion
+	convertedTag := func(v float64) string {
+		if !showConversion {
+			return "" // a metric with no conversion draws no line for it
+		}
+		return "Converted: " + converted(v)
+	}
+	withConverted := func(text string, v float64) string {
+		if !showConversion {
+			return text
+		}
+		return text + " · " + converted(v)
+	}
 
 	// Working days are read off the calendar, so the tile is right even for a
 	// period nobody has logged a minute into yet.
@@ -184,9 +196,9 @@ func DrawReport(ui *shell.UI) {
 	payableBeforeSupport := "(" + money(rep.Receivable) + " before support)"
 	projectedBeforeSupport := "(" + money(projected.Receivable) + " before support)"
 	stats := container.New(widgets.NewFlowGrid(220, 0, 126),
-		reportMetricWithAside(money(totalReceivable), "Payable", payableNote, payableBeforeSupport, "Converted: "+conv),
-		reportMetricTintedWithAside(money(projectedTotalReceivable), "Payable after drafts", projectedNote, projectedBeforeSupport, "Converted: "+projectedConv, draftSurface, draftHeader, draftBorder),
-		reportMetricDarkBlue(money(supportBonus), "Support bonus", supportDetail, "Converted: "+supportConv),
+		reportMetricWithAside(money(totalReceivable), "Payable", payableNote, payableBeforeSupport, convertedTag(totalReceivable)),
+		reportMetricTintedWithAside(money(projectedTotalReceivable), "Payable after drafts", projectedNote, projectedBeforeSupport, convertedTag(projectedTotalReceivable), draftSurface, draftHeader, draftBorder),
+		reportMetricDarkBlue(money(supportBonus), "Support bonus", supportDetail, convertedTag(supportBonus)),
 	)
 	timeStats := container.New(widgets.NewFlowGrid(220, 0, 126),
 		reportMetric(fmt.Sprintf("%.1fh", float64(rep.TotalMin)/60), "Time logged",
@@ -198,19 +210,24 @@ func DrawReport(ui *shell.UI) {
 	fullCycle, fullDays := RemainingCycleProjection(ui.Cfg, projectedTotals, fromDate, toDate, shell.Today(), false)
 	weekdays, weekdayDays := RemainingCycleProjection(ui.Cfg, projectedTotals, fromDate, toDate, shell.Today(), true)
 	fullPay, weekdayPay := fullCycle.Receivable+supportBonus, weekdays.Receivable+supportBonus
-	payment := reportSection("Payment breakdown",
+	paymentRows := []fyne.CanvasObject{
 		reportFact("Worklog receivable", money(rep.Receivable)),
 		reportFact("Weekend support bonus", money(supportBonus)),
 		reportText(supportNote),
 		widget.NewSeparator(),
 		reportFact("Payable days × "+money(rep.DailyRate), fmt.Sprintf("%.2f", rep.PayableDays)),
-		reportFactColored("Converted receivable", conv, widgets.LogoGold),
+	}
+	if showConversion {
+		paymentRows = append(paymentRows, reportFactColored("Converted receivable", conv, widgets.LogoGold))
+	}
+	paymentRows = append(paymentRows,
 		widget.NewSeparator(),
 		reportFact("Full remaining cycle", money(fullPay)),
-		reportText(fmt.Sprintf("%d days left including weekends at 8h/day · %s", fullDays, converted(fullPay))),
+		reportText(withConverted(fmt.Sprintf("%d days left including weekends at 8h/day", fullDays), fullPay)),
 		reportFact("Full weekdays only", money(weekdayPay)),
-		reportText(fmt.Sprintf("%d weekdays left at 8h/day · %s", weekdayDays, converted(weekdayPay))),
+		reportText(withConverted(fmt.Sprintf("%d weekdays left at 8h/day", weekdayDays), weekdayPay)),
 		reportText("Projections include saved drafts, top up today, and keep the support bonus already earned."))
+	payment := reportSection("Payment breakdown", paymentRows...)
 	activity := reportSection("Period at a glance",
 		reportFact("Calendar days gone", fmt.Sprintf("%d/%d", daysGone, daysTotal)),
 		reportText(fmt.Sprintf("%d calendar days left · includes weekends; today is remaining", daysTotal-daysGone)),
@@ -313,7 +330,7 @@ func DrawReport(ui *shell.UI) {
 		summary += fmt.Sprintf(" Worklog receivable %s + weekend support %s = %s.",
 			money(rep.Receivable), money(supportBonus), money(totalReceivable))
 	}
-	if rep.FxRate != 0 {
+	if rep.FxRate != 0 && showConversion {
 		summary += fmt.Sprintf(" Rate 1 %s = %s %s, updated %s.",
 			rep.Currency, shell.CommaAmount(rep.FxRate), rep.DisplayCurrency, rep.FxUpdated)
 	}

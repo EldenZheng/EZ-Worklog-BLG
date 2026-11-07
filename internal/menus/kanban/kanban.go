@@ -127,6 +127,8 @@ func Draw(k *shell.KanbanUI) {
 	k.RedrawPending = false
 	sideOffset := shell.ScrollOffset(k.SideClip)
 	boardOffset := shell.ScrollOffset(k.BoardClip)
+	legendOffset := shell.ScrollOffset(k.LegendClip)
+	calendarLegendOffset := shell.ScrollOffset(k.CalendarLegendClip)
 	issuesOffset := shell.ScrollOffset(k.CalendarIssueClip)
 	if k.CalendarOffsets == nil {
 		k.CalendarOffsets = map[string]fyne.Position{}
@@ -142,12 +144,14 @@ func Draw(k *shell.KanbanUI) {
 	k.Body.Refresh()
 	shell.RestoreScroll(k.SideClip, sideOffset)
 	shell.RestoreScroll(k.BoardClip, boardOffset)
+	shell.RestoreScroll(k.LegendClip, legendOffset)
 	if k.CalendarBody != nil {
 		k.Dates = nil
 		k.CalendarBody.Objects = []fyne.CanvasObject{shell.Hooks.KanbanUICalendar(k)}
 		k.CalendarBody.Refresh()
 		shell.RestoreScroll(k.CalendarClip, k.CalendarOffsets[k.CalendarMode])
 		shell.RestoreScroll(k.CalendarIssueClip, issuesOffset)
+		shell.RestoreScroll(k.CalendarLegendClip, calendarLegendOffset)
 		k.CalendarDrawnMode = k.CalendarMode
 	}
 }
@@ -186,21 +190,16 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 		}
 		cards := container.NewVBox()
 		count := 0
-		for _, b := range k.Plan.Boards {
-			for _, it := range b.Items {
-				if PendingStatus(k, b, it) != value || !Matches(k, b, it) {
-					continue
-				}
-				count++
-				card := Card(k, b, it)
-				if d, ok := card.(*shell.SprintDragCard); ok {
-					k.ColumnCards[value] = append(k.ColumnCards[value], d)
-				}
-				if arrive {
-					cards.Add(shell.NewWipe(card, time.Duration(min(count, 12))*40*time.Millisecond))
-				} else {
-					cards.Add(card)
-				}
+		for _, c := range ColumnOrder(k, value) {
+			count++
+			card := Card(k, c.Board, c.Item)
+			if d, ok := card.(*shell.SprintDragCard); ok {
+				k.ColumnCards[value] = append(k.ColumnCards[value], d)
+			}
+			if arrive {
+				cards.Add(shell.NewWipe(card, time.Duration(min(count, 12))*40*time.Millisecond))
+			} else {
+				cards.Add(card)
 			}
 		}
 		header := widget.NewLabelWithStyle(status, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -251,7 +250,7 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 		return container.NewCenter(widget.NewLabel("Add project board URLs and filters in Settings, then refresh GitHub."))
 	}
 	board := container.NewBorder(nil, columnControls(k, extra), nil, nil, boardScroll)
-	legend := container.NewBorder(nil, nil, nil, itemTypeControls(k), k.ProjectLegend())
+	legend := container.NewBorder(nil, nil, nil, itemTypeControls(k), k.ProjectLegend(false))
 	return container.NewBorder(legend, nil, sidePanel, nil, board)
 }
 

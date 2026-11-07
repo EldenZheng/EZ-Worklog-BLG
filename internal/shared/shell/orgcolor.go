@@ -3,6 +3,7 @@ package shell
 import (
 	"fmt"
 	"image/color"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -44,6 +45,27 @@ func RowAccentColor(cfg backend.Config, r backend.Row) color.NRGBA {
 		return IndependentWorkAccent
 	}
 	return OrgColor(cfg, OrgOf(r["issue"]))
+}
+
+var standaloneSummaryTitle = regexp.MustCompile(`(?i)(?:^|\s)(?:code review|meeting & ad hocs): \d{4}-\d{2}-\d{2}$`)
+
+// IssueSummaryAccent keeps standalone work purple in summaries, including
+// board-only daily reviews and meetings that have no local row on this device.
+func IssueSummaryAccent(cfg backend.Config, issue, title string, rows []backend.Row) color.NRGBA {
+	ref, _ := backend.IssueRefFromAny(issue)
+	for _, row := range rows {
+		if ref != "" && strings.EqualFold(ref, row["issue"]) && backend.RowUsesIndependentStyle(row) {
+			return IndependentWorkAccent
+		}
+		if ref == "" && row["issue"] == "" && row["type"] == backend.KindIndependent &&
+			issue == "new issue in "+strings.TrimSpace(row["parent_repo"]) {
+			return IndependentWorkAccent
+		}
+	}
+	if standaloneSummaryTitle.MatchString(strings.TrimSpace(title)) {
+		return IndependentWorkAccent
+	}
+	return OrgColor(cfg, OrgOf(issue))
 }
 
 // OrgOrder lists the configured organisations, lowercased, in the order they
@@ -474,7 +496,7 @@ func orgChip(cfg backend.Config, org, amount string, off bool, toggle func(org s
 // Off has to read as off at a glance, with no checkbox to spell it out: the
 // dot fades most of the way into the background and the label goes the same
 // grey as any other disabled thing in the app.
-func LegendChip(fill color.Color, label string, off bool, onTap func()) fyne.CanvasObject {
+func LegendChip(fill color.Color, label string, off bool, onTap func()) *Tappable {
 	ink := theme.Color(theme.ColorNameForeground)
 	if off {
 		fill = Dimmed(fill)

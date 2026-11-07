@@ -63,6 +63,25 @@ func TestIndependentWorkRowsKeepTheirPurpleAccent(t *testing.T) {
 	}
 }
 
+func TestSummaryBubblesMatchLogWorkAccents(t *testing.T) {
+	cfg := backend.Config{Repos: []string{"exampleorg"}}
+	for _, title := range []string{"Alex Code Review: 2026-11-06", "Alex Meeting & ad hocs: 2026-11-06"} {
+		if got := shell.IssueSummaryAccent(cfg, "exampleorg/repo#7", title, nil); got != shell.IndependentWorkAccent {
+			t.Errorf("board summary %q = %v, want purple", title, got)
+		}
+	}
+	for _, kind := range []string{backend.KindBulkReview, backend.KindIndependent, backend.KindMeeting, backend.KindCodeReview, backend.KindOther} {
+		row := backend.Row{"type": kind, "issue": "exampleorg/repo#7"}
+		got := shell.IssueSummaryAccent(cfg, "https://github.com/exampleorg/repo/issues/7", "Custom title", []backend.Row{row})
+		if want := shell.RowAccentColor(cfg, row); got != want {
+			t.Errorf("%s summary = %v, Log Work = %v", kind, got, want)
+		}
+	}
+	if got := shell.IssueSummaryAccent(cfg, "exampleorg/repo#8", "Improve code review workflow", nil); got != shell.OrgPalette[0] {
+		t.Errorf("ordinary issue should retain org color: %v", got)
+	}
+}
+
 func TestOrgOf(t *testing.T) {
 	cases := map[string]string{
 		"https://github.com/exampleorg/sample-intranet/issues/42": "exampleorg",

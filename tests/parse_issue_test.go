@@ -21,6 +21,18 @@ func TestParseIssueKeepsTheOwnerRepoInBothSpellings(t *testing.T) {
 		want     string
 	}{
 		{
+			name: "cross repo without Refs", message: "Fix Example-Support/finance#48 rounding",
+			fallback: scraped, want: "Example-Support/finance#48",
+		},
+		{
+			name: "issue URL without Refs", message: "https://github.com/Example-Support/finance/issues/48: rounding",
+			fallback: scraped, want: "Example-Support/finance#48",
+		},
+		{
+			name: "issue path in title", message: "Rounding (Example-Support/finance/issues/48)",
+			fallback: scraped, want: "Example-Support/finance#48",
+		},
+		{
 			name:     "shorthand ref",
 			message:  "Refs Example-Support/sample-finance#48:\n- Reverted custom-field relabeling",
 			fallback: scraped,

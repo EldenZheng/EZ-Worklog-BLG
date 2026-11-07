@@ -11,7 +11,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -71,8 +70,9 @@ func BuildLogListTab(ui *shell.UI) fyne.CanvasObject {
 	// Support sits on the left, before the spacer: on a smaller window the
 	// trailing buttons can push the right-hand end out to where the scroll
 	// clipped it, taking the checkbox with them if it stood over there.
-	head := container.NewHBox(prev, ui.ListTitle, next, here, ui.ListSupportView.View,
-		layout.NewSpacer(), refresh, mail)
+	headLeft := container.NewHBox(prev, ui.ListTitle, next, here, ui.ListSupportView.View)
+	headRight := container.NewHBox(refresh, mail)
+	head := container.New(widgets.NewSidesLayout(headLeft, headRight, 0), headLeft, headRight)
 
 	ui.ListBox = container.NewStack()
 	ui.ListProgress = shell.NewLoadingIndicator()
@@ -155,11 +155,15 @@ func listDaysPanel(ui *shell.UI, days []string, byDay map[string][]backend.Workl
 			}
 		}
 	}
-	grid := container.NewGridWithColumns(len(days))
+	var columns []fyne.CanvasObject
 	for _, ds := range days {
-		grid.Add(listDayColumn(ui, ds, byDay[ds], localByDay[ds]))
+		columns = append(columns, listDayColumn(ui, ds, byDay[ds], localByDay[ds]))
 	}
-	return grid
+	width := float32(0)
+	if ui.ListBox != nil {
+		width = ui.ListBox.Size().Width
+	}
+	return container.New(widgets.NewDayGridLayout(columns, width), columns...)
 }
 
 // listDayColumn is one day: how full it is, who the minutes were for, and what
@@ -377,7 +381,7 @@ func pendingIssuesPanel(ui *shell.UI) fyne.CanvasObject {
 	for _, p := range pend {
 		commits += p.Commits
 		mins += p.Minutes
-		card := shell.IssueSummaryCard(ui.Cfg, p.Issue, p.Title, PendingAmount(p), func() {
+		card := shell.IssueSummaryCardForRows(ui.Cfg, p.Issue, p.Title, PendingAmount(p), p.Rows, func() {
 			shell.Hooks.OpenPendingIssue(ui, p.Rows, p.Groups)
 		})
 		cards = append(cards, card)
@@ -467,6 +471,12 @@ func PendingByIssue(ui *shell.UI) []PendingIssue {
 	for _, p := range byIssue {
 		if info, ok := ui.IssueInfo[p.Issue]; ok {
 			p.Title = strings.TrimSpace(info.Title)
+		}
+		// The title saved on the row, as the row's own bubble and popup read it.
+		for _, r := range p.Rows {
+			if p.Title == "" {
+				p.Title = strings.TrimSpace(r["issue_title"])
+			}
 		}
 		if p.Title == "" {
 			p.Title = p.Issue

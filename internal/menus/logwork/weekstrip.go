@@ -12,7 +12,6 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -193,8 +192,10 @@ func DrawWeekStrip(ui *shell.UI) {
 		ui.RefreshTodayScore()
 	})
 
-	head := container.NewHBox(prev, title, next, here, layout.NewSpacer(), weekSupportControl(ui, rota), mail, refresh,
+	headLeft := container.NewHBox(prev, title, next, here)
+	headRight := container.NewHBox(weekSupportControl(ui, rota), mail, refresh,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
+	head := container.New(widgets.NewSidesLayout(headLeft, headRight, ui.WeekBox.Size().Width), headLeft, headRight)
 
 	// Any column about to be thrown away stops breathing first: an animation left
 	// running would keep refreshing a rectangle nothing is showing any more.
@@ -202,12 +203,13 @@ func DrawWeekStrip(ui *shell.UI) {
 		col.StopPulse()
 	}
 	ui.WeekCols = map[string]*shell.DayColumn{}
-	grid := container.NewGridWithColumns(7)
+	var dayCols []fyne.CanvasObject
 	for _, ds := range days {
 		col := WeekColumn(ui, ds, byDay[ds], localByDay[ds])
 		ui.WeekCols[ds] = col
-		grid.Add(col)
+		dayCols = append(dayCols, col)
 	}
+	grid := container.New(widgets.NewDayGridLayout(dayCols, ui.WeekBox.Size().Width), dayCols...)
 
 	objs := []fyne.CanvasObject{head, ui.WeekStripProgress.View, grid}
 
@@ -275,8 +277,9 @@ func WeekIssuesPanel(ui *shell.UI, items []backend.WorklogItem, state string) fy
 		summary = "Nothing on the board for this week."
 	}
 	cards := make([]fyne.CanvasObject, 0, len(totals))
+	rows, _ := ui.Store.ReadRows()
 	for _, t := range totals {
-		cards = append(cards, shell.IssueSummaryCard(ui.Cfg, t.URL, t.Title, fmt.Sprintf("%dm", t.Minutes)))
+		cards = append(cards, shell.IssueSummaryCardForRows(ui.Cfg, t.URL, t.Title, fmt.Sprintf("%dm", t.Minutes), rows))
 	}
 	return shell.IssueSummaryPanel("By Issue", summary, shell.IssueSummaryGrid(cards...), copySummary)
 }
@@ -382,20 +385,22 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 	if mins > 0 {
 		banked = DayScoreLine(mins)
 	}
+	caption := container.New(shell.SplitCaption{}, shell.WeekCaption(banked), shell.WeekCaption(""))
 	if waiting > 0 {
-		banked += fmt.Sprintf(" · +%d min", waiting)
+		queued := fmt.Sprintf("+%d min", waiting)
 		if placeholder > 0 {
-			banked += " (inc. support)"
+			queued += " (inc. support)"
 		}
-	}
-	projected := ""
-	if waiting > 0 {
-		projected = DayScoreLine(mins + waiting)
+		score, added := shell.WeekCaption(banked), shell.WeekCaption(queued)
+		score.Hide()
+		added.Hide()
+		caption = container.New(&dayCaptionLayout{}, shell.WeekCaption(banked+" · "+queued),
+			shell.WeekCaption(DayScoreLine(mins+waiting)), score, added)
 	}
 	body := []fyne.CanvasObject{
 		head,
 		ui.ProgressBarParts("strip/"+t.Format("Mon"), ds, shell.PlannedBarParts(ui.Cfg, byOrg, draftByOrg, planned), 8),
-		container.New(shell.SplitCaption{}, shell.WeekCaption(banked), shell.WeekCaption(projected)),
+		caption,
 	}
 
 	// What is still waiting is the card itself, standing on the day it will be
@@ -474,16 +479,15 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	where.Wrapping = fyne.TextWrapBreak
 
 	push, edit, del := rowActions(ui, r, refresh)
-	leadingItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
+	actionItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
 	if shell.RowPartlySaved(r) {
-		leadingItems = append(leadingItems, shell.SavedTag("partly saved"))
+		actionItems = append(actionItems, shell.SavedTag("partly saved"))
 	}
 	if ui.IssueHasPending(r["issue"]) {
-		leadingItems = append(leadingItems, shell.SavedTag("commits remaining"))
+		actionItems = append(actionItems, shell.SavedTag("commits remaining"))
 	}
-	leading := container.NewHBox(leadingItems...)
-	body := container.NewVBox(title, mins, where,
-		container.NewBorder(nil, nil, leading, container.NewHBox(widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del))))
+	actionItems = append(actionItems, container.NewHBox(widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del)))
+	body := container.NewVBox(title, mins, where, container.New(&cardActionsLayout{}, actionItems...))
 
 	return shell.OrgBubble(accent, body)
 }

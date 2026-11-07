@@ -223,6 +223,7 @@ func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 		title   string
 		mins    int
 		entries int
+		rows    []backend.Row
 	}
 	byKey := map[string]*bucket{}
 	total := 0
@@ -245,6 +246,7 @@ func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 		}
 		b.mins += mins
 		b.entries++
+		b.rows = append(b.rows, r)
 	}
 	// Titles come from the issueInfo cache (populated by the tab's title
 	// fetch), falling back to the raw ref for anything still unresolved.
@@ -281,16 +283,43 @@ func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 		items.Add(empty)
 	}
 	for _, p := range pairs {
-		items.Add(shell.IssueSummaryCard(ui.Cfg, p.key, p.title, fmt.Sprintf("%dm", p.mins)))
+		items.Add(shell.IssueSummaryCardForRows(ui.Cfg, p.key, p.title, fmt.Sprintf("%dm", p.mins), p.rows))
 	}
 	totalLine := widget.NewLabelWithStyle(
 		fmt.Sprintf("Total: %dm · %d entries · %d issues", total, entries, len(pairs)),
 		fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	totalLine.Wrapping = fyne.TextWrapWord
-	footer := container.NewPadded(container.NewVBox(widget.NewSeparator(), totalLine))
-	// The scroll owns the full sidebar width: overflow reaches its edges rather
-	// than losing another band of space to the panel's padding.
-	return container.NewBorder(head, footer, nil, nil, container.NewVScroll(items))
+	footerRule := canvas.NewRectangle(widgets.LogoGold)
+	footerRule.SetMinSize(fyne.NewSize(0, 1))
+	pad := theme.Padding()
+	footer := container.New(layout.NewCustomPaddedLayout(0, pad, pad, pad),
+		container.NewVBox(footerRule,
+			container.NewThemeOverride(totalLine, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})))
+	// Keep the padding inside the full-width scroll, like the Kanban columns:
+	// the top and bottom margins scroll away, while the sides stay inset.
+	return container.New(meetingRowsLayout{}, head, footer, shell.PanelScroll(items, true))
+}
+
+// meetingRowsLayout clips the scrolling cards at the header and footer rules,
+// with no fixed gap outside the scroll's own content padding.
+type meetingRowsLayout struct{}
+
+func (meetingRowsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	head, foot, list := objects[0].MinSize(), objects[1].MinSize(), objects[2].MinSize()
+	return fyne.NewSize(max(head.Width, foot.Width, list.Width), head.Height+foot.Height+list.Height)
+}
+
+func (meetingRowsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	head, foot, list := objects[0], objects[1], objects[2]
+	// Wrapping headings and totals determine their height after receiving width.
+	for _, obj := range objects[:2] {
+		obj.Resize(fyne.NewSize(size.Width, obj.MinSize().Height))
+		obj.Resize(fyne.NewSize(size.Width, obj.MinSize().Height))
+	}
+	head.Move(fyne.NewPos(0, 0))
+	foot.Move(fyne.NewPos(0, size.Height-foot.Size().Height))
+	list.Move(fyne.NewPos(0, head.Size().Height))
+	list.Resize(fyne.NewSize(size.Width, max(size.Height-head.Size().Height-foot.Size().Height, 0)))
 }
 
 func LoadMeetingCommits(ui *shell.UI, force bool) {
