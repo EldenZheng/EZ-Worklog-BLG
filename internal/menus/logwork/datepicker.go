@@ -49,6 +49,13 @@ type WorklogDatePicker struct {
 	Cal  *fyne.Container
 	pop  *widget.PopUp
 	Open *widget.Button // the calendar button, inside the field
+
+	// The month unfolds down from the field and folds back up into it.
+	unfold *shell.Reveal
+	// folding is a month still folding away, and folded the popup it is
+	// folding: finished at once if the month is opened again meanwhile.
+	folding *fyne.Animation
+	folded  *widget.PopUp
 }
 
 func NewWorklogDatePicker(ui *shell.UI, iso string) *WorklogDatePicker {
@@ -175,7 +182,16 @@ func (p *WorklogDatePicker) openCalendar() {
 	}
 	p.Refresh()
 
-	p.pop = widget.NewPopUp(container.NewPadded(p.Cal), canvas)
+	// A month still folding away goes now: hiding it later would take this one
+	// with it, as Fyne hides a popup by dropping everything above it too.
+	if p.folding != nil {
+		p.folding.Stop()
+		p.folding = nil
+		p.folded.Hide()
+	}
+	p.unfold = shell.NewReveal(container.NewPadded(p.Cal))
+	p.unfold.Fold = true
+	p.pop = widget.NewPopUp(p.unfold, canvas)
 	at := drv.AbsolutePositionForObject(p)
 	p.pop.ShowAtPosition(fyne.NewPos(at.X, at.Y+p.Size().Height))
 
@@ -188,11 +204,13 @@ func (p *WorklogDatePicker) openCalendar() {
 		want.Width = p.Size().Width
 	}
 	p.pop.Resize(want)
+	shell.UnfoldPopUp(p.pop, p.unfold, want)
 }
 
 func (p *WorklogDatePicker) closeCalendar() {
 	if p.pop != nil {
-		p.pop.Hide()
+		p.folded = p.pop
+		p.folding = shell.FoldPopUp(p.pop, p.unfold)
 		p.pop = nil
 	}
 }
@@ -230,6 +248,7 @@ func (p *WorklogDatePicker) Refresh() {
 	if from, to, err := backend.MonthBounds(p.Month); err == nil {
 		drafts = p.ui.DraftMinutesByDay(from, to)
 	}
+	planned := p.plannedByDay(items)
 
 	t, err := time.Parse("2006-01", p.Month)
 	if err != nil {
@@ -248,10 +267,42 @@ func (p *WorklogDatePicker) Refresh() {
 	}
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", p.Month, shell.Pad2(day))
-		grid.Add(p.dayCell(ds, day, byDay[ds], drafts[ds]))
+		grid.Add(p.dayCell(ds, day, byDay[ds], drafts[ds], planned[ds]))
 	}
 	p.Grid.Objects = []fyne.CanvasObject{grid}
 	p.Grid.Refresh()
+}
+
+// plannedByDay is the time planned on the Sprint Calendar for each day of the
+// month on show, less what is already logged or saved against the same issue,
+// as Log Work's week reads it.
+func (p *WorklogDatePicker) plannedByDay(items []backend.WorklogItem) map[string]int {
+	out := map[string]int{}
+	if shell.Hooks.PlannedMinutes == nil {
+		return out
+	}
+	logged := map[string][]backend.WorklogItem{}
+	for _, it := range items {
+		logged[it.Date] = append(logged[it.Date], it)
+	}
+	saved := map[string][]backend.Row{}
+	if rows, err := p.ui.Store.ReadRows(); err == nil {
+		for _, r := range rows {
+			if r["pushed_at"] == "" && strings.HasPrefix(r["date"], p.Month) {
+				saved[r["date"]] = append(saved[r["date"]], r)
+			}
+		}
+	}
+	from, to, err := backend.MonthBounds(p.Month)
+	if err != nil {
+		return out
+	}
+	for ds := from; ds <= to; ds = backend.AddDays(ds, 1) {
+		if m := shell.Hooks.PlannedMinutes(p.ui, ds, logged[ds], saved[ds]); m > 0 {
+			out[ds] = m
+		}
+	}
+	return out
 }
 
 // pickerCellMinHeight is a floor, not a size: the date, its score and what it
@@ -281,19 +332,20 @@ func DayOwedLine(mins, draft int) string {
 
 // dayCell is one day in the picker: the date, what it holds against the target,
 // and the wash that says which kind of day it is.
-func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, draft int) fyne.CanvasObject {
+func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, draft, planned int) fyne.CanvasObject {
 	mins := 0
 	for _, m := range byOrg {
 		mins += m
 	}
-	state := shell.DayState(mins, draft)
+	// Planned time counts toward the day as it does on Log Work's week.
+	state := shell.DayState(mins, draft+planned)
 
 	num := canvas.NewText(strconv.Itoa(day), theme.Color(theme.ColorNameForeground))
 	num.TextStyle = fyne.TextStyle{Bold: ds == p.date}
 	num.Alignment = fyne.TextAlignCenter
 
 	body := []fyne.CanvasObject{num}
-	if mins > 0 || draft > 0 {
+	if mins > 0 || draft > 0 || planned > 0 {
 		caption := func(s string) *canvas.Text {
 			c := canvas.NewText(s, theme.Color(state.TextColor))
 			c.TextSize = theme.CaptionTextSize()
@@ -304,7 +356,12 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 		// What the day still owes, which is the number the choice is actually
 		// made on — "240/480" left you to work it out every time. Counted after
 		// the drafts where there are any, since those are hours already worked.
-		body = append(body, caption(DayOwedLine(mins, draft)))
+		body = append(body, caption(DayOwedLine(mins, draft+planned)))
+		if planned > 0 {
+			plan := caption(fmt.Sprintf("%dm planned", planned))
+			plan.Color = shell.PlannerPlanColor
+			body = append(body, plan)
+		}
 	}
 
 	wash := canvas.NewRectangle(state.Fill)
@@ -322,7 +379,7 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 
 	// Use the Status cell's org fill and the Log tab's progress bar. Both read
 	// the same minutes; drafts stay yellow and never count as pushed work.
-	bar := shell.MeterBarWithDraft(p.ui.Cfg, byOrg, map[string]int{"@draft": draft}, backend.Target, 6)
+	bar := shell.MeterPartsBar(shell.PlannedBarParts(p.ui.Cfg, byOrg, map[string]int{"@draft": draft}, planned), 6)
 	stack := container.NewStack(floor, wash,
 		shell.VMeterFill(p.ui.Cfg, byOrg, draft, backend.Target, shell.CellCornerRadius), border,
 		container.NewPadded(container.NewBorder(nil, bar, nil, nil, container.NewVBox(body...))))

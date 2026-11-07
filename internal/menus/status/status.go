@@ -18,6 +18,7 @@ import (
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // ============================ Status (calendar) ============================
@@ -146,9 +147,19 @@ func DrawCalendar(ui *shell.UI) {
 	for i := 0; i < firstWd; i++ {
 		grid.Add(widget.NewLabel(""))
 	}
+	var cells []fyne.CanvasObject
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", ui.CalMonth, shell.Pad2(day))
-		grid.Add(dayCell(ui, ds, day, byDayOrg[ds], draftByDay[ds]))
+		cells = append(cells, dayCell(ui, ds, day, byDayOrg[ds], draftByDay[ds]))
+	}
+	// A month opened, or its tab opened, arrives as Kanban's cards do: each day
+	// uncovered from the top down, column after column, left to right.
+	// Held back while the month is being refreshed: the fresh data arrives.
+	if !ui.Fetching(key) {
+		cells = ui.Arrival("status", ui.CalMonth).Reveal(cells, shell.GridDelays(len(cells), 7, firstWd), nil)
+	}
+	for _, cell := range cells {
+		grid.Add(cell)
 	}
 	ui.CalBox.Objects = []fyne.CanvasObject{grid}
 	ui.CalBox.Refresh()
@@ -280,8 +291,10 @@ func DrawDayPanel(ui *shell.UI) {
 		DrawDayPanel(ui)
 	})
 	close.Importance = widget.LowImportance
-	head := container.NewBorder(nil, nil, nil, close,
-		widget.NewLabelWithStyle(ui.SelDay, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+	// The date in gold, as the calendar marks today.
+	date := container.NewThemeOverride(widget.NewLabelWithStyle(ui.SelDay, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	head := container.NewBorder(nil, nil, nil, close, date)
 
 	// Same meter as the calendar cell, at a size worth reading: the day against
 	// the target, split by org, with the split spelled out underneath.
@@ -340,6 +353,15 @@ func DrawDayPanel(ui *shell.UI) {
 		body = append(body, shell.OrgBubble(shell.OrgColor(ui.Cfg, org), container.NewVBox(card...)))
 	}
 
+	// A day opened, or the tab opened on one, arrives from the top down, piece
+	// after piece, its bar filling in as it comes.
+	if !ui.Fetching(shell.StatusCacheKey(ui.CalMonth)) {
+		body = ui.Arrival("statusday", ui.SelDay).Reveal(body, shell.ArriveDelays(len(body)), func(i int, share float32) {
+			if i == 2 {
+				ui.MeterShare("detail", share)
+			}
+		})
+	}
 	ui.DayPanel.Objects = []fyne.CanvasObject{container.NewVBox(body...)}
 	ui.DayPanel.Refresh()
 	// A day's detail can run past the panel, so it gets the scroll the prompt

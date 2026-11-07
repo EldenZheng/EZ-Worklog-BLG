@@ -36,14 +36,14 @@ func (ui *UI) CommitWeekSummary(commits []backend.Commit, loading, cached bool) 
 		widget.NewLabelWithStyle(line, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}))
 }
 
-func (ui *UI) CommitDaysPanel(days []string, byDay map[string][]backend.Commit) fyne.CanvasObject {
+func (ui *UI) CommitDaysPanel(days []string, byDay map[string][]backend.Commit) *fyne.Container {
 	return ui.CommitDaysPanelWithIssueLabel(days, byDay, IssueTag)
 }
 
 // CommitDaysPanelWithIssueLabel lets views that share the commit calendar
 // choose how the issue reference is written without changing the Commit List.
 func (ui *UI) CommitDaysPanelWithIssueLabel(days []string, byDay map[string][]backend.Commit,
-	issueLabel func(string) string) fyne.CanvasObject {
+	issueLabel func(string) string) *fyne.Container {
 	grid := container.NewGridWithColumns(len(days))
 	for _, ds := range days {
 		grid.Add(ui.commitDayColumn(ds, byDay[ds], issueLabel))

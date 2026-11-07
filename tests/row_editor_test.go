@@ -32,6 +32,8 @@ func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 		walk(v.Content, fn)
 	case *shell.Wipe:
 		walk(v.Content, fn)
+	case *shell.Reveal:
+		walk(v.Content, fn)
 	case *shell.Morph:
 		walk(v.Content, fn)
 	case *shell.DayColumn:

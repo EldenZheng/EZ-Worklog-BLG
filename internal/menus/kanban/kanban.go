@@ -180,8 +180,12 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 	// A new selection (sprint, filter, search) brings each column's cards in
 	// from the top down, one after another; any other redraw leaves them be.
 	shown := fmt.Sprint(k.Filter, "|", k.Sprint, "|", k.Search, "|", k.ProjectOff, "|", k.Plan.KanbanTypes)
-	arrive := shown != k.CardsShown
-	k.CardsShown = shown
+	// Held back while the boards are loading: the cards that arrive are the
+	// fresh ones, when the load lands.
+	arrive := shown != k.CardsShown && !k.Loading
+	if !k.Loading {
+		k.CardsShown = shown
+	}
 	for _, status := range statuses {
 		status := status
 		value := status
@@ -432,12 +436,12 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 		tasks[key] = t
 		p.Tasks = tasks
 		if k.Save(p) {
-			popup.Hide()
+			shell.CloseDialog(popup, k.Ui.Win)
 			k.SetMessage("Local plan saved on this computer.")
 			Draw(k)
 		}
 	})
-	actions := container.NewHBox(layout.NewSpacer(), widget.NewButton("Close", popup.Hide), save)
+	actions := container.NewHBox(layout.NewSpacer(), widget.NewButton("Close", func() { shell.CloseDialog(popup, k.Ui.Win) }), save)
 	popupBody.Add(container.NewBorder(container.NewVBox(title, subtitle), actions, nil, nil, columns))
 	size := fyne.NewSize(640, 560)
 	if available := k.Ui.Win.Canvas().Size(); available.Width > 0 && available.Height > 0 {
@@ -445,7 +449,7 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 		size.Height = fyne.Min(size.Height, available.Height*0.9)
 	}
 	popup.Resize(size)
-	popup.Show()
+	shell.ShowDialog(popup, k.Ui.Win)
 }
 
 type kanbanColumnLayout struct{}

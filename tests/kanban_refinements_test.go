@@ -189,6 +189,8 @@ func walkCanvas(o fyne.CanvasObject, visit func(fyne.CanvasObject)) {
 		walkCanvas(x.Content, visit)
 	case *shell.Wipe:
 		walkCanvas(x.Content, visit)
+	case *shell.Reveal:
+		walkCanvas(x.Content, visit)
 	case *shell.Morph:
 		walkCanvas(x.Content, visit)
 	case *shell.SprintDragCard:
@@ -207,6 +209,8 @@ func walkCanvas(o fyne.CanvasObject, visit func(fyne.CanvasObject)) {
 		}
 	case *sprintcalendar.PlannerIssueLink:
 		visit(&x.Hyperlink)
+	case *sprintcalendar.PlannerBlockDelete:
+		visit(&x.Button)
 	}
 }
 

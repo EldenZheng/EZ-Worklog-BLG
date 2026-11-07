@@ -16,6 +16,8 @@ package shell
 //	                                                for Fyne's own dialogs
 //	DestructiveButton     red pill                removing something (Delete, Clear,
 //	                                                Close anyway)
+//	SmallDeleteButton     small red rounded       a Delete that fades in while the
+//	                      rectangle                 pointer is on a calendar day or block
 //	(plain button)        gold, rounded           everything local: Save, Cancel, Close,
 //	                                                fetching or refreshing (reads only)
 //	QuietButton           no fill                 icon buttons and Back
@@ -27,6 +29,7 @@ package shell
 import (
 	"image/color"
 	"reflect"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
@@ -174,6 +177,135 @@ func restyleHighButtons(o fyne.CanvasObject) bool {
 // For a Cancel / Delete pair use RemovalButtons, which places both.
 func DestructiveButton(button *widget.Button) fyne.CanvasObject {
 	return removalButton(button, true)
+}
+
+// SmallDeleteButton is a Delete that shows while the pointer is on a Sprint
+// Calendar day or block: DestructiveButton's red at caption size, as a rounded
+// rectangle short enough for a quarter-hour block, fading in and out rather
+// than popping. control is the widget that holds button: the button itself, or
+// a type built on it that also follows the hover. Place View, and show and hide
+// it with FadeTo.
+func SmallDeleteButton(control interface {
+	fyne.CanvasObject
+	Disabled() bool
+}, button *widget.Button) *SmallDelete {
+	button.Importance = widget.HighImportance
+	d := &SmallDelete{control: control, button: button}
+	d.View = container.NewThemeOverride(widgets.WithPointerCursor(control),
+		smallRemovalTheme{removalButtonTheme: removalButtonTheme{Theme: theme.Current(), destructive: true}, alpha: &d.alpha})
+	control.Hide()
+	d.View.Hide()
+	return d
+}
+
+// SmallDelete is a SmallDeleteButton and its fade.
+type SmallDelete struct {
+	View    fyne.CanvasObject
+	control fyne.CanvasObject
+	button  *widget.Button
+	alpha   float32
+	shown   bool
+	fade    *fyne.Animation
+	// OnChange runs when the button comes onto the screen and when it has
+	// faded off it, for whatever has to make room for it.
+	OnChange func()
+}
+
+// smallDeleteFade is how long the Delete takes to fade in or out.
+const smallDeleteFade = 180 * time.Millisecond
+
+// Shown reports whether the button is showing or fading in.
+func (d *SmallDelete) Shown() bool { return d.shown }
+
+// FadeTo fades the button in (show) or out, then hides it.
+func (d *SmallDelete) FadeTo(show bool) {
+	if show == d.shown {
+		return
+	}
+	d.shown = show
+	if d.fade != nil {
+		d.fade.Stop()
+		d.fade = nil
+	}
+	if show {
+		d.control.Show()
+		d.View.Show()
+		if d.OnChange != nil {
+			d.OnChange()
+		}
+	}
+	to := float32(0)
+	if show {
+		to = 1
+	}
+	if !animationsOn() {
+		d.setAlpha(to)
+		d.settle()
+		return
+	}
+	from := d.alpha
+	var fade *fyne.Animation
+	fade = fyne.NewAnimation(smallDeleteFade, func(p float32) {
+		d.setAlpha(from + (to-from)*p)
+		if p >= 1 && d.fade == fade {
+			d.fade = nil
+			d.settle()
+		}
+	})
+	d.fade = fade
+	fade.Start()
+}
+
+func (d *SmallDelete) setAlpha(alpha float32) {
+	d.alpha = alpha
+	d.button.Refresh()
+}
+
+// settle hides the button once it has faded out.
+func (d *SmallDelete) settle() {
+	if d.shown {
+		return
+	}
+	d.control.Hide()
+	d.View.Hide()
+	if d.OnChange != nil {
+		d.OnChange()
+	}
+}
+
+// smallRemovalTheme draws the small Delete: caption-sized, gently rounded, and
+// as opaque as its fade has got to.
+type smallRemovalTheme struct {
+	removalButtonTheme
+	alpha *float32
+}
+
+func (t smallRemovalTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	c := t.removalButtonTheme.Color(name, variant)
+	if t.alpha == nil || *t.alpha >= 1 {
+		return c
+	}
+	n := color.NRGBAModel.Convert(c).(color.NRGBA)
+	n.A = uint8(float32(n.A) * max(0, *t.alpha))
+	return n
+}
+
+func (t smallRemovalTheme) Size(name fyne.ThemeSizeName) float32 {
+	switch name {
+	case theme.SizeNameText:
+		return 11
+	case theme.SizeNameInlineIcon:
+		return 11
+	case theme.SizeNameInnerPadding:
+		// Taller than the text needs, so it reads as a button. A quarter-hour
+		// block squeezes it back to fit.
+		return 4
+	case theme.SizeNamePadding:
+		return 2
+	case theme.SizeNameButtonRadius:
+		return 6 // a rounded rectangle, not a pill
+	}
+	return t.removalButtonTheme.Size(name)
 }
 
 // QuietButton strips a button's fill, for icon buttons and Back.

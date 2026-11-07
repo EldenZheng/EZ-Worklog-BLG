@@ -75,13 +75,18 @@ func run(stage string) error {
 	if err != nil {
 		return err
 	}
-	out, err := exec.Command("go", "list", "-m", "-json", "fyne.io/fyne/v2").Output()
+	// Download, not list: on a fresh machine (a GitHub runner) nothing is in the
+	// module cache yet, and go list leaves Dir empty rather than fetching it.
+	out, err := exec.Command("go", "mod", "download", "-json", "fyne.io/fyne/v2").Output()
 	if err != nil {
-		return fmt.Errorf("cannot locate Fyne: %w", err)
+		return fmt.Errorf("cannot download Fyne: %w", err)
 	}
 	var module struct{ Version, Dir string }
 	if err := json.Unmarshal(out, &module); err != nil {
 		return fmt.Errorf("cannot read the Fyne module: %w", err)
+	}
+	if module.Dir == "" {
+		return fmt.Errorf("the Fyne module has no folder in the module cache")
 	}
 	if module.Version != pinnedFyne {
 		return fmt.Errorf("review the patches for Fyne %s, they were written for %s", module.Version, pinnedFyne)

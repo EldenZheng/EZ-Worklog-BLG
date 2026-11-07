@@ -544,7 +544,10 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	kindForm := shell.NewMorph(container.NewVBox(commitPane, manualPane))
 	var formReflow func(bool)
 	shownKind := 0
-	seg := widget.NewRadioGroup(kinds, func(s string) {
+	seg := shell.NewUnderlineTabs(kinds, func(s string) {
+		if formReflow != nil {
+			kindForm.Snapshot() // the form as it was, to slide out of the way
+		}
 		wasBulkReview := kind == backend.KindBulkReview
 		kind = map[string]string{
 			"Commits": backend.KindCommit, "Meeting": backend.KindMeeting,
@@ -555,6 +558,14 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		if kind == backend.KindCommit {
 			commitPane.Show()
 			manualPane.Hide()
+			// Coming back to the commits brings their bubbles in again, as
+			// opening the tab does.
+			// The bubbles stay covered while the form slides in, then arrive.
+			if formReflow != nil && ui.PendingLoaded {
+				ui.ReplayArrival("pending")
+				pendingArriveDelay = shell.MorphTime
+				RenderPending(ui)
+			}
 		} else {
 			commitPane.Hide()
 			manualPane.Show()
@@ -599,9 +610,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			shownKind = picked
 		}
 	})
-	seg.Horizontal = true
-	// One kind is always picked: tapping the picked one again does not clear it.
-	seg.Required = true
+	// One kind is always picked: tapping the picked one again keeps it.
 	seg.SetSelected("Commits")
 	// The hint line names what the push will file under; picking a new date
 	// should retitle it so it stays honest.
@@ -640,7 +649,11 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	draftSortControl := container.NewBorder(nil, nil, shell.GoldChoice(ui.ShowPushed),
 		container.NewHBox(widget.NewLabel("Sort bubbles"),
 			container.New(layout.NewGridWrapLayout(fyne.NewSize(190, draftSortPick.MinSize().Height)), draftSortPick)))
-	choices := container.NewThemeOverride(widgets.WithPointerCursor(seg), shell.RadioTheme{Theme: theme.Current()})
+	// Tabs, not radio buttons: the picked kind is bright with a gold line under
+	// it, and the line slides to the next one picked. A row too wide for the
+	// panel scrolls sideways rather than widening the page.
+	// A little room under the line before the form starts.
+	choices := container.New(layout.NewCustomPaddedLayout(0, theme.InnerPadding(), 0, 0), container.NewHScroll(seg))
 	// The entry form is its own menu, so it sits in a rounded panel like
 	// Settings; the saved list under it is part of the page.
 	logCard := shell.Panel(container.NewVBox(choices, kindForm))
@@ -716,6 +729,10 @@ func IsoDate(e *widget.DateEntry) string {
 	return ""
 }
 
+// pendingArriveDelay holds the next pending arrival back, while the Commits
+// form slides in.
+var pendingArriveDelay time.Duration
+
 func RenderPending(ui *shell.UI) {
 	// Log List counts these commits in its pending column, so it is redrawn
 	// whenever the list behind it changes — otherwise that column keeps saying
@@ -766,7 +783,16 @@ func RenderPending(ui *shell.UI) {
 		}
 		objs = append(objs, widget.NewLabel(fmt.Sprintf(
 			"%d unlogged commit(s)%s. Tap one to log it.", remaining, rangeNote)))
-		objs = append(objs, sections(ui, live))
+		// The list arrives as Kanban's cards do, one bubble after another, when
+		// it first loads, when the search or the key changes it, and when the
+		// tab is opened. Logging or ignoring a commit leaves the rest be.
+		// Held back while a newer list is being fetched behind this one.
+		var arrive *shell.Arrival
+		if !ui.PendingLoading {
+			arrive = ui.Arrival("pending", fmt.Sprint(ui.LogSearch, "|", ui.OrgOff, "|", res.Range)).After(pendingArriveDelay)
+		}
+		pendingArriveDelay = 0
+		objs = append(objs, sections(ui, live, arrive))
 	// An empty list because of the filter is not an empty list. Saying there is
 	// nothing to log, while the key at the foot of the tab counts commits
 	// waiting under an org that was switched off, is the tab contradicting
@@ -798,7 +824,7 @@ func RenderPending(ui *shell.UI) {
 		toggle.Importance = widget.LowImportance
 		objs = append(objs, container.NewHBox(toggle))
 		if ui.ShowIgnored {
-			objs = append(objs, sections(ui, hidden))
+			objs = append(objs, sections(ui, hidden, nil))
 		}
 	}
 
@@ -856,8 +882,12 @@ func PendingSections(groups []backend.Group) []pendingSection {
 
 // sections lays the tiles out an issue at a time: its name, its tiles, then a
 // rule before the next one.
-func sections(ui *shell.UI, groups []backend.Group) fyne.CanvasObject {
+//
+// arrive, if set, brings the tiles in one after another across the sections.
+func sections(ui *shell.UI, groups []backend.Group, arrive *shell.Arrival) fyne.CanvasObject {
 	all := PendingSections(groups)
+	delays := shell.ArriveDelays(len(groups))
+	next := 0
 	var objs []fyne.CanvasObject
 	for i, s := range all {
 		if i > 0 {
@@ -869,7 +899,8 @@ func sections(ui *shell.UI, groups []backend.Group) fyne.CanvasObject {
 		if s.Issue != "" || len(all) > 1 {
 			objs = append(objs, sectionHeading(ui, s))
 		}
-		objs = append(objs, bubbleGrid(ui, s.Groups, s.Issue != ""))
+		objs = append(objs, bubbleGrid(ui, s.Groups, s.Issue != "", arrive, delays[next:next+len(s.Groups)]))
+		next += len(s.Groups)
 	}
 	return container.NewVBox(objs...)
 }
@@ -907,11 +938,12 @@ func sectionHeading(ui *shell.UI, s pendingSection) fyne.CanvasObject {
 // bubbleGrid is one block of tiles, wrapped into as many rows as the width
 // needs. underHeading travels down to the tiles so one in a named section does
 // not repeat the name printed above it.
-func bubbleGrid(ui *shell.UI, groups []backend.Group, underHeading bool) fyne.CanvasObject {
+func bubbleGrid(ui *shell.UI, groups []backend.Group, underHeading bool, arrive *shell.Arrival, delays []time.Duration) fyne.CanvasObject {
 	bubbles := make([]fyne.CanvasObject, 0, len(groups))
 	for i := range groups {
 		bubbles = append(bubbles, GroupBubble(ui, groups[i], underHeading))
 	}
+	bubbles = arrive.Reveal(bubbles, delays, nil)
 	return container.New(widgets.NewFlowGrid(BubbleMinWidth, BubbleMaxWidth, BubbleHeight).
 		Compact(BubbleCompactBelow, BubbleCompactMinWidth), bubbles...)
 }
@@ -1071,7 +1103,7 @@ func OpenGroupEditor(ui *shell.UI, g backend.Group) {
 		// a push error or its URL is never hidden before it is seen.
 		func() {
 			if d != nil {
-				d.Hide()
+				shell.CloseDialog(d, ui.Win)
 			}
 		})
 	heading := g.Date
@@ -1085,14 +1117,14 @@ func OpenGroupEditor(ui *shell.UI, g backend.Group) {
 	// where it is reachable without scrolling.
 	back := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
 		if d != nil {
-			d.Hide()
+			shell.CloseDialog(d, ui.Win)
 		}
 	})
 	back.Importance = widget.LowImportance
 	content := PopupShell(back, form)
 	d = dialog.NewCustomWithoutButtons(ui.PopupTitle(heading), shell.FitPopup(content), ui.Win)
 	d.Resize(ui.PopupSizeFor(content))
-	d.Show()
+	shell.ShowDialog(d, ui.Win)
 }
 
 // PopupShell puts Back and the form's actions on one line above the body, with
@@ -1471,7 +1503,7 @@ func openRowEditor(ui *shell.UI, r backend.Row, refresh func()) {
 	var d dialog.Dialog
 	form := RowEditor(ui, r, refresh, func() {
 		if d != nil {
-			d.Hide()
+			shell.CloseDialog(d, ui.Win)
 		}
 	})
 	heading := r["date"]
@@ -1482,14 +1514,14 @@ func openRowEditor(ui *shell.UI, r backend.Row, refresh func()) {
 	}
 	back := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
 		if d != nil {
-			d.Hide()
+			shell.CloseDialog(d, ui.Win)
 		}
 	})
 	back.Importance = widget.LowImportance
 	content := PopupShell(back, form)
 	d = dialog.NewCustomWithoutButtons(ui.PopupTitle(heading), shell.FitPopup(content), ui.Win)
 	d.Resize(ui.PopupSizeFor(content))
-	d.Show()
+	shell.ShowDialog(d, ui.Win)
 }
 
 // RowEditor is the group editor minus the commit picker: which commits the row

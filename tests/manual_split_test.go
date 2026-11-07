@@ -5,19 +5,19 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 const manualRemarksPlaceholder = "- one bullet per thing done; this becomes the worklog remarks"
 
-func manualKindPicker(t *testing.T, tab fyne.CanvasObject) *widget.RadioGroup {
+func manualKindPicker(t *testing.T, tab fyne.CanvasObject) *shell.UnderlineTabs {
 	t.Helper()
-	var kinds *widget.RadioGroup
+	var kinds *shell.UnderlineTabs
 	walk(tab, func(o fyne.CanvasObject) {
-		if g, ok := o.(*widget.RadioGroup); ok && len(g.Options) > 0 && g.Options[0] == "Commits" {
+		if g, ok := o.(*shell.UnderlineTabs); ok && len(g.Options) > 0 && g.Options[0] == "Commits" {
 			kinds = g
 		}
 	})

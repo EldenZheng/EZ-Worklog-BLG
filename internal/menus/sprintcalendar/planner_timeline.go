@@ -101,6 +101,8 @@ type PlannerTimedFace struct {
 	accent                             color.Color
 	day                                *shell.PlannerDayHover
 	finished                           bool
+	onDelete                           func() // removes the block; nil: no Delete
+	delFade                            *shell.SmallDelete
 	glow                               shell.Glow
 	lit, over                          bool
 	inside                             int
@@ -136,6 +138,9 @@ func (f *PlannerTimedFace) light() {
 		target = 1
 	}
 	f.glow.To(target, func(float32) { f.paint() })
+	if f.delFade != nil {
+		f.delFade.FadeTo(on) // the Delete fades with the light
+	}
 }
 
 func (f *PlannerTimedFace) paint() {
@@ -179,7 +184,13 @@ func (f *PlannerTimedFace) CreateRenderer() fyne.WidgetRenderer {
 	if f.issueURL == "" {
 		link.Hide()
 	}
-	return &plannerTimedFaceRenderer{f, bg, stripe, title, second, minutes, grip, link}
+	r := &plannerTimedFaceRenderer{face: f, bg: bg, stripe: stripe, title: title, second: second, minutes: minutes, grip: grip, link: link}
+	if f.onDelete != nil {
+		r.del, f.delFade = newPlannerBlockDelete(f)
+		r.delView = f.delFade.View
+		f.delFade.OnChange = f.Refresh // room for it is made, and given back
+	}
+	return r
 }
 
 type plannerTimedFaceRenderer struct {
@@ -188,6 +199,8 @@ type plannerTimedFaceRenderer struct {
 	title, second, minutes *canvas.Text
 	grip                   *canvas.Line
 	link                   fyne.CanvasObject
+	del                    *PlannerBlockDelete // nil when the block has no Delete
+	delView                fyne.CanvasObject
 }
 
 func (r *plannerTimedFaceRenderer) MinSize() fyne.Size { return fyne.NewSize(80, 0) }
@@ -197,7 +210,19 @@ func (r *plannerTimedFaceRenderer) Layout(size fyne.Size) {
 	r.bg.Resize(size)
 	r.stripe.Resize(fyne.NewSize(3, fyne.Max(0, size.Height-2)))
 	r.face.paint()
-	width := fyne.Max(1, size.Width-27)
+	// Delete takes the top right while the block is lit, and the GH link and
+	// the title make room for it.
+	right := size.Width
+	if r.delView != nil {
+		// Shown and hidden by its fade; a hidden button measures nothing.
+		if r.delView.Visible() && size.Height >= 16 {
+			m := r.delView.MinSize()
+			r.delView.Move(fyne.NewPos(fyne.Max(0, size.Width-m.Width-2), 1))
+			r.delView.Resize(fyne.NewSize(m.Width, fyne.Min(m.Height, size.Height-2)))
+			right = fyne.Max(0, size.Width-m.Width-4)
+		}
+	}
+	width := fyne.Max(1, right-27)
 	first, rest := plannerTitleLine(r.face.title, width, r.title.TextSize)
 	r.title.Text = first
 	r.title.Move(fyne.NewPos(7, 1))
@@ -237,7 +262,7 @@ func (r *plannerTimedFaceRenderer) Layout(size fyne.Size) {
 		r.minutes.Move(fyne.NewPos(7, y))
 		r.minutes.Resize(r.minutes.MinSize())
 	}
-	r.link.Move(fyne.NewPos(fyne.Max(0, size.Width-24), 1))
+	r.link.Move(fyne.NewPos(fyne.Max(0, right-24), 1))
 	r.link.Resize(fyne.NewSize(22, 15))
 	showIf(r.link, r.link.(*PlannerIssueLink).URL != nil && size.Height >= 16)
 	r.grip.Position1 = fyne.NewPos(size.Width/2-10, size.Height-3)
@@ -251,7 +276,11 @@ func (r *plannerTimedFaceRenderer) Refresh() {
 }
 
 func (r *plannerTimedFaceRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.bg, r.stripe, r.title, r.second, r.minutes, r.link, r.grip}
+	objects := []fyne.CanvasObject{r.bg, r.stripe, r.title, r.second, r.minutes, r.link, r.grip}
+	if r.delView != nil {
+		objects = append(objects, r.delView)
+	}
+	return objects
 }
 
 func (*plannerTimedFaceRenderer) Destroy() {}

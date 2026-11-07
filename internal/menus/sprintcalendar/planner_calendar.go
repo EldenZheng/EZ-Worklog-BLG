@@ -10,7 +10,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -67,6 +66,25 @@ func UniqueCurrentItems(k *shell.KanbanUI) []backend.SprintCandidate {
 func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	loadCalendarWorklogs(k, false)
 	work := CalendarWorkData(k)
+	// A period shown for the first time, or the tab opened, arrives as Kanban's
+	// cards do: each day uncovered from the top down, column after column, left
+	// to right. Redraws of the same period (a drop, a resize) leave it be.
+	from, to := calendarRange(k)
+	var arrive *shell.Arrival
+	if work.State != "loading" && !k.Loading {
+		arrive = k.Ui.Arrival("planner", fmt.Sprint(k.CalendarMode, from, to))
+	}
+	var arriving []*shell.Reveal
+	var delays []time.Duration
+	place := func(day fyne.CanvasObject, row, col int) fyne.CanvasObject {
+		if arrive == nil {
+			return day
+		}
+		r := shell.NewReveal(day)
+		arriving = append(arriving, r)
+		delays = append(delays, shell.GridDelays(1, 7, row*7+col)[0])
+		return r
+	}
 	groups := calendarSprintChoices(k)
 	var options, keys []string
 	for _, g := range groups {
@@ -187,7 +205,7 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 			shell.Hooks.KanbanUIDraw(k)
 			k.SetMessage("Local schedule saved · weekdays 09:00–17:00; existing appointments preserved.")
 			if len(unplaced) > 0 {
-				dialog.ShowInformation("Sprint capacity", fmt.Sprintf("%d issues did not fit before the sprint ends and remain unscheduled. Adjust the local estimate or add time blocks manually.\n\n%s", len(unplaced), strings.Join(unplaced, "\n")), k.Ui.Win)
+				shell.ShowInformation("Sprint capacity", fmt.Sprintf("%d issues did not fit before the sprint ends and remain unscheduled. Adjust the local estimate or add time blocks manually.\n\n%s", len(unplaced), strings.Join(unplaced, "\n")), k.Ui.Win)
 			}
 		}
 	})
@@ -223,7 +241,7 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 				end = backend.AddDays(selected.StartDate, selected.Duration-1)
 			}
 		}
-		for date := start; date <= end; date = backend.AddDays(date, 7) {
+		for week, date := 0, start; date <= end; week, date = week+1, backend.AddDays(date, 7) {
 			scale := &plannerScale{}
 			row := container.NewGridWithColumns(7)
 			for d := 0; d < 7; d++ {
@@ -236,7 +254,7 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 				if outside {
 					row.Add(widget.NewLabel(""))
 				} else {
-					row.Add(calendarDay(k, day, scheduled, scale, work.Days[day]))
+					row.Add(place(calendarDay(k, day, scheduled, scale, work.Days[day]), week, d))
 				}
 			}
 			weeks.Add(newPlannerWeek(row, scale, false))
@@ -255,12 +273,13 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		row := container.NewGridWithColumns(7)
 		for d := 0; d < 7; d++ {
 			day := backend.AddDays(k.Week, d)
-			row.Add(calendarDay(k, day, scheduled, scale, work.Days[day]))
+			row.Add(place(calendarDay(k, day, scheduled, scale, work.Days[day]), 0, d))
 		}
 		scroll := container.NewVScroll(plannerScrollInset(newPlannerWeek(row, scale, true)))
 		dates = scroll
 		k.CalendarClip = scroll
 	}
+	arrive.Cascade(delays, func(i int, share float32) { arriving[i].SetShare(share) })
 	weekdays := container.NewGridWithColumns(7)
 	for _, name := range []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"} {
 		weekdays.Add(widget.NewLabelWithStyle(name, fyne.TextAlignCenter, fyne.TextStyle{Monospace: true}))
@@ -394,7 +413,7 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 	reading := container.New(shell.SplitCaption{}, shell.WeekCaption(fmt.Sprintf("%dm GitHub", totals.Logged)), shell.WeekCaption(draftLabel))
 	planCaption := shell.WeekCaption(fmt.Sprintf("%dm planned", totals.Planned))
 	planCaption.Color = shell.PlannerPlanColor
-	heading := container.New(plannerDayHeaderLayout{}, dateCaption, shell.WeekCaption(PlannerDayPercentage(projected)), progress, hover.Clear, reading, planCaption)
+	heading := container.New(plannerDayHeaderLayout{}, dateCaption, shell.WeekCaption(PlannerDayPercentage(projected)), progress, hover.ClearView, reading, planCaption)
 	hover.Header = heading
 	base := shell.DayFill(totals.Logged, totals.Draft+totals.support+totals.Planned)
 	bg := canvas.NewRectangle(base)
@@ -451,6 +470,7 @@ func plannerCardWithScale(k *shell.KanbanUI, c backend.SprintCandidate, index in
 		size := &PlannerDurationLayout{minutes: t.Blocks[index].Minutes, scale: scale}
 		face := newPlannerTimedFace(it.Title, "", it.URL, t.Blocks[index].Minutes, k.Accent(b, it))
 		face.finished = finished
+		face.onDelete = func() { confirmDeleteBlock(k, c, index) }
 		card.Content = container.New(size, face)
 		if !finished {
 			grip := &PlannerResizeGrip{k: k, Key: c.Key, Index: index, Layout: size, card: card, Face: face}

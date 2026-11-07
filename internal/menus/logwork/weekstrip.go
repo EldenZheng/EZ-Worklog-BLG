@@ -10,7 +10,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -209,6 +208,16 @@ func DrawWeekStrip(ui *shell.UI) {
 		ui.WeekCols[ds] = col
 		dayCols = append(dayCols, col)
 	}
+	// A week shown for the first time arrives as Kanban's cards do: each day
+	// uncovered from the top down, one after another left to right, its bar
+	// filling in as it comes. Any other redraw leaves the days be. A week still
+	// loading arrives when its data lands.
+	if state != "loading" && !ui.WeekFetching(days) {
+		dayCols = ui.Arrival("week", ui.WeekStart).Reveal(dayCols, shell.ArriveDelays(len(dayCols)), func(i int, share float32) {
+			t, _ := time.Parse("2006-01-02", days[i])
+			ui.MeterShare("strip/"+t.Format("Mon"), share)
+		})
+	}
 	grid := container.New(widgets.NewDayGridLayout(dayCols, ui.WeekBox.Size().Width), dayCols...)
 
 	objs := []fyne.CanvasObject{head, ui.WeekStripProgress.View, grid}
@@ -260,7 +269,8 @@ func WeekBoardsPanel(ui *shell.UI, from, to string) fyne.CanvasObject {
 }
 
 // WeekIssuesPanel keeps its gold heading fixed above a compact bubble grid.
-func WeekIssuesPanel(ui *shell.UI, items []backend.WorklogItem, state string) fyne.CanvasObject {
+// arrive, if set, brings the bubbles in one after another.
+func WeekIssuesPanel(ui *shell.UI, items []backend.WorklogItem, state string, arrive *shell.Arrival) fyne.CanvasObject {
 	empty := container.NewVBox()
 	copySummary := copySummaryButton(ui, items, state)
 	switch state {
@@ -281,6 +291,7 @@ func WeekIssuesPanel(ui *shell.UI, items []backend.WorklogItem, state string) fy
 	for _, t := range totals {
 		cards = append(cards, shell.IssueSummaryCardForRows(ui.Cfg, t.URL, t.Title, fmt.Sprintf("%dm", t.Minutes), rows))
 	}
+	cards = arrive.Reveal(cards, shell.ArriveDelays(len(cards)), nil)
 	return shell.IssueSummaryPanel("By Issue", summary, shell.IssueSummaryGrid(cards...), copySummary)
 }
 
@@ -333,7 +344,7 @@ func ExportWeekForEmail(ui *shell.UI, days []string, byDay map[string][]backend.
 		msg += fmt.Sprintf("\n\nNot included: %s saved here and not pushed. "+
 			"Push it and export again to count it.", backend.HoursMins(mins))
 	}
-	dialog.ShowInformation(fmt.Sprintf("Week of %s to %s", from, to), msg, ui.Win)
+	shell.ShowInformation(fmt.Sprintf("Week of %s to %s", from, to), msg, ui.Win)
 }
 
 // WeekColumn is one day: how full it is, who the minutes were for, and what is
@@ -377,17 +388,25 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		// Today's heading is gold, like its outline.
 		head = container.NewThemeOverride(head, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	}
+	// Time planned on the Sprint Calendar, in its purple, beside the day's name
+	// as on the calendar: on the heading's line, so a day with a plan starts its
+	// cards level with one without.
+	if planned > 0 {
+		plan := shell.WeekCaption(fmt.Sprintf("%dm planned", planned))
+		plan.Color = shell.PlannerPlanColor
+		head = container.New(widgets.NewSidesLayout(head, plan, 0), head, container.NewCenter(plan))
+	}
 
-	// Left of the line is what the day actually holds and what is queued for it;
-	// right of it is what those two come to together — the number the day would
-	// score if everything standing on it were pushed.
+	// Left of the line is what the day actually holds and what is queued for it,
+	// plans included; right of it is what those come to together — the number the
+	// day would score if everything standing on it were done and pushed.
 	banked := "nothing logged"
 	if mins > 0 {
 		banked = DayScoreLine(mins)
 	}
 	caption := container.New(shell.SplitCaption{}, shell.WeekCaption(banked), shell.WeekCaption(""))
-	if waiting > 0 {
-		queued := fmt.Sprintf("+%d min", waiting)
+	if queuedMins := waiting + planned; queuedMins > 0 {
+		queued := fmt.Sprintf("+%d min", queuedMins)
 		if placeholder > 0 {
 			queued += " (inc. support)"
 		}
@@ -395,7 +414,7 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		score.Hide()
 		added.Hide()
 		caption = container.New(&dayCaptionLayout{}, shell.WeekCaption(banked+" · "+queued),
-			shell.WeekCaption(DayScoreLine(mins+waiting)), score, added)
+			shell.WeekCaption(DayScoreLine(mins+queuedMins)), score, added)
 	}
 	body := []fyne.CanvasObject{
 		head,
@@ -422,8 +441,8 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		container.NewPadded(container.NewVBox(body...))), frame)
 	col.Mins, col.Waiting = mins, waiting
 	// The day turns green once logged + drafts + planned reach the target, as
-	// on the Sprint Calendar. Planned time only colours the day; the captions
-	// still read logged and drafts alone.
+	// on the Sprint Calendar. Waiting stays drafts and support only, the minutes
+	// a drop or a push can move; Planned carries the plans.
 	col.Planned = planned
 	col.BaseFill = shell.DayFill(mins, waiting+col.Planned)
 	frame.FillColor = col.BaseFill

@@ -287,8 +287,8 @@ func TestPlannedBarPartsAddsPurpleAfterLoggedAndDrafts(t *testing.T) {
 	}
 }
 
-// Log Work turns a day green once logged + drafts + planned reach 480, without
-// changing what its captions say.
+// Log Work turns a day green once logged + drafts + planned reach 480, and keeps
+// its draft figure apart from the plans.
 func TestLogWorkDayGreenWhenPlannedFillsTheDay(t *testing.T) {
 	ui, _, _ := plannerFixture(t)
 	k := ui.Kanban

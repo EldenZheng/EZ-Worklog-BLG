@@ -32,6 +32,39 @@ type DayChart struct {
 	Hovered  int // index of the bar under the pointer, -1 for none
 	OnHover  func(date string)
 	OnSelect func(date string)
+	// shares is how far each day has arrived (see Arrive); nil when all have.
+	shares []float32
+}
+
+// Arrive plays the chart's part in the report's arrival: day after day, left
+// to right, each column's wash uncovers from the top down while its bar grows
+// up from the axis.
+func (c *DayChart) Arrive(a *shell.Arrival) {
+	if a == nil || len(c.Days) == 0 {
+		return
+	}
+	c.shares = make([]float32, len(c.Days))
+	last := len(c.Days) - 1
+	a.Cascade(shell.ArriveDelays(len(c.Days)), func(i int, share float32) {
+		if c.shares == nil {
+			return
+		}
+		c.shares[i] = share
+		if i == last { // one redraw a frame, once every day has its share
+			if share >= 1 {
+				c.shares = nil
+			}
+			c.Refresh()
+		}
+	})
+}
+
+// share is how far day i has arrived, 0 to 1.
+func (c *DayChart) share(i int) float32 {
+	if c.shares == nil || i >= len(c.shares) {
+		return 1
+	}
+	return c.shares[i]
 }
 
 // ChartDay is one slot on the axis: a date and how its minutes split by org.
@@ -246,6 +279,7 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 	}
 	for i, day := range c.Days {
 		s := r.Slots[i]
+		arrived := c.share(i)
 		slotX := ChartSideMargin + float32(i)*slotW
 		barX := slotX + (slotW-barW)/2
 
@@ -280,7 +314,7 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 			s.Highlight.FillColor = color.Transparent
 		}
 		s.Highlight.Move(fyne.NewPos(slotX, plotTop))
-		s.Highlight.Resize(fyne.NewSize(slotW, plotBottom-plotTop))
+		s.Highlight.Resize(fyne.NewSize(slotW, (plotBottom-plotTop)*arrived))
 		s.Highlight.Refresh()
 
 		// Segments stack up from the baseline. Each one above the first reaches
@@ -288,7 +322,7 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 		// joins; only the topmost cap is meant to show.
 		y := plotBottom
 		for si, seg := range s.Segments {
-			h := float32(day.ByOrg[s.orgs[si]]) / maxVal * plotH
+			h := float32(day.ByOrg[s.orgs[si]]) / maxVal * plotH * arrived
 			if h <= 0 {
 				seg.Resize(fyne.NewSize(0, 0))
 				continue
@@ -306,7 +340,7 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 		// The draft caps the stack, reaching down behind whatever it landed on
 		// for the same reason the org segments do.
 		if s.Draft != nil {
-			h := float32(day.Draft) / maxVal * plotH
+			h := float32(day.Draft) / maxVal * plotH * arrived
 			if h <= 0 {
 				s.Draft.Resize(fyne.NewSize(0, 0))
 			} else {
@@ -340,6 +374,11 @@ func (r *DayChartRenderer) Destroy() {}
 // ChartWithReadout pairs the chart with the line that names whatever is under
 // the pointer, since a bar cannot label itself without crowding its neighbours.
 func ChartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) fyne.CanvasObject {
+	view, _ := chartWithReadout(ui, days, fromDate, toDate)
+	return view
+}
+
+func chartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) (fyne.CanvasObject, *DayChart) {
 	chart := NewDayChart(ui.Cfg, days, backend.Target)
 
 	byDate := map[string]ChartDay{}
@@ -385,7 +424,7 @@ func ChartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) fy
 		readout.SetText(line)
 	}
 	chart.OnSelect = func(date string) { OpenDayOnCalendar(ui, date) }
-	return container.NewVBox(chart, readout)
+	return container.NewVBox(chart, readout), chart
 }
 
 // OpenDayOnCalendar jumps from a bar in the report to that day on the Status

@@ -144,11 +144,14 @@ to move that block while preserving its duration. The month scrolls when a
 carried bubble reaches the top or bottom edge.
 **Clear** confirms before removing local blocks from the selected sprint's
 visible projects. It keeps local estimates, notes, other sprints and GitHub data.
-Both Clear confirmations and Log Work Delete use compact modals with buttons
+These confirmations and Log Work Delete use compact modals with buttons
 anchored at the bottom: red pill-shaped removal actions and gold rounded Cancel.
-Hover over a planned day to reveal its Clear icon immediately, without clicking;
-the day header is repainted when the icon appears or disappears. It clears only that date
-after confirmation. Sprint selection and redraws preserve the Kanban sidebar,
+Hover over a planned day to reveal a small red **Delete** beside its date
+immediately, without clicking; the day header is repainted when it appears or
+disappears. It clears only that date after confirmation. Hovering a scheduled
+bubble shows the same **Delete** at its top right, which removes only that
+block after confirmation, keeping the issue's other blocks, estimate and notes.
+Sprint selection and redraws preserve the Kanban sidebar,
 calendar, and sprint-issue sidebar scroll positions. Calendar modes remember
 their own positions when switching between Week, Sprint, and Month.
 
@@ -235,7 +238,11 @@ colours as the Status tab.
 
 Entries you save without pushing sit under **Saved locally, not pushed yet**,
 and each one also stands on its day in the week calendar below. Each day shows
-what is already on GitHub and what the drafts on it would bring it to. If an
+what is already on GitHub and what the drafts on it would bring it to. Time
+planned for the day on the Sprint Calendar shows in purple beside its date
+(`180m planned`) and counts in the waiting minutes and the day's score; a day
+with nothing planned leaves it out. The date picker's month shows and counts it
+the same way. If an
 entry landed on the wrong day, drag the card onto the right one: the day under
 the card lights up, turning green when the drop would finish it. Letting go
 moves the entry, and that is the date it is pushed with.
@@ -330,7 +337,8 @@ to open it, since it is not signed with a paid Apple certificate. If that has
 happened, `xattr -d com.apple.quarantine Worklog-macos` clears it. Your data goes
 in a `data` folder beside the file, and updates inside the app work as on Windows.
 To try a branch before a release, run the workflow by hand from the Actions tab;
-the file is left on the run as an artifact.
+the file is left on the run as an artifact. Given a release's tag, the same run
+builds that tag and attaches the file to the release, for one whose own run failed.
 
 ### Versions and updates
 

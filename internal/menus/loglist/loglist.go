@@ -116,15 +116,24 @@ func DrawLogList(ui *shell.UI) {
 		ui.ListSupportView.Set(shell.OnSupportRota(ui.Cfg, weekItems))
 	}
 
+	// A week shown for the first time, or the tab opened, arrives: the week's
+	// bar and each day's fill in, the days come in left to right, and the
+	// bubbles one after another, each from the top down.
+	var arrive *shell.Arrival
+	if state != "loading" && !ui.WeekFetching(days) {
+		arrive = ui.Arrival("loglist", weekStart)
+	}
 	// Side by side, equal width: neither column is the footnote of the other.
 	columns := container.NewGridWithColumns(2,
-		shell.Hooks.WeekIssuesPanel(ui, weekItems, state),
-		pendingIssuesPanel(ui),
+		shell.Hooks.WeekIssuesPanel(ui, weekItems, state, arrive),
+		pendingIssuesPanel(ui, arrive),
 	)
+	progress := weekProgressPanel(ui, days, byDay, weekItems)
+	arrive.Cascade(shell.ArriveDelays(1), func(_ int, share float32) { ui.MeterShare("week", share) })
 
 	ui.ListBox.Objects = []fyne.CanvasObject{
 		container.NewBorder(
-			container.NewVBox(weekProgressPanel(ui, days, byDay, weekItems), listDaysPanel(ui, days, byDay), shell.Hooks.WeekBoardsPanel(ui, from, to)),
+			container.NewVBox(progress, listDaysPanel(ui, days, byDay, arrive), shell.Hooks.WeekBoardsPanel(ui, from, to)),
 			nil, nil, nil, columns),
 	}
 	ui.ListBox.Refresh()
@@ -146,7 +155,7 @@ const listDayMinHeight = 92
 // hold the cards standing on them; here nothing is dragged and nothing stands,
 // so the same reading fits in a band a third the height. One glance says which
 // day of the week still owes time.
-func listDaysPanel(ui *shell.UI, days []string, byDay map[string][]backend.WorklogItem) fyne.CanvasObject {
+func listDaysPanel(ui *shell.UI, days []string, byDay map[string][]backend.WorklogItem, arrive *shell.Arrival) fyne.CanvasObject {
 	localByDay := map[string][]backend.Row{}
 	if rows, err := ui.Store.ReadRows(); err == nil {
 		for _, r := range ui.ShownRows(rows) {
@@ -159,6 +168,10 @@ func listDaysPanel(ui *shell.UI, days []string, byDay map[string][]backend.Workl
 	for _, ds := range days {
 		columns = append(columns, listDayColumn(ui, ds, byDay[ds], localByDay[ds]))
 	}
+	columns = arrive.Reveal(columns, shell.ArriveDelays(len(columns)), func(i int, share float32) {
+		t, _ := time.Parse("2006-01-02", days[i])
+		ui.MeterShare("list/"+t.Format("Mon"), share)
+	})
 	width := float32(0)
 	if ui.ListBox != nil {
 		width = ui.ListBox.Size().Width
@@ -366,7 +379,7 @@ type PendingIssue struct {
 // it happened, and a week-scoped version would hide the commit from last
 // Thursday that is the whole reason to look — the point of this column is that
 // nothing waiting can go unnoticed, which a filter would undo.
-func pendingIssuesPanel(ui *shell.UI) fyne.CanvasObject {
+func pendingIssuesPanel(ui *shell.UI, arrive *shell.Arrival) fyne.CanvasObject {
 	const title = "Pending \u2014 not on the board yet"
 	pend := PendingByIssue(ui)
 	if len(pend) == 0 {
@@ -386,6 +399,7 @@ func pendingIssuesPanel(ui *shell.UI) fyne.CanvasObject {
 		})
 		cards = append(cards, card)
 	}
+	cards = arrive.Reveal(cards, shell.ArriveDelays(len(cards)), nil)
 	return shell.IssueSummaryPanel(title, pendingTotalLine(commits, mins, len(pend)), shell.IssueSummaryGrid(cards...))
 }
 

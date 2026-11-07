@@ -49,6 +49,8 @@ func labels(o fyne.CanvasObject) []string {
 		out = append(out, labels(v.Content)...)
 	case *shell.Wipe:
 		out = append(out, labels(v.Content)...)
+	case *shell.Reveal:
+		out = append(out, labels(v.Content)...)
 	case *shell.HoverTag:
 		out = append(out, v.Text)
 	case *shell.Morph:

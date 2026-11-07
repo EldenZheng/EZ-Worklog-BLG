@@ -100,7 +100,13 @@ func DrawCommitList(ui *shell.UI) {
 	}
 	// Border again: top holds the summary and any errors at their natural
 	// height, and the grid takes every remaining pixel to the bottom of the tab.
-	content := container.NewBorder(top, nil, nil, nil, ui.CommitDaysPanel(days, byDay))
+	daysPanel := ui.CommitDaysPanel(days, byDay)
+	// A week shown for the first time, or the tab opened, arrives as Kanban's
+	// cards do: day after day, left to right, each from the top down.
+	if cached && !loading {
+		ui.Arrival("commits", weekStart).RevealIn(daysPanel)
+	}
+	content := container.NewBorder(top, nil, nil, nil, daysPanel)
 
 	ui.CommitBox.Objects = []fyne.CanvasObject{content}
 	ui.CommitBox.Refresh()

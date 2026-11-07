@@ -65,6 +65,8 @@ func (t *Tappable) Tapped(e *fyne.PointEvent) {
 // ---- app state ----
 
 type UI struct {
+	// arrivals is each view's latest arrival (see Arrival).
+	arrivals  map[string]*arrivalState
 	LogSearch string
 	Kanban    *KanbanUI
 	Store     *backend.Store
@@ -250,7 +252,7 @@ func (ui *UI) ShowDraftSavedInfo() {
 	if ui.Win == nil {
 		return
 	}
-	dialog.ShowInformation("Draft saved locally",
+	ShowInformation("Draft saved locally",
 		"This worklog is saved on this computer and has not been pushed to GitHub yet.", ui.Win)
 }
 
@@ -1088,7 +1090,7 @@ func (ui *UI) RefreshRate(force bool) {
 
 // error dialog helper
 func (ui *UI) Errf(err error) {
-	dialog.ShowError(err, ui.Win)
+	ShowError(err, ui.Win)
 }
 
 // RunAsyncInline makes Async do its work and then apply the result on the
@@ -1164,7 +1166,7 @@ func (ui *UI) PushSpinner(label string) (func(backend.FetchProgress), func()) {
 	sized := container.New(layout.NewGridWrapLayout(fyne.NewSize(320, ind.View.MinSize().Height)), ind.View)
 	d := dialog.NewCustomWithoutButtons(label,
 		container.NewPadded(sized), ui.Win)
-	d.Show()
+	ShowDialog(d, ui.Win)
 
 	stopped := false
 	progress := func(p backend.FetchProgress) {
@@ -1181,7 +1183,7 @@ func (ui *UI) PushSpinner(label string) (func(backend.FetchProgress), func()) {
 		}
 		stopped = true
 		ind.SetActive(false)
-		d.Hide()
+		CloseDialog(d, ui.Win)
 	}
 	return progress, stop
 }

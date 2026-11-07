@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -38,6 +39,8 @@ type KanbanUI struct {
 	// CardsShown is which cards the board last showed (filter, sprint,
 	// search); when it changes the cards arrive top to bottom.
 	CardsShown string
+	// LoadProgress counts the requests of the boards' load in progress.
+	LoadProgress backend.FetchProgress
 	// SprintsShowAll lists every upcoming sprint, not only the first few.
 	SprintsShowAll                      bool
 	Message                             *widget.Label
@@ -123,10 +126,33 @@ func (k *KanbanUI) Load(force bool) {
 	// Async rather than a bare goroutine, so the tests can run it in step:
 	// the save at the end writes the planner file, and one landing after its
 	// test had finished wrote into a folder already being deleted.
+	// The bar counts requests: each board's details and pages of items, and
+	// the further pages and passes it finds it needs as it reads.
+	var counted sync.Mutex
+	progress := backend.FetchProgress{Total: len(sources) * backend.SprintBoardSteps}
+	k.LoadProgress = progress
+	step := func(done, more int) {
+		counted.Lock()
+		progress.Done += done
+		progress.Total += more
+		now := progress
+		counted.Unlock()
+		apply := func() {
+			if k.Loading {
+				k.LoadProgress = now
+				k.SyncActivity()
+			}
+		}
+		if RunAsyncInline {
+			apply()
+		} else {
+			fyne.Do(apply)
+		}
+	}
 	k.Ui.Async(func() error {
 		for _, source := range sources {
 			u := source.URL
-			b, err := backend.FetchSprintBoardWithFilter(u, source.Filter)
+			b, err := backend.FetchSprintBoardTracked(u, source.Filter, step)
 			if err != nil {
 				errors = append(errors, u+": "+err.Error())
 				for _, old := range previousBoards {
@@ -444,7 +470,13 @@ func (k *KanbanUI) SyncActivity() {
 		if !active && !page.indicator.View.Visible() {
 			continue
 		}
-		if page.indicator.ShowProgress(active, backend.FetchProgress{Stage: stage}) {
+		// Loading counts its requests, as the other tabs' loads do; a save to
+		// GitHub has no count to give.
+		progress := backend.FetchProgress{Stage: stage}
+		if k.Loading && !k.Busy {
+			progress.Done, progress.Total = k.LoadProgress.Done, k.LoadProgress.Total
+		}
+		if page.indicator.ShowProgress(active, progress) {
 			Relayout(page.page)
 		}
 	}

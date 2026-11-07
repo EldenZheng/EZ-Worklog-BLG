@@ -41,8 +41,13 @@ func reportMetricWithAside(value, label, note, aside, conversion string) fyne.Ca
 		theme.Color(theme.ColorNameForeground), ReportConversionAccent()))
 }
 
+// metricFigures collects the tiles' big figures as DrawReport builds them, so
+// they can count up when the period arrives.
+var metricFigures []*canvas.Text
+
 func reportMetricContent(value, note, aside, conversion string, amountColor, conversionColor color.Color) fyne.CanvasObject {
 	amount := canvas.NewText(value, amountColor)
+	metricFigures = append(metricFigures, amount)
 	amount.TextSize = theme.Size(theme.SizeNameHeadingText)
 	amount.TextStyle = fyne.TextStyle{Bold: true}
 	// Match the labels' inset so the large figure shares their left edge.
@@ -58,6 +63,7 @@ func reportMetricContent(value, note, aside, conversion string, amountColor, con
 	content := []fyne.CanvasObject{figure}
 	if conversion != "" {
 		converted := canvas.NewText(conversion, conversionColor)
+		metricFigures = append(metricFigures, converted)
 		converted.TextSize = theme.Size(theme.SizeNameSubHeadingText)
 		converted.TextStyle = fyne.TextStyle{Bold: true}
 		converted.Alignment = fyne.TextAlignTrailing
@@ -130,6 +136,7 @@ func reportFact(label, value string) fyne.CanvasObject {
 // picks up the display-currency total without reading each row.
 func reportFactColored(label, value string, c color.Color) fyne.CanvasObject {
 	text := canvas.NewText(value, c)
+	metricFigures = append(metricFigures, text) // the converted receivable counts up too
 	text.TextSize = theme.TextSize()
 	text.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
 	text.Alignment = fyne.TextAlignTrailing

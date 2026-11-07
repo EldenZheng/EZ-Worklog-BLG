@@ -169,12 +169,12 @@ func TestSprintDayHoverClearAndFullBackgroundKeepOtherDays(t *testing.T) {
 	}
 	var confirm *widget.Button
 	walkPopup(w.Canvas().Overlays().Top(), func(o fyne.CanvasObject) {
-		if b, ok := o.(*widget.Button); ok && b.Text == "Clear" {
+		if b, ok := o.(*widget.Button); ok && b.Text == "Delete" {
 			confirm = b
 		}
 	})
 	if confirm == nil {
-		t.Fatal("day clear confirmation missing")
+		t.Fatal("day Delete confirmation missing")
 	}
 	test.Tap(confirm)
 	p, err := ui.Store.LoadSprintPlan()

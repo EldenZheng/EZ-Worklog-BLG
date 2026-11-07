@@ -244,12 +244,17 @@ func DraftYellow(f float32) color.NRGBA {
 // "not pushed yet", and splitting it by employer would put two meanings on one
 // stretch of bar.
 func MeterBarWithDraft(cfg backend.Config, byOrg, draft map[string]int, goal int, height float32) fyne.CanvasObject {
+	return MeterPartsBar(MeterParts(cfg, byOrg, draft, goal), height)
+}
+
+// MeterPartsBar is a still meter of the given parts, such as PlannedBarParts.
+func MeterPartsBar(parts []MeterPart, height float32) fyne.CanvasObject {
 	track := canvas.NewRectangle(theme.Color(theme.ColorNameInputBackground))
 	track.CornerRadius = height / 2
 	track.SetMinSize(fyne.NewSize(0, height))
 	var weights []float32
 	var segs []fyne.CanvasObject
-	for _, part := range MeterParts(cfg, byOrg, draft, goal) {
+	for _, part := range parts {
 		weights = append(weights, part.Weight)
 		seg := canvas.NewRectangle(part.Fill)
 		seg.CornerRadius = height / 2

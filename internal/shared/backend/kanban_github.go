@@ -168,6 +168,20 @@ func FetchSprintBoard(rawURL string) (SprintBoard, error) {
 }
 
 func FetchSprintBoardWithFilter(rawURL, filter string) (SprintBoard, error) {
+	return FetchSprintBoardTracked(rawURL, filter, nil)
+}
+
+// SprintBoardSteps is how many requests a board starts out needing: its
+// details and the first page of its items. More turn up as it is read.
+const SprintBoardSteps = 2
+
+// FetchSprintBoardTracked is FetchSprintBoardWithFilter reporting as it goes,
+// so a progress bar can count requests: step says how many requests have just
+// finished and how many more it has found it needs. step may be nil.
+func FetchSprintBoardTracked(rawURL, filter string, step func(done, more int)) (SprintBoard, error) {
+	if step == nil {
+		step = func(int, int) {}
+	}
 	b := SprintBoard{URL: rawURL}
 	ref, err := ParseProjectRef(rawURL)
 	if err != nil {
@@ -190,6 +204,7 @@ func FetchSprintBoardWithFilter(rawURL, filter string) (SprintBoard, error) {
 	if err = json.Unmarshal([]byte(out), &meta); err != nil {
 		return b, err
 	}
+	step(1, 0)
 	p := meta.Data.Owner.Project
 	if p == nil {
 		return b, fmt.Errorf("project unavailable: %s", rawURL)
@@ -203,11 +218,12 @@ func FetchSprintBoardWithFilter(rawURL, filter string) (SprintBoard, error) {
 			b.Items = append(b.Items, it)
 		}
 	}
-	if err = fetchSprintItems(b.ID, b.Filter, keep); err != nil {
+	if err = fetchSprintItems(b.ID, b.Filter, keep, step); err != nil {
 		return b, err
 	}
 	if b.Current(today).ID != "" {
-		if err = fetchSprintItems(b.ID, CurrentDoneFilter(b.Filter), keep); err != nil {
+		step(0, 1) // a second pass, for the current sprint's finished work
+		if err = fetchSprintItems(b.ID, CurrentDoneFilter(b.Filter), keep, step); err != nil {
 			return b, err
 		}
 	}
@@ -216,7 +232,9 @@ func FetchSprintBoardWithFilter(rawURL, filter string) (SprintBoard, error) {
 
 // fetchSprintItems pages through the project items matching filter and hands
 // each issue or pull request to keep.
-func fetchSprintItems(projectID, filter string, keep func(SprintItem)) error {
+// step runs after each page: one request done, and one more when another page
+// follows.
+func fetchSprintItems(projectID, filter string, keep func(SprintItem), step func(done, more int)) error {
 	after := ""
 	for {
 		args := []string{"api", "graphql", "-f", "query=" + sprintItemsQuery, "-f", "id=" + projectID, "-f", "filter=" + filter}
@@ -283,8 +301,10 @@ func fetchSprintItems(projectID, filter string, keep func(SprintItem)) error {
 		}
 		pi := page.Data.Node.Items.PageInfo
 		if !pi.HasNextPage {
+			step(1, 0)
 			break
 		}
+		step(1, 1)
 		if pi.EndCursor == "" || pi.EndCursor == after {
 			return fmt.Errorf("project pagination did not advance")
 		}

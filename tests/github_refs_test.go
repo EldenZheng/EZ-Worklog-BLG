@@ -12,6 +12,7 @@ import (
 
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // An issue field reads every spelling GitHub uses: the shorthand, the path
@@ -134,9 +135,9 @@ func TestCodeReviewAsksWhichIssueWhenThePRNamesSeveral(t *testing.T) {
 		map[string]string{"exampleorg/tasks#1": "Fix invoice rounding", "exampleorg/tasks#2": "Export ledger"})
 
 	tab := logwork.BuildLogTab(ui)
-	var kinds *widget.RadioGroup
+	var kinds *shell.UnderlineTabs
 	walk(tab, func(o fyne.CanvasObject) {
-		if g, ok := o.(*widget.RadioGroup); ok && len(g.Options) > 0 && g.Options[0] == "Commits" {
+		if g, ok := o.(*shell.UnderlineTabs); ok && len(g.Options) > 0 && g.Options[0] == "Commits" {
 			kinds = g
 		}
 	})

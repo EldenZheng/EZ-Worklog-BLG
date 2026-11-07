@@ -204,9 +204,13 @@ func (c *PlannerDragCard) DragEnd() {
 // Share hover ownership across the date, its bubbles, links and Clear button.
 type PlannerDayHover struct {
 	widget.BaseWidget
-	Body     fyne.CanvasObject
-	Clear    *PlannerDayClearButton
-	owner    fyne.CanvasObject
+	Body  fyne.CanvasObject
+	Clear *PlannerDayClearButton
+	// ClearView is Clear as the header draws it, in its button role, and
+	// ClearFade fades it in and out.
+	ClearView fyne.CanvasObject
+	ClearFade *SmallDelete
+	owner     fyne.CanvasObject
 	CanClear bool
 	Header   *fyne.Container
 	View     fyne.Canvas
@@ -231,14 +235,25 @@ func (h *PlannerDayHover) Leave(owner fyne.CanvasObject) {
 }
 
 func (h *PlannerDayHover) showClear(show bool) {
+	if h.ClearFade != nil {
+		if h.ClearFade.Shown() != show {
+			h.ClearFade.OnChange = h.refreshHeader
+			h.ClearFade.FadeTo(show)
+		}
+		return
+	}
 	if h.Clear.Visible() == show {
 		return
 	}
-	if show {
-		h.Clear.Show()
-	} else {
-		h.Clear.Hide()
+	ShowIf(h.Clear, show)
+	if h.ClearView != nil {
+		ShowIf(h.ClearView, show)
 	}
+	h.refreshHeader()
+}
+
+// refreshHeader lays the header out again for Delete coming or going.
+func (h *PlannerDayHover) refreshHeader() {
 	if h.Header != nil {
 		h.Header.Refresh()
 		// Initially hidden widgets have not been associated with the native

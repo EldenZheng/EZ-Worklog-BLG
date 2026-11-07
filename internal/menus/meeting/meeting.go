@@ -138,12 +138,19 @@ func DrawMeeting(ui *shell.UI) {
 	}
 	// The sidebar is a fixed 15 percent of the tab. A custom layout keeps that
 	// ratio exact without exposing the draggable divider of an HSplit.
-	calendarBody := container.NewBorder(top, nil, nil, nil,
-		ui.CommitDaysPanelWithIssueLabel(days, byDay, MeetingIssueLabel))
+	// A week shown for the first time, or the tab opened, arrives as Kanban's
+	// cards do: the days left to right and the logged issues top to bottom.
+	var arrive *shell.Arrival
+	if cached && !loading {
+		arrive = ui.Arrival("meeting", weekStart)
+	}
+	daysPanel := ui.CommitDaysPanelWithIssueLabel(days, byDay, MeetingIssueLabel)
+	arrive.RevealIn(daysPanel)
+	calendarBody := container.NewBorder(top, nil, nil, nil, daysPanel)
 	// Vertical scrolling only: the calendar and the sidebar each fit their own
 	// column's width, so neither slides under the other.
 	calendarPane := container.NewVScroll(calendarBody)
-	rowsPane := meetingRowsPanel(ui, days)
+	rowsPane := meetingRowsPanel(ui, days, arrive)
 
 	// Swap only the inner content of the two persistent holders. The logged
 	// rows are their own menu, so they sit in a rounded panel like Settings
@@ -211,7 +218,7 @@ func (MeetingColumnsLayout) Layout(objs []fyne.CanvasObject, size fyne.Size) {
 
 // meetingRowsPanel rolls the eight days into compact cards ordered by time
 // spent, with a fixed heading and total around the scrolling issue list.
-func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
+func meetingRowsPanel(ui *shell.UI, days []string, arrive *shell.Arrival) fyne.CanvasObject {
 	inDays := map[string]bool{}
 	for _, d := range days {
 		inDays[d] = true
@@ -285,6 +292,7 @@ func meetingRowsPanel(ui *shell.UI, days []string) fyne.CanvasObject {
 	for _, p := range pairs {
 		items.Add(shell.IssueSummaryCardForRows(ui.Cfg, p.key, p.title, fmt.Sprintf("%dm", p.mins), p.rows))
 	}
+	arrive.RevealIn(items)
 	totalLine := widget.NewLabelWithStyle(
 		fmt.Sprintf("Total: %dm · %d entries · %d issues", total, entries, len(pairs)),
 		fyne.TextAlignLeading, fyne.TextStyle{Italic: true})

@@ -26,18 +26,18 @@ func OpenPendingIssue(ui *shell.UI, rows []backend.Row, groups []backend.Group) 
 	var popup dialog.Dialog
 	for _, row := range rows {
 		choices.Add(widget.NewButton(fmt.Sprintf("%s · %dm · %s", row["date"], row.Minutes(), RowTitle(ui, row)), func() {
-			popup.Hide()
+			shell.CloseDialog(popup, ui.Win)
 			openRowEditor(ui, row, refresh)
 		}))
 	}
 	for _, group := range groups {
 		choices.Add(widget.NewButton(fmt.Sprintf("%s · %d unlogged commits", group.Date, len(group.Commits)), func() {
-			popup.Hide()
+			shell.CloseDialog(popup, ui.Win)
 			OpenGroupEditor(ui, group)
 		}))
 	}
-	close := widget.NewButton("Close", func() { popup.Hide() })
+	close := widget.NewButton("Close", func() { shell.CloseDialog(popup, ui.Win) })
 	popup = dialog.NewCustomWithoutButtons("Pending work", container.NewBorder(nil, shell.DialogButtons(close), nil, nil, container.NewVScroll(choices)), ui.Win)
 	popup.Resize(ui.PopupSize())
-	popup.Show()
+	shell.ShowDialog(popup, ui.Win)
 }

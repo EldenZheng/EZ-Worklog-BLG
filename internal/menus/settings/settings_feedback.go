@@ -82,6 +82,7 @@ func OrgColorPicker(ui *shell.UI, org string, initial color.Color, onSaved func(
 	// Fyne builds the picker's buttons itself and paints Confirm its default
 	// blue; give it the app's green instead.
 	shell.RestyleStockDialog(ui.Win)
+	shell.AnimateStockDialog(ui.Win, "Cancel", "Confirm")
 	return picker
 }
 

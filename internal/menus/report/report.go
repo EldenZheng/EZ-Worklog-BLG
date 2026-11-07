@@ -13,7 +13,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -100,6 +99,7 @@ func DrawReport(ui *shell.UI) {
 		shell.Relayout(ui.RepBody)
 		return
 	}
+	metricFigures = nil
 	totals := backend.TotalsFromItems(items, "")
 	rep := backend.ReportFromTotals(ui.Cfg, totals)
 	// Drafts are shown, never counted in the settled figures. Every figure
@@ -261,7 +261,7 @@ func DrawReport(ui *shell.UI) {
 			days = append(days, day)
 		}
 	}
-	chart := ChartWithReadout(ui, days, fromDate, toDate)
+	chart, dayChart := chartWithReadout(ui, days, fromDate, toDate)
 
 	// Where the period's hours actually went. The bar is each org's share of
 	// the total, in that org's colour — the same key the calendar and the
@@ -351,6 +351,17 @@ func DrawReport(ui *shell.UI) {
 	ui.RepBox.Objects = []fyne.CanvasObject{container.NewBorder(top, nil, nil, nil, container.NewVScroll(bottom))}
 	ui.RepBox.Refresh()
 	shell.Relayout(ui.RepBody)
+	// A period opened, or its tab opened, arrives: the chart's days come in left
+	// to right and the tiles' figures count up to their values.
+	// Held back while the period or the exchange rate is still being fetched:
+	// the figures that arrive are the fresh ones.
+	var arrive *shell.Arrival
+	if !ui.Fetching(key) && !ui.RateLoading {
+		arrive = ui.Arrival("report", ui.RepMonth)
+	}
+	dayChart.Arrive(arrive)
+	arrive.CountUp(metricFigures)
+	metricFigures = nil
 }
 
 func exportCSV(ui *shell.UI) {
@@ -384,5 +395,5 @@ func exportCSV(ui *shell.UI) {
 		ui.Errf(err)
 		return
 	}
-	dialog.ShowInformation("Exported", fmt.Sprintf("Saved %d items to:\n%s", len(items), out), ui.Win)
+	shell.ShowInformation("Exported", fmt.Sprintf("Saved %d items to:\n%s", len(items), out), ui.Win)
 }

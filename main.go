@@ -73,17 +73,28 @@ func main() {
 		case shell.KanbanTabName:
 			sprintcalendar.PruneSupportWeeks(ui)
 			ui.Kanban.PrunePlan()
+			// Opening the tab brings the cards in again, top to bottom. Boards
+			// still loading bring them in when they land.
+			ui.Kanban.CardsShown = ""
 			ui.Kanban.Load(false)
+			if ui.Kanban.Loaded {
+				kanban.Draw(ui.Kanban)
+			}
 		case shell.PlannerTabName:
 			sprintcalendar.PruneSupportWeeks(ui)
 			sprintcalendar.Maintain(ui.Kanban)
 			ui.Kanban.Load(false)
+			ui.ReplayArrival("planner") // its days arrive again
 			kanban.Draw(ui.Kanban)
 		case shell.LogWorkTabName:
 			// Both week tabs carry the support checkbox: drop finished weeks
-			// before it is read, and redraw if one went.
-			if sprintcalendar.PruneSupportWeeks(ui) {
-				logwork.DrawWeekStrip(ui)
+			// before it is read. Redrawn either way, so the week arrives again.
+			sprintcalendar.PruneSupportWeeks(ui)
+			ui.ReplayArrival("week")
+			logwork.DrawWeekStrip(ui)
+			if ui.PendingLoaded {
+				ui.ReplayArrival("pending")
+				logwork.RenderPending(ui)
 			}
 			ui.LoadPending(false)
 		case shell.LogListTabName:
@@ -91,18 +102,25 @@ func main() {
 				logwork.DrawWeekStrip(ui)
 			}
 			ui.LoadPending(false)
+			ui.ReplayArrival("loglist")
 			loglist.DrawLogList(ui)
 		case shell.CommitListTabName:
 			ui.LoadWeekCommits(false)
+			ui.ReplayArrival("commits")
 			commitlist.DrawCommitList(ui)
 		case shell.MeetingTabName:
 			meeting.LoadMeetingCommits(ui, false)
+			ui.ReplayArrival("meeting")
 			meeting.DrawMeeting(ui)
 		case shell.StatusTabName:
+			// Opening the tab plays the month's arrival again, and the day's.
+			ui.ReplayArrival("status")
+			ui.ReplayArrival("statusday")
 			status.DrawCalendar(ui)
 			ui.LoadStatus(false)
 		case shell.ReportTabName:
 			ui.RefreshRate(false)
+			ui.ReplayArrival("report")
 			report.DrawReport(ui)
 			ui.LoadReport(false)
 		case shell.SettingsTabName:
@@ -127,12 +145,12 @@ func main() {
 		msg := widget.NewLabel(fmt.Sprintf("%d Kanban change(s) have not reached GitHub yet. Close anyway and lose them?", n))
 		msg.Wrapping = fyne.TextWrapWord
 		var d dialog.Dialog
-		keep := widget.NewButton("Keep waiting", func() { d.Hide() })
+		keep := widget.NewButton("Keep waiting", func() { shell.CloseDialog(d, w) })
 		quit := widget.NewButton("Close anyway", func() { w.Close() })
 		d = dialog.NewCustomWithoutButtons("Changes still saving",
 			container.NewVBox(msg, shell.DialogButtons(keep, shell.DestructiveButton(quit))), w)
 		d.Resize(fyne.NewSize(480, d.MinSize().Height))
-		d.Show()
+		shell.ShowDialog(d, w)
 	})
 
 	logwork.DrawRecent(ui)

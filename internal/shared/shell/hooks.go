@@ -41,6 +41,6 @@ var Hooks struct {
 	SetSupport                        func(*UI, bool, ...string)
 	SupportOn                         func(*UI, string) bool
 	WeekBoardsPanel                   func(*UI, string, string) fyne.CanvasObject
-	WeekIssuesPanel                   func(*UI, []backend.WorklogItem, string) fyne.CanvasObject
+	WeekIssuesPanel                   func(*UI, []backend.WorklogItem, string, *Arrival) fyne.CanvasObject
 	WeekWorklogs                      func(*UI, []string) (map[string][]backend.WorklogItem, string)
 }

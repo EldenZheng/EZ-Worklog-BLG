@@ -399,9 +399,9 @@ func ConfirmDelete(ui *shell.UI, r backend.Row, refresh func()) {
 	body.Wrapping = fyne.TextWrapWord
 
 	var pop *widget.PopUp
-	cancel := widget.NewButton("Cancel", func() { pop.Hide() })
+	cancel := widget.NewButton("Cancel", func() { shell.ClosePopUp(pop) })
 	confirm := widget.NewButton("Delete", func() {
-		pop.Hide()
+		shell.ClosePopUp(pop)
 		if err := ui.Store.DeleteRow(r["id"]); err != nil {
 			ui.Errf(err)
 			return
@@ -420,6 +420,7 @@ func ConfirmDelete(ui *shell.UI, r backend.Row, refresh func()) {
 	pop.Move(fyne.NewPos(
 		(canvasSize.Width-sz.Width)/2,
 		(canvasSize.Height-sz.Height)/2))
+	shell.AnimateOpening(ui.Win.Canvas())
 }
 
 // pushRow sends one saved row to GitHub and reports what landed.
@@ -489,14 +490,14 @@ func repushRow(ui *shell.UI, id string, refresh func()) {
 // stock confirm dialog would have painted it Fyne's default blue.
 func showPushFailedDialog(ui *shell.UI, title string, content fyne.CanvasObject, repush func()) {
 	var d dialog.Dialog
-	closeBtn := widget.NewButton("Close", func() { d.Hide() })
+	closeBtn := widget.NewButton("Close", func() { shell.CloseDialog(d, ui.Win) })
 	again := widget.NewButton("Push again", func() {
-		d.Hide()
+		shell.CloseDialog(d, ui.Win)
 		repush()
 	})
 	d = dialog.NewCustomWithoutButtons(title,
 		container.NewVBox(content, shell.DialogButtons(closeBtn, shell.GitHubButton(again))), ui.Win)
-	d.Show()
+	shell.ShowDialog(d, ui.Win)
 }
 
 // showPushResultDialog puts up a compact popup with "Pushed:" and a clickable
@@ -520,5 +521,5 @@ func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult, re
 		showPushFailedDialog(ui, title, container.NewVBox(rows...), repush)
 		return
 	}
-	dialog.ShowCustom(title, "OK", container.NewVBox(rows...), ui.Win)
+	shell.ShowStockDialog(dialog.NewCustom(title, "OK", container.NewVBox(rows...), ui.Win), ui.Win, "OK")
 }

@@ -52,7 +52,7 @@ func TestSprintDayHoverRepaintsHiddenDeleteWithoutClick(t *testing.T) {
 	if !day.Clear.Visible() || len(view.refreshed) == 0 || view.refreshed[len(view.refreshed)-1] != day.Header {
 		t.Fatal("showing Delete did not repaint its visible header")
 	}
-	if day.Header.Objects[0].Size().Width != day.Header.Size().Width-28 {
+	if day.Header.Objects[0].Size().Width != day.Header.Size().Width-day.ClearView.MinSize().Width-4 {
 		t.Fatal("hover did not lay out space for Delete")
 	}
 	if dir := os.Getenv("WORKLOG_PLANNER_SCREENSHOTS"); dir != "" {

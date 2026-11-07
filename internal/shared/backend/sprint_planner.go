@@ -392,6 +392,24 @@ func ResizePlannerBlock(p SprintPlan, key string, index, minutes int) (SprintPla
 	return p, nil
 }
 
+// RemovePlannerBlock takes one time block off an issue, keeping its other blocks,
+// estimate and notes. want is the block as it was shown, so a plan that changed
+// while the confirmation was open does not lose a different block.
+func RemovePlannerBlock(p SprintPlan, key string, index int, want PlanBlock) (SprintPlan, error) {
+	t := p.Tasks[key]
+	if index < 0 || index >= len(t.Blocks) || t.Blocks[index] != want {
+		return p, fmt.Errorf("this time block has changed; look at the calendar again")
+	}
+	t.Blocks = append(append([]PlanBlock{}, t.Blocks[:index]...), t.Blocks[index+1:]...)
+	tasks := make(map[string]SprintTask, len(p.Tasks))
+	for k, v := range p.Tasks {
+		tasks[k] = v
+	}
+	tasks[key] = t
+	p.Tasks = tasks
+	return p, nil
+}
+
 // Clear only the selected sprint's visible candidates, retaining local metadata,
 // other sprint appointments, and the original plan until Save succeeds.
 func ClearSprintSchedule(p SprintPlan, candidates []SprintCandidate) (SprintPlan, int) {

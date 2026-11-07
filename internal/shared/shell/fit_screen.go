@@ -17,9 +17,14 @@ import (
 // The window's padding moves inside the scroller, so it clips at the window's
 // edge and not a padding short of it, where it would shave the corners of
 // whatever reaches the page's edge.
+//
+// Over it lies an empty layer where a closing popup fades away (see
+// popup_motion.go): under any popup still open, over the page.
 func FitScreen(w fyne.Window, content fyne.CanvasObject) {
 	w.SetPadded(false)
-	w.SetContent(container.NewScroll(container.NewPadded(content)))
+	layer := container.NewWithoutLayout()
+	closingLayers[w.Canvas()] = layer
+	w.SetContent(container.NewStack(container.NewScroll(container.NewPadded(content)), layer))
 }
 
 // FitPopup is the same for a popup's content: a popup bigger than the window

@@ -119,9 +119,9 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	if buttonNamed(tab, "Fetch linked issues") != nil {
 		t.Fatal("Bulk Review should resolve each row automatically, not show a fetch button")
 	}
-	var kinds *widget.RadioGroup
+	var kinds *shell.UnderlineTabs
 	walk(tab, func(o fyne.CanvasObject) {
-		if group, ok := o.(*widget.RadioGroup); ok {
+		if group, ok := o.(*shell.UnderlineTabs); ok {
 			for _, option := range group.Options {
 				if option == "Bulk Review" {
 					kinds = group

@@ -189,20 +189,46 @@ func reflowScroll(s *container.Scroll) {
 	}
 }
 
-// Morph eases its content from one height to the next and slides it in from
-// the side, so swapping what it shows (a different form for a different
-// choice) reads as a move rather than a jump. Like Fold it clips, and only
-// for that is it a Scrollable.
+// Morph eases its content from one height to the next and slides it across,
+// so swapping what it shows (a different form for a different choice) reads as
+// a move rather than a jump: the old form slides out one side while the new one
+// slides in from the other. Like Fold it clips, and only for that is it a
+// Scrollable.
 type Morph struct {
 	widget.BaseWidget
 	Content fyne.CanvasObject
 	height  float32 // shown height while moving; below zero, the content's own
 	shift   float32 // sideways offset while sliding in
 	move    *fyne.Animation
+	// old is a picture of what it showed before the change, sliding out by
+	// oldShift; nil when there is none.
+	old      *canvas.Image
+	oldShift float32
 }
 
-// morphSlide is how far the content slides in from.
+// morphSlide is how far the content slides in from when there is no picture of
+// the old content to slide out of the way; with one, it slides the full width.
 const morphSlide = 120
+
+// MorphTime is how long a change takes.
+const MorphTime = 380 * time.Millisecond
+
+// Snapshot keeps a picture of what the Morph shows now, to slide out of the way
+// at the next Change. Call it just before changing the content.
+func (m *Morph) Snapshot() {
+	m.old = nil
+	c := fyne.CurrentApp().Driver().CanvasForObject(m)
+	if c == nil || !animationsOn() || !m.Visible() {
+		return
+	}
+	picture := captureArea(c, fyne.CurrentApp().Driver().AbsolutePositionForObject(m), m.Size())
+	if picture == nil {
+		return
+	}
+	m.old = canvas.NewImageFromImage(picture)
+	m.old.FillMode = canvas.ImageFillStretch
+	m.old.Resize(m.Size())
+}
 
 func NewMorph(content fyne.CanvasObject) *Morph {
 	m := &Morph{Content: content, height: -1}
@@ -222,25 +248,33 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 	if m.height >= 0 {
 		from = m.height
 	}
+	slide := float32(morphSlide)
+	if m.old != nil {
+		slide = m.Size().Width // the new form pushes the old one out
+	}
+	if dir == 0 {
+		m.old = nil
+	}
 	start := float32(0)
 	switch {
 	case dir > 0:
-		start = morphSlide
+		start = slide
 	case dir < 0:
-		start = -morphSlide
+		start = -slide
 	}
 	var move *fyne.Animation
-	move = fyne.NewAnimation(320*time.Millisecond, func(done float32) {
+	move = fyne.NewAnimation(MorphTime, func(done float32) {
 		if m.move != move {
 			return
 		}
 		to := m.Content.MinSize().Height
 		final := done >= 1
 		if final {
-			m.height, m.shift = -1, 0
+			m.height, m.shift, m.old = -1, 0, nil
 		} else {
 			m.height = from + (to-from)*done
 			m.shift = start * (1 - done)
+			m.oldShift = -start * done
 		}
 		m.layoutContent(m.Size())
 		canvas.Refresh(m)
@@ -248,7 +282,7 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 			relayout(final)
 		}
 	})
-	move.Curve = fyne.AnimationEaseOut
+	move.Curve = easeOutCubic
 	m.move = move
 	move.Start()
 }
@@ -257,6 +291,9 @@ func (m *Morph) layoutContent(size fyne.Size) {
 	full := m.Content.MinSize().Height
 	m.Content.Move(fyne.NewPos(m.shift, 0))
 	m.Content.Resize(fyne.NewSize(size.Width, max(full, size.Height)))
+	if m.old != nil {
+		m.old.Move(fyne.NewPos(m.oldShift, 0))
+	}
 }
 
 func (m *Morph) Scrolled(*fyne.ScrollEvent)    {}
@@ -281,7 +318,12 @@ func (r *morphRenderer) Refresh() {
 	r.m.Content.Refresh()
 }
 
-func (r *morphRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.m.Content} }
+func (r *morphRenderer) Objects() []fyne.CanvasObject {
+	if r.m.old != nil {
+		return []fyne.CanvasObject{r.m.Content, r.m.old}
+	}
+	return []fyne.CanvasObject{r.m.Content}
+}
 func (r *morphRenderer) Destroy()                     {}
 
 // pageScroll is a tab's page scroll that rides the view up when the page gets

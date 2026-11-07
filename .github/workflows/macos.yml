@@ -2,13 +2,20 @@
 #
 # Publishing a release builds that tag and attaches Worklog-macos to it, which is
 # what the app's updater downloads on a Mac. Run it by hand from the Actions tab
-# to try the current branch: the binary is left on the run as an artifact.
+# to try the current branch: the binary is left on the run as an artifact. Give it
+# a release tag instead to build that tag and attach the file to its release, for
+# a release whose own run failed.
 name: macOS build
 
 on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and attach to (blank builds the branch and attaches nothing)
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -19,10 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0 # git describe needs the tags for the version stamp
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      # A fresh runner has an empty module cache. tools/patchfyne now downloads
+      # Fyne itself; this keeps tags made before that building too.
+      - name: Download modules
+        run: go mod download
       - name: Prepare the patched Fyne
         run: go run ./tools/patchfyne
       # Reported, not enforced: the suite is written and run on Windows, and a
@@ -42,8 +54,8 @@ jobs:
           name: Worklog-macos
           path: dist/Worklog-macos
       - name: Attach to the release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.release.tag_name }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
         run: gh release upload "$TAG" dist/Worklog-macos --clobber
