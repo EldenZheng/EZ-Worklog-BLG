@@ -26,7 +26,7 @@ const reviewPickWidth = 340
 type reviewTarget struct {
 	ui     *shell.UI
 	Entry  *widget.Entry
-	Pick   *widget.Select
+	Pick   *shell.GoldSelect
 	pickIn fyne.CanvasObject // the dropdown with its fixed width, hidden for one issue
 	Status *widget.Label
 	View   fyne.CanvasObject
@@ -41,7 +41,7 @@ func newReviewTarget(ui *shell.UI) *reviewTarget {
 	t := &reviewTarget{ui: ui, Entry: widget.NewEntry(), Status: widget.NewLabel("")}
 	t.Entry.SetPlaceHolder(ReviewPlaceholder)
 	t.Status.Wrapping = fyne.TextWrapWord
-	t.Pick = widget.NewSelect(nil, func(string) { t.showPicked() })
+	t.Pick = shell.NewGoldSelect(nil, func(string) { t.showPicked() })
 	t.Pick.PlaceHolder = "Pick the issue"
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.SetMinSize(fyne.NewSize(reviewPickWidth, 0))

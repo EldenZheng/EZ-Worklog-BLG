@@ -80,7 +80,7 @@ func (f *Fold) Slide(open bool, relayout func(final bool)) {
 			relayout(final)
 		}
 	})
-	slide.Curve = fyne.AnimationEaseOut
+	slide.Curve = easeOutQuart
 	f.slide = slide
 	slide.Start()
 }
@@ -399,7 +399,7 @@ func (p *pageScroll) settle() {
 		}
 		Reflow(final, p.chain...)
 	})
-	ease.Curve = fyne.AnimationEaseOut
+	ease.Curve = easeOutQuart
 	p.ease = ease
 	ease.Start()
 }

@@ -5,7 +5,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/widgets"
@@ -34,20 +33,20 @@ func ShowIf(o fyne.CanvasObject, show bool) {
 // forth costs nothing.
 type repoPicker struct {
 	ui    *UI
-	org   *widget.Select
-	repo  *widget.Select
+	org   *GoldSelect
+	repo  *GoldSelect
 	cache map[string][]string
 }
 
 func (ui *UI) NewRepoPicker() *repoPicker {
 	p := &repoPicker{ui: ui, cache: map[string][]string{}}
 
-	p.repo = widget.NewSelect(nil, nil)
+	p.repo = NewGoldSelect(nil, nil)
 	p.repo.PlaceHolder = "Pick an org first"
 	p.repo.Disable()
 
 	orgs := OrgOrder(ui.Cfg)
-	p.org = widget.NewSelect(orgs, func(org string) { p.loadRepos(org) })
+	p.org = NewGoldSelect(orgs, func(org string) { p.loadRepos(org) })
 	p.org.PlaceHolder = "Organisation"
 	if len(orgs) == 1 {
 		// One configured org is not a choice, so it is made for you.

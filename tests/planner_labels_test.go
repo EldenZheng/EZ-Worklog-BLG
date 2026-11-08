@@ -404,3 +404,18 @@ func TestBlockTextStaysInsideTheBlock(t *testing.T) {
 		t.Fatal("blocks missing", faces)
 	}
 }
+
+func TestPlannedTooltipPutsReferenceBeforeTitleAndTime(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	body := shell.PlannedTipBody([]shell.PlannedLine{{Title: "Fix login", Detail: "app#7", Minutes: 60}})
+	var text string
+	walk(body, func(o fyne.CanvasObject) {
+		if line, ok := o.(*canvas.Text); ok {
+			text += line.Text
+		}
+	})
+	if !strings.HasPrefix(text, "(app#7) Fix login") || !strings.HasSuffix(text, "60m") {
+		t.Fatalf("tooltip order: %q", text)
+	}
+}

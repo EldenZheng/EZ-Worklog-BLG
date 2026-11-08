@@ -105,12 +105,12 @@ func main() {
 			ui.ReplayArrival("loglist")
 			loglist.DrawLogList(ui)
 		case shell.CommitListTabName:
-			ui.LoadWeekCommits(false)
 			ui.ReplayArrival("commits")
+			ui.LoadWeekCommits(false)
 			commitlist.DrawCommitList(ui)
 		case shell.MeetingTabName:
-			meeting.LoadMeetingCommits(ui, false)
 			ui.ReplayArrival("meeting")
+			meeting.LoadMeetingCommits(ui, false)
 			meeting.DrawMeeting(ui)
 		case shell.StatusTabName:
 			// Opening the tab plays the month's arrival again, and the day's.
@@ -172,6 +172,10 @@ func main() {
 			}
 			if ui.Kanban != nil {
 				sprintcalendar.Maintain(ui.Kanban)
+				// Future plans also need issue details before either planning tab opens.
+				if len(ui.Kanban.Plan.Tasks) > 0 {
+					ui.Kanban.Load(false)
+				}
 			}
 		})
 	}()

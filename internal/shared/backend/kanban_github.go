@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -227,6 +228,50 @@ func FetchSprintBoardTracked(rawURL, filter string, step func(done, more int)) (
 			return b, err
 		}
 	}
+	return b, nil
+}
+
+// RefreshSprint fetches only one iteration and retains other cached iterations.
+func RefreshSprint(b SprintBoard, key string, step func(int, int)) (SprintBoard, error) {
+	sprint := b.SprintByKey(key)
+	if sprint.ID == "" {
+		return b, fmt.Errorf("sprint is no longer available")
+	}
+	var terms []string
+	for _, term := range filterTerms(b.Filter) {
+		field, value, _ := strings.Cut(strings.ToLower(strings.TrimPrefix(term, "-")), ":")
+		if field == "sprint" || field == "iteration" || ((field == "no" || field == "has") && strings.Trim(value, `"`) == "sprint") {
+			continue
+		}
+		terms = append(terms, term)
+	}
+	filter := strings.TrimSpace(strings.Join(terms, " ") + " sprint:" + strconv.Quote(sprint.Title))
+	if step == nil {
+		step = func(int, int) {}
+	}
+	var fresh []SprintItem
+	seen := map[string]bool{}
+	keep := func(it SprintItem) {
+		if it.SprintID == sprint.ID && !seen[it.ID] && !b.HiddenDone(it, WorkDate(time.Now())) {
+			seen[it.ID] = true
+			fresh = append(fresh, it)
+		}
+	}
+	if err := fetchSprintItems(b.ID, filter, keep, step); err != nil {
+		return b, err
+	}
+	if sprint.Contains(WorkDate(time.Now())) {
+		step(0, 1)
+		if err := fetchSprintItems(b.ID, CurrentDoneFilter(b.Filter), keep, step); err != nil {
+			return b, err
+		}
+	}
+	for _, it := range b.Items {
+		if it.SprintID != sprint.ID && !seen[it.ID] {
+			fresh = append(fresh, it)
+		}
+	}
+	b.Items = fresh
 	return b, nil
 }
 

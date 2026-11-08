@@ -113,7 +113,20 @@ func (k *KanbanUI) Save(p backend.SprintPlan) bool {
 	return true
 }
 
-func (k *KanbanUI) Load(force bool) {
+func (k *KanbanUI) Load(force bool) { k.load(force, "") }
+
+func (k *KanbanUI) RefreshSprint(key string) {
+	if key == "" {
+		return
+	}
+	if k.Loading || k.Busy || len(k.Queue) > 0 {
+		k.SetMessage("Wait for the current GitHub operation, then refresh this sprint.")
+		return
+	}
+	k.load(true, key)
+}
+
+func (k *KanbanUI) load(force bool, sprintKey string) {
 	if k.Busy || len(k.Queue) > 0 {
 		// Never refresh under queued writes: the fresh boards would race
 		// them. Refresh once the queue is empty instead.
@@ -140,6 +153,14 @@ func (k *KanbanUI) Load(force bool) {
 	// the further pages and passes it finds it needs as it reads.
 	var counted sync.Mutex
 	progress := backend.FetchProgress{Total: len(sources) * backend.SprintBoardSteps}
+	if sprintKey != "" {
+		progress.Total = 0
+		for _, b := range previousBoards {
+			if b.SprintByKey(sprintKey).ID != "" {
+				progress.Total++
+			}
+		}
+	}
 	k.LoadProgress = progress
 	step := func(done, more int) {
 		counted.Lock()
@@ -162,7 +183,28 @@ func (k *KanbanUI) Load(force bool) {
 	k.Ui.Async(func() error {
 		for _, source := range sources {
 			u := source.URL
-			b, err := backend.FetchSprintBoardTracked(u, source.Filter, step)
+			var b backend.SprintBoard
+			var err error
+			if sprintKey == "" {
+				b, err = backend.FetchSprintBoardTracked(u, source.Filter, step)
+			} else {
+				found := false
+				for _, old := range previousBoards {
+					if backend.SameSprintProject(old.URL, u) {
+						found = true
+						if old.SprintByKey(sprintKey).ID == "" {
+							b = old
+						} else {
+							old.Filter = source.Filter
+							b, err = backend.RefreshSprint(old, sprintKey, step)
+						}
+						break
+					}
+				}
+				if !found {
+					continue
+				}
+			}
 			if err != nil {
 				errors = append(errors, u+": "+err.Error())
 				for _, old := range previousBoards {
@@ -181,7 +223,9 @@ func (k *KanbanUI) Load(force bool) {
 			k.Load(true)
 			return
 		}
-		k.Loaded = len(errors) == 0
+		if sprintKey == "" {
+			k.Loaded = len(errors) == 0
+		}
 		p := k.Plan
 		p.Boards = boards
 		p.Fetched = time.Now().Format(time.RFC3339)

@@ -33,6 +33,9 @@ func TestLogListIssuesScrollIndependentlyInsideThePage(t *testing.T) {
 	var scrolls []*container.Scroll
 	walk(ui.ListBox, func(o fyne.CanvasObject) {
 		if s, ok := o.(*container.Scroll); ok {
+			if _, page := s.Content.(*fyne.Container); page && contains(labels(s.Content), "Boards for this week") {
+				return
+			}
 			scrolls = append(scrolls, s)
 		}
 	})
@@ -124,7 +127,7 @@ func TestIssueBubblesFitSideBySideAndRevealFullTitlesOnHover(t *testing.T) {
 	}
 	// The native wheel handler dismisses previews before hit testing, then
 	// sends the same event to the scroller underneath (no lost first notch).
-	w.Resize(fyne.NewSize(900, 120))
+	w.Resize(fyne.NewSize(350, 120))
 	at = a.Driver().AbsolutePositionForObject(peek).Add(fyne.NewPos(8, 8))
 	test.MoveMouse(w.Canvas(), fyne.NewPos(0, 0))
 	test.MoveMouse(w.Canvas(), at)

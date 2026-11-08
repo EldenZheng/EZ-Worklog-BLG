@@ -18,7 +18,7 @@ import (
 	"fyne.io/fyne/v2"
 )
 
-const wheelGlide = 160 * time.Millisecond
+const wheelResponse = 70 * time.Millisecond
 
 // Match Status's day sidebar throughout the app. Explicitly boosted scrollers
 // retain their own speed (including Sprint Calendar's faster month view). A Mac
@@ -90,37 +90,55 @@ func (w *window) processMouseScrolled(xoff float64, yoff float64) {
 }
 
 func glideWheel(target fyne.Scrollable, pos, abs fyne.Position, dx, dy float32) {
-	if wheel.anim != nil {
-		wheel.anim.Stop()
-		wheel.anim = nil
-	}
-	if wheel.target != nil && wheel.target != target {
-		deliverWheel(wheel.target, wheel.pos, wheel.abs, wheel.dx, wheel.dy)
+	if wheel.target != target || !fyne.CurrentApp().Settings().ShowAnimations() || runtime.GOOS == "darwin" {
+		if wheel.anim != nil {
+			wheel.anim.Stop()
+			wheel.anim = nil
+		}
+		// Never dump the remainder into a panel the pointer has already left.
 		wheel.dx, wheel.dy = 0, 0
 	}
 	wheel.target, wheel.pos, wheel.abs = target, pos, abs
-	// A notch during a glide adds to what is left, so fast wheeling speeds up.
+	if !fyne.CurrentApp().Settings().ShowAnimations() || runtime.GOOS == "darwin" {
+		deliverWheel(target, pos, abs, dx, dy)
+		return
+	}
+	// Reversing direction cancels that axis's remaining travel immediately.
+	if dx*wheel.dx < 0 {
+		wheel.dx = 0
+	}
+	if dy*wheel.dy < 0 {
+		wheel.dy = 0
+	}
 	wheel.dx += dx
 	wheel.dy += dy
-	totalX, totalY := wheel.dx, wheel.dy
-	var sentX, sentY float32
+	// Keep a single clock running across successive wheel notches. Restarting
+	// an ease-out curve each time produces a fresh velocity jump on every notch.
+	if wheel.anim != nil {
+		return
+	}
+	last := time.Now()
 	var anim *fyne.Animation
-	anim = fyne.NewAnimation(wheelGlide, func(done float32) {
+	anim = fyne.NewAnimation(time.Second, func(float32) {
 		if wheel.anim != anim {
 			return
 		}
-		x, y := totalX*done-sentX, totalY*done-sentY
-		if done >= 1 {
+		now := time.Now()
+		dt := min(now.Sub(last), 100*time.Millisecond)
+		last = now
+		fraction := float32(1 - math.Exp(-float64(dt)/float64(wheelResponse)))
+		x, y := wheel.dx*fraction, wheel.dy*fraction
+		if math.Abs(float64(wheel.dx)) < .1 && math.Abs(float64(wheel.dy)) < .1 {
 			x, y = wheel.dx, wheel.dy
 			wheel.anim = nil
+			anim.Stop()
 		}
-		sentX += x
-		sentY += y
 		wheel.dx -= x
 		wheel.dy -= y
-		deliverWheel(target, pos, abs, x, y)
+		deliverWheel(target, wheel.pos, wheel.abs, x, y)
 	})
-	anim.Curve = fyne.AnimationEaseOut
+	anim.Curve = fyne.AnimationLinear
+	anim.RepeatCount = fyne.AnimationRepeatForever
 	wheel.anim = anim
 	anim.Start()
 }

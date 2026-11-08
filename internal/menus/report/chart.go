@@ -70,12 +70,14 @@ func (c *DayChart) share(i int) float32 {
 // ChartDay is one slot on the axis: a date and how its minutes split by org.
 // draft is what is saved on this machine for that day and not yet pushed — it
 // is stacked on top of the org segments rather than counted into total, which
-// stays what GitHub actually holds.
+// stays what GitHub actually holds. Planned is Sprint Calendar time not done
+// yet, stacked on top of the draft in the same way.
 type ChartDay struct {
-	Date  string
-	ByOrg map[string]int
-	Total int
-	Draft int
+	Date    string
+	ByOrg   map[string]int
+	Total   int
+	Draft   int
+	Planned int
 }
 
 func NewDayChart(cfg backend.Config, days []ChartDay, goal int) *DayChart {
@@ -105,7 +107,7 @@ func (c *DayChart) MaxValue() int {
 	for _, d := range c.Days {
 		// The draft rides on top of the bar, so the scale has to hold both or a
 		// day with work waiting would draw off the top of the plot.
-		if t := d.Total + d.Draft; t > maxVal {
+		if t := d.Total + d.Draft + d.Planned; t > maxVal {
 			maxVal = t
 		}
 	}
@@ -188,6 +190,7 @@ type chartSlot struct {
 	orgs      []string // the segments' orgs, bottom-up
 	Segments  []*canvas.Rectangle
 	Draft     *canvas.Rectangle // unpushed minutes, capping the stack; nil if none
+	Plan      *canvas.Rectangle // planned minutes, above the draft; nil if none
 	label     *canvas.Text
 }
 
@@ -220,6 +223,11 @@ func (r *DayChartRenderer) build() {
 			s.Draft = canvas.NewRectangle(shell.DraftYellow(shell.DraftSolidTint))
 			s.Draft.CornerRadius = ChartBarRadius
 			r.objects = append(r.objects, s.Draft)
+		}
+		if day.Planned > 0 {
+			s.Plan = canvas.NewRectangle(shell.PlannerPlanColor)
+			s.Plan.CornerRadius = ChartBarRadius
+			r.objects = append(r.objects, s.Plan)
 		}
 		s.label = canvas.NewText(chartDayLabel(day.Date), muted)
 		s.label.TextSize = theme.CaptionTextSize()
@@ -295,7 +303,7 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 		// both are true of it, and the green is the more useful of the two —
 		// nothing is owed on that day but a push.
 		short := shell.IsShortDay(day.Total)
-		done := shell.IsDraftComplete(day.Total, day.Draft)
+		done := shell.IsDraftComplete(day.Total, day.Draft+day.Planned)
 		switch {
 		case i == c.Hovered && done:
 			s.Highlight.FillColor = shell.BlendColor(shell.DraftDoneFill(),
@@ -337,21 +345,29 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 			y = top
 		}
 
-		// The draft caps the stack, reaching down behind whatever it landed on
-		// for the same reason the org segments do.
-		if s.Draft != nil {
-			h := float32(day.Draft) / maxVal * plotH * arrived
+		// The draft caps the stack and the plan caps the draft, each reaching
+		// down behind whatever it landed on for the same reason the org segments
+		// do.
+		stack := func(bar *canvas.Rectangle, minutes int, onTop bool) {
+			h := float32(minutes) / maxVal * plotH * arrived
 			if h <= 0 {
-				s.Draft.Resize(fyne.NewSize(0, 0))
-			} else {
-				top := y - h
-				grown := h
-				if len(s.Segments) > 0 {
-					grown += ChartBarRadius
-				}
-				s.Draft.Move(fyne.NewPos(barX, top))
-				s.Draft.Resize(fyne.NewSize(barW, grown))
+				bar.Resize(fyne.NewSize(0, 0))
+				return
 			}
+			top := y - h
+			grown := h
+			if onTop {
+				grown += ChartBarRadius
+			}
+			bar.Move(fyne.NewPos(barX, top))
+			bar.Resize(fyne.NewSize(barW, grown))
+			y = top
+		}
+		if s.Draft != nil {
+			stack(s.Draft, day.Draft, len(s.Segments) > 0)
+		}
+		if s.Plan != nil {
+			stack(s.Plan, day.Planned, len(s.Segments) > 0 || s.Draft != nil)
 		}
 
 		lblSize := s.label.MinSize()
@@ -395,6 +411,12 @@ func chartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) (f
 			break
 		}
 	}
+	for _, d := range days {
+		if d.Planned > 0 {
+			idle += " Purple is planned on the Sprint Calendar."
+			break
+		}
+	}
 	readout := widget.NewLabelWithStyle(idle, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	readout.Wrapping = fyne.TextWrapWord
 	chart.OnHover = func(date string) {
@@ -404,13 +426,20 @@ func chartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) (f
 		}
 		d := byDate[date]
 		when, _ := time.Parse("2006-01-02", date)
-		if d.Total == 0 && d.Draft == 0 {
+		if d.Total == 0 && d.Draft == 0 && d.Planned == 0 {
 			readout.SetText(when.Format("Mon 2 Jan") + " — nothing logged")
 			return
 		}
+		planned := ""
+		if d.Planned > 0 {
+			planned = fmt.Sprintf("   ·   +%s planned", backend.HoursMins(d.Planned))
+		}
 		if d.Total == 0 {
-			readout.SetText(fmt.Sprintf("%s — nothing pushed   ·   %s saved here, waiting",
-				when.Format("Mon 2 Jan"), backend.HoursMins(d.Draft)))
+			line := when.Format("Mon 2 Jan") + " — nothing pushed"
+			if d.Draft > 0 {
+				line += fmt.Sprintf("   ·   %s saved here, waiting", backend.HoursMins(d.Draft))
+			}
+			readout.SetText(line + planned)
 			return
 		}
 		line := fmt.Sprintf("%s — %s of %s", when.Format("Mon 2 Jan"),
@@ -421,7 +450,7 @@ func chartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) (f
 		if d.Draft > 0 {
 			line += fmt.Sprintf("   ·   +%s waiting", backend.HoursMins(d.Draft))
 		}
-		readout.SetText(line)
+		readout.SetText(line + planned)
 	}
 	chart.OnSelect = func(date string) { OpenDayOnCalendar(ui, date) }
 	return container.NewVBox(chart, readout), chart

@@ -50,7 +50,9 @@ func BuildReportTab(ui *shell.UI) fyne.CanvasObject {
 
 	ui.RepBox = container.NewStack()
 	ui.ReportProgress = shell.NewLoadingIndicator()
-	ui.RepBody = container.NewBorder(container.NewVBox(head, ui.ReportProgress.View), nil, nil, nil, ui.RepBox)
+	ui.RepHead = container.NewVBox(head, ui.ReportProgress.View)
+	ui.RepBox.Add(ui.RepHead)
+	ui.RepBody = container.NewStack(ui.RepBox)
 	return shell.PageInset(ui.RepBody)
 }
 
@@ -61,7 +63,7 @@ func DrawReport(ui *shell.UI) {
 	}
 	ui.RepTitle.SetText(shell.ReportPeriodName(ui.RepMonth))
 	if !ui.HasCfg {
-		ui.RepBox.Objects = []fyne.CanvasObject{widget.NewLabel("Open Settings first.")}
+		ui.RepBox.Objects = []fyne.CanvasObject{container.NewVBox(ui.RepHead, widget.NewLabel("Open Settings first."))}
 		ui.RepBox.Refresh()
 		shell.Relayout(ui.RepBody)
 		return
@@ -89,12 +91,12 @@ func DrawReport(ui *shell.UI) {
 	if !cached {
 		ui.EnsureProjectCache()
 		if ui.ProjErr[key] != nil && !ui.ProjLoading[key] {
-			ui.RepBox.Objects = []fyne.CanvasObject{shell.ColorLabel(ui.ProjErr[key].Error(), theme.ColorNameError)}
+			ui.RepBox.Objects = []fyne.CanvasObject{container.NewVBox(ui.RepHead, shell.ColorLabel(ui.ProjErr[key].Error(), theme.ColorNameError))}
 			ui.RepBox.Refresh()
 			shell.Relayout(ui.RepBody)
 			return
 		}
-		ui.RepBox.Objects = []fyne.CanvasObject{widget.NewLabel("Loading worklogs from GitHub…")}
+		ui.RepBox.Objects = []fyne.CanvasObject{container.NewVBox(ui.RepHead, widget.NewLabel("Loading worklogs from GitHub…"))}
 		ui.RepBox.Refresh()
 		shell.Relayout(ui.RepBody)
 		return
@@ -118,10 +120,11 @@ func DrawReport(ui *shell.UI) {
 	supportSets, supportBonus := backend.WeekendSupportBonus(carried, supportIssues, ui.Cfg.SupportSetPay)
 	totalReceivable := rep.Receivable + supportBonus
 
-	// Projected receivable is what the period would pay once every draft on
-	// this machine is pushed. The pay math is the same, run on totals merged
-	// with the drafts by day so a draft that finishes an under-target day
-	// lifts payable days accordingly. Weekend support is kept as-is — a
+	// Projected receivable is what the period would pay once everything pending
+	// lands: every draft on this machine, the support shifts pencilled in, and
+	// the Sprint Calendar's plans. The pay math is the same, run on totals merged
+	// with them by day so pending time that finishes an under-target day lifts
+	// payable days accordingly. The weekend support bonus is kept as-is — a
 	// draft's contribution to a support set is only known once it is pushed
 	// with its issue attached, and inflating the projection would read as a
 	// promise this figure cannot keep.
@@ -129,8 +132,16 @@ func DrawReport(ui *shell.UI) {
 	for d, m := range totals {
 		projectedTotals[d] = m
 	}
-	for d, m := range draftByDay {
-		projectedTotals[d] += m
+	plannedByDay := ui.PlannedByDay(fromDate, toDate, all)
+	plannedTotal, pendingTotal := 0, 0
+	for _, pending := range []map[string]int{draftByDay, ui.SupportPlaceholdersByDay(fromDate, toDate, all), plannedByDay} {
+		for d, m := range pending {
+			projectedTotals[d] += m
+			pendingTotal += m
+		}
+	}
+	for _, m := range plannedByDay {
+		plannedTotal += m
 	}
 	projected := backend.ReportFromTotals(ui.Cfg, projectedTotals)
 	projectedTotalReceivable := projected.Receivable + supportBonus
@@ -190,14 +201,14 @@ func DrawReport(ui *shell.UI) {
 	payableNote := fmt.Sprintf("%.2f days × %s", rep.PayableDays, money(rep.DailyRate))
 	projectedNote := fmt.Sprintf("%.2f days × %s", projected.PayableDays, money(projected.DailyRate))
 	if projected.Receivable > rep.Receivable {
-		projectedNote = fmt.Sprintf("+%s once %s of drafts pushes · %s",
-			money(projected.Receivable-rep.Receivable), backend.HoursMins(draftTotal), projectedNote)
+		projectedNote = fmt.Sprintf("+%s once %s of pending work lands · %s",
+			money(projected.Receivable-rep.Receivable), backend.HoursMins(pendingTotal), projectedNote)
 	}
 	payableBeforeSupport := "(" + money(rep.Receivable) + " before support)"
 	projectedBeforeSupport := "(" + money(projected.Receivable) + " before support)"
 	stats := container.New(widgets.NewFlowGrid(220, 0, 126),
 		reportMetricWithAside(money(totalReceivable), "Payable", payableNote, payableBeforeSupport, convertedTag(totalReceivable)),
-		reportMetricTintedWithAside(money(projectedTotalReceivable), "Payable after drafts", projectedNote, projectedBeforeSupport, convertedTag(projectedTotalReceivable), draftSurface, draftHeader, draftBorder),
+		reportMetricTintedWithAside(money(projectedTotalReceivable), "Payable after pendings", projectedNote, projectedBeforeSupport, convertedTag(projectedTotalReceivable), draftSurface, draftHeader, draftBorder),
 		reportMetricDarkBlue(money(supportBonus), "Support bonus", supportDetail, convertedTag(supportBonus)),
 	)
 	timeStats := container.New(widgets.NewFlowGrid(220, 0, 126),
@@ -226,7 +237,7 @@ func DrawReport(ui *shell.UI) {
 		reportText(withConverted(fmt.Sprintf("%d days left including weekends at 8h/day", fullDays), fullPay)),
 		reportFact("Full weekdays only", money(weekdayPay)),
 		reportText(withConverted(fmt.Sprintf("%d weekdays left at 8h/day", weekdayDays), weekdayPay)),
-		reportText("Projections include saved drafts, top up today, and keep the support bonus already earned."))
+		reportText("Projections include drafts, support shifts and plans, top up today, and keep the support bonus already earned."))
 	payment := reportSection("Payment breakdown", paymentRows...)
 	activity := reportSection("Period at a glance",
 		reportFact("Calendar days gone", fmt.Sprintf("%d/%d", daysGone, daysTotal)),
@@ -254,7 +265,7 @@ func DrawReport(ui *shell.UI) {
 		to, _ := time.Parse("2006-01-02", toDate)
 		for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 			ds := d.Format("2006-01-02")
-			day := ChartDay{Date: ds, ByOrg: byDayOrg[ds], Draft: draftByDay[ds]}
+			day := ChartDay{Date: ds, ByOrg: byDayOrg[ds], Draft: draftByDay[ds], Planned: plannedByDay[ds]}
 			for _, m := range day.ByOrg {
 				day.Total += m
 			}
@@ -338,8 +349,15 @@ func DrawReport(ui *shell.UI) {
 	if draftTotal > 0 {
 		notes = append(notes, reportWarning(fmt.Sprintf(
 			"%s in this period is saved on this machine and not pushed — drawn yellow on the "+
-				"chart and left out of every figure above. Push it from Log work to have it count.",
+				"chart and left out of every figure above but Payable after pendings. Push it from "+
+				"Log work to have it count.",
 			backend.HoursMins(draftTotal))))
+	}
+	if plannedTotal > 0 {
+		notes = append(notes, reportText(fmt.Sprintf(
+			"%s in this period is planned on the Sprint Calendar and not done yet — drawn purple on "+
+				"the chart and counted only in Payable after pendings and the projections.",
+			backend.HoursMins(plannedTotal))))
 	}
 
 	top := container.NewVBox(stats, chart, container.NewVBox(split...))
@@ -348,7 +366,7 @@ func DrawReport(ui *shell.UI) {
 		bottom.Add(container.New(widgets.NewFlowGrid(300, 0, 0), dayDetails...))
 	}
 	bottom.Add(reportSection("How this is calculated", notes...))
-	ui.RepBox.Objects = []fyne.CanvasObject{container.NewBorder(top, nil, nil, nil, container.NewVScroll(bottom))}
+	ui.RepBox.Objects = []fyne.CanvasObject{shell.ShortPage(container.NewVBox(ui.RepHead, top), container.NewVScroll(bottom), 260)}
 	ui.RepBox.Refresh()
 	shell.Relayout(ui.RepBody)
 	// A period opened, or its tab opened, arrives: the chart's days come in left

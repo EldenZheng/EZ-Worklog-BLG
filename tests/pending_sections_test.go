@@ -112,7 +112,7 @@ func TestPendingListSkipsHeadingsWithNothingToGroup(t *testing.T) {
 		t.Fatalf("expected a single block of tiles, got %d", n)
 	}
 	// With no heading above them the tiles are named after their issue refs.
-	if got := labels(ui.PendingBox); !contains(got, "exampleorg/repo#1") {
+	if got := labels(ui.PendingBox); !contains(got, "repo#1") || contains(got, "exampleorg/repo#1") {
 		t.Fatalf("an unheaded tile should still name its issue: %v", got)
 	}
 }

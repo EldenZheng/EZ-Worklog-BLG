@@ -283,6 +283,9 @@ func weekUI(t *testing.T) *shell.UI {
 	ui := pendingUI(t)
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}}
 	ui.WeekStart = "2026-08-10" // Monday
+	// Content assertions use the spacious layout; narrow-column geometry has
+	// separate coverage in small_screen_test.go.
+	ui.Win.Resize(fyne.NewSize(2400, 1000))
 	return ui
 }
 
@@ -437,8 +440,8 @@ func TestTheCardOnADaySpellsItselfOut(t *testing.T) {
 	logwork.DrawRecent(ui)
 
 	got := labels(ui.WeekBox)
-	if !contains(got, ref) {
-		t.Fatalf("the issue ref should be readable in full, not elided: %v", got)
+	if !contains(got, shell.ShortIssueRef(ref)) || contains(got, ref) {
+		t.Fatalf("the day card should show repo#number without its owner: %v", got)
 	}
 	if !contains(got, "90 min") {
 		t.Fatalf("the minutes are the number the card carries: %v", got)

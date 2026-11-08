@@ -62,6 +62,11 @@ func (t *UnderlineTabs) SetSelected(option string) {
 }
 
 func (t *UnderlineTabs) CreateRenderer() fyne.WidgetRenderer {
+	if t.slide != nil {
+		t.slide.Stop()
+		t.slide = nil
+	}
+	t.lineW = 0
 	t.line = canvas.NewRectangle(widgets.LogoGold)
 	t.line.CornerRadius = tabLineHeight / 2
 	t.track = canvas.NewRectangle(theme.Color(theme.ColorNameInputBorder))
@@ -131,11 +136,19 @@ func (t *UnderlineTabs) slideLine() {
 		return
 	}
 	fromX, fromW := t.lineX, t.lineW
-	t.slide = fyne.NewAnimation(tabSlideTime, func(p float32) {
+	var slide *fyne.Animation
+	slide = fyne.NewAnimation(tabSlideTime, func(p float32) {
+		if t.slide != slide {
+			return
+		}
 		t.placeLine(fromX+(x-fromX)*p, fromW+(w-fromW)*p)
+		if p >= 1 {
+			t.slide = nil
+		}
 	})
-	t.slide.Curve = easeOutCubic
-	t.slide.Start()
+	slide.Curve = easeOutQuart
+	t.slide = slide
+	slide.Start()
 }
 
 type underlineTabsRenderer struct {
@@ -179,7 +192,12 @@ func (r *underlineTabsRenderer) Refresh() {
 }
 
 func (r *underlineTabsRenderer) Objects() []fyne.CanvasObject { return r.objects }
-func (r *underlineTabsRenderer) Destroy()                     {}
+func (r *underlineTabsRenderer) Destroy() {
+	if r.t.slide != nil {
+		r.t.slide.Stop()
+		r.t.slide = nil
+	}
+}
 
 // underlineTab is one label in the row.
 type underlineTab struct {

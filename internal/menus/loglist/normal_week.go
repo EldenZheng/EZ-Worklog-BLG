@@ -7,19 +7,28 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
 )
 
 const normalWeekMinutes = 40 * 60
 
-func normalWeekProgress(logged, waiting int) string {
+// normalWeekProgress scores the week against 40 hours, in sections: what is on
+// the board, then with drafts and support, then with plans as well.
+func normalWeekProgress(logged, waiting, planned int) []lineSection {
 	left := max(normalWeekMinutes-logged, 0)
-	line := fmt.Sprintf("Normal work week (40h): %d%% logged · %d%% remaining (%s)",
-		logged*100/normalWeekMinutes, (left*100+normalWeekMinutes-1)/normalWeekMinutes, backend.HoursMins(left))
+	sections := []lineSection{{fmt.Sprintf("Normal work week (40h): %d%% logged · %d%% remaining (%s)",
+		logged*100/normalWeekMinutes, (left*100+normalWeekMinutes-1)/normalWeekMinutes, backend.HoursMins(left)),
+		theme.Color(theme.ColorNameForeground)}}
 	if waiting > 0 {
-		line += fmt.Sprintf(" · %d%% with drafts/support", (logged+waiting)*100/normalWeekMinutes)
+		sections = append(sections, lineSection{weekProjection("waiting", waiting, logged+waiting, normalWeekMinutes),
+			theme.Color(theme.ColorNameWarning)})
 	}
-	return line
+	if planned > 0 {
+		sections = append(sections, lineSection{weekProjection("planned", planned, logged+waiting+planned, normalWeekMinutes),
+			shell.PlannerPlanColor})
+	}
+	return sections
 }
 
 func normalWeekMarker(bar fyne.CanvasObject, scale int) fyne.CanvasObject {
@@ -34,13 +43,13 @@ func normalWeekMarker(bar fyne.CanvasObject, scale int) fyne.CanvasObject {
 type normalWeekMeterLayout struct{ fraction float32 }
 
 func (l normalWeekMeterLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	return fyne.NewSize(objects[2].MinSize().Width, objects[2].MinSize().Height+18)
+	return fyne.NewSize(objects[2].MinSize().Width, objects[2].MinSize().Height+14)
 }
 
 func (l normalWeekMeterLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	labelSize := objects[2].MinSize()
 	x := size.Width * l.fraction
-	y := labelSize.Height + 4
+	y := labelSize.Height + 2
 	objects[0].Move(fyne.NewPos(0, y))
 	objects[0].Resize(fyne.NewSize(size.Width, 10))
 	objects[1].Move(fyne.NewPos(max(min(x-1, size.Width-2), 0), y-2))

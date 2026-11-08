@@ -218,7 +218,7 @@ func DrawWeekStrip(ui *shell.UI) {
 			ui.MeterShare("strip/"+t.Format("Mon"), share)
 		})
 	}
-	grid := container.New(widgets.NewDayGridLayout(dayCols, ui.WeekBox.Size().Width), dayCols...)
+	grid := container.New(&WeekGrid{}, dayCols...)
 
 	objs := []fyne.CanvasObject{head, ui.WeekStripProgress.View, grid}
 	// While GitHub is still being read the days would show only the drafts,
@@ -388,8 +388,10 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 	if ds == shell.Today() {
 		name += " · Today"
 	}
-	var head fyne.CanvasObject = widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
+	dayLabel := widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
 		fyne.TextStyle{Bold: ds == shell.Today()})
+	dayLabel.Truncation = fyne.TextTruncateEllipsis
+	var head fyne.CanvasObject = dayLabel
 	if ds == shell.Today() {
 		// Today's heading is gold, like its outline.
 		head = container.NewThemeOverride(head, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
@@ -399,17 +401,17 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 	// cards level with one without.
 	if planned > 0 {
 		// What the day still has free once its logged, drafted and planned time
-		// are counted.
+		// are counted: said in the tooltip, not on the day.
 		free := max(0, backend.Target-mins-waiting-planned)
-		plan := shell.WeekCaption(fmt.Sprintf("%dm planned (%dm left without planned)", planned, free))
+		plan := shell.WeekCaption(fmt.Sprintf("%dm planned", planned))
 		plan.Color = shell.PlannerPlanColor
 		// Under the pointer it lists the planned blocks; a click opens the
 		// Sprint Calendar on this day's week.
 		day := ds
-		trigger := shell.NewTipCaption(container.NewCenter(plan), "", func() { ui.ShowPlannerDate(day) })
+		trigger := shell.NewTipCaption(container.New(&fitTextLayout{full: plan.Text, reserveWidth: true}, plan), "", func() { ui.ShowPlannerDate(day) })
 		if shell.Hooks.PlannedLines != nil {
 			if lines := shell.Hooks.PlannedLines(ui, ds, items, local); len(lines) > 0 {
-				trigger.Body = shell.PlannedTipBody(lines)
+				trigger.Body = shell.PlannedTipWithFree(free, lines)
 			}
 		}
 		head = container.New(widgets.NewSidesLayout(head, trigger, 0), head, trigger)
@@ -422,7 +424,7 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 	if mins > 0 {
 		banked = DayScoreLine(mins)
 	}
-	caption := container.New(shell.SplitCaption{}, shell.WeekCaption(banked), shell.WeekCaption(""))
+	caption := container.New(&boundedDayCaptions{base: shell.SplitCaption{}}, shell.WeekCaption(banked), shell.WeekCaption(""))
 	if queuedMins := waiting + planned; queuedMins > 0 {
 		queued := fmt.Sprintf("+%d min", queuedMins)
 		if placeholder > 0 {
@@ -431,7 +433,7 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		score, added := shell.WeekCaption(banked), shell.WeekCaption(queued)
 		score.Hide()
 		added.Hide()
-		caption = container.New(&dayCaptionLayout{}, shell.WeekCaption(banked+" · "+queued),
+		caption = container.New(&boundedDayCaptions{base: &dayCaptionLayout{}}, shell.WeekCaption(banked+" · "+queued),
 			shell.WeekCaption(DayScoreLine(mins+queuedMins)), score, added)
 	}
 	body := []fyne.CanvasObject{
@@ -469,10 +471,6 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 
 // DayScoreLine is one day's minutes against the target: what it holds, what
 // share of the day that is, and what it still owes.
-//
-// The percentage alone made the arithmetic the reader's job — "68%" of 480 is
-// how many minutes short? The number that decides whether to log more is the
-// one that was missing, so it is spelled out.
 func DayScoreLine(mins int) string {
 	s := fmt.Sprintf("%d min · %d%%", mins, shell.PercentOf(mins))
 	if mins >= backend.Target {
@@ -511,7 +509,7 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	// break on.
 	where := widget.NewLabel("no issue ref")
 	if r["issue"] != "" {
-		where = widget.NewLabel(r["issue"])
+		where = widget.NewLabel(backend.OrDefault(shell.ShortIssueRef(r["issue"]), r["issue"]))
 	}
 	where.Wrapping = fyne.TextWrapBreak
 
@@ -531,7 +529,11 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 
 // weekRowTitle names a locally saved row the same way its tile does.
 func weekRowTitle(ui *shell.UI, r backend.Row) string {
-	return RowTitle(ui, r)
+	title := RowTitle(ui, r)
+	if title == r["issue"] {
+		return backend.OrDefault(shell.ShortIssueRef(title), title)
+	}
+	return title
 }
 
 func newDayColumn(ui *shell.UI, date string, body fyne.CanvasObject, frame *canvas.Rectangle) *shell.DayColumn {

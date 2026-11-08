@@ -31,9 +31,16 @@ func ColorLabel(s string, name fyne.ThemeColorName) fyne.CanvasObject {
 // selectRenderer.MinSize overwrites the label width with the placeholder's, so
 // the default "(Select one)" decides the box and any longer option spills out
 // under the arrow. Measure the options and pin the width to the widest.
-func WideSelect(sel *widget.Select) fyne.CanvasObject {
+func WideSelect(sel fyne.CanvasObject) fyne.CanvasObject {
+	var options []string
+	switch control := sel.(type) {
+	case *widget.Select:
+		options = control.Options
+	case *GoldSelect:
+		options = control.Options
+	}
 	w := float32(0)
-	for _, o := range sel.Options {
+	for _, o := range options {
 		if m := fyne.MeasureText(o, theme.TextSize(), fyne.TextStyle{}); m.Width > w {
 			w = m.Width
 		}

@@ -6,6 +6,54 @@ import (
 	"worklog/internal/shared/backend"
 )
 
+// PlannedByDay is the Sprint Calendar's purple figure for each day from..to.
+// items are the board worklogs for those days; what they and the unpushed
+// drafts already cover is not counted as still planned.
+func (ui *UI) PlannedByDay(from, to string, items []backend.WorklogItem) map[string]int {
+	out := map[string]int{}
+	if Hooks.PlannedMinutes == nil {
+		return out
+	}
+	logged := itemsByDay(items)
+	saved := map[string][]backend.Row{}
+	if rows, err := ui.Store.ReadRows(); err == nil {
+		for _, r := range ui.ShownRows(rows) {
+			if r["pushed_at"] == "" {
+				saved[r["date"]] = append(saved[r["date"]], r)
+			}
+		}
+	}
+	for ds := from; ds <= to; ds = backend.AddDays(ds, 1) {
+		if m := Hooks.PlannedMinutes(ui, ds, logged[ds], saved[ds]); m > 0 {
+			out[ds] = m
+		}
+	}
+	return out
+}
+
+// SupportPlaceholdersByDay is the support shift pencilled onto each day from..to.
+func (ui *UI) SupportPlaceholdersByDay(from, to string, items []backend.WorklogItem) map[string]int {
+	out := map[string]int{}
+	if Hooks.SupportOn == nil {
+		return out
+	}
+	logged := itemsByDay(items)
+	for ds := from; ds <= to; ds = backend.AddDays(ds, 1) {
+		if m := SupportPlaceholderFor(ui.Cfg, Hooks.SupportOn(ui, ds), ds, logged[ds]); m > 0 {
+			out[ds] = m
+		}
+	}
+	return out
+}
+
+func itemsByDay(items []backend.WorklogItem) map[string][]backend.WorklogItem {
+	out := map[string][]backend.WorklogItem{}
+	for _, it := range items {
+		out[it.Date] = append(out[it.Date], it)
+	}
+	return out
+}
+
 // DayTotalFill is the colour behind a Log List day from everything standing on
 // it, the way Log Work and the Sprint Calendar paint theirs: green once logged,
 // drafts, the support placeholder and planned time together reach the target.

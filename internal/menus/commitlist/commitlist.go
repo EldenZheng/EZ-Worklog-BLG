@@ -83,6 +83,12 @@ func DrawCommitList(ui *shell.UI) {
 
 	ui.EnsureWeekCommitCache()
 	loading := ui.WeekCommitLoad[weekStart]
+	if loading {
+		ui.CommitBox.Objects = []fyne.CanvasObject{widget.NewLabel("Loading commits and issue details...")}
+		ui.CommitBox.Refresh()
+		shell.Relayout(ui.CommitBody)
+		return
+	}
 	commits, cached := ui.WeekCommits[weekStart]
 	errs := ui.WeekCommitErrs[weekStart]
 

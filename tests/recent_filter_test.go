@@ -234,7 +234,7 @@ func TestPendingBubblesWrapIntoAGrid(t *testing.T) {
 	}
 	// The footer carries the org-less form. The full "exampleorg / repo #1" was
 	// wide enough to collide with the date on the same line.
-	if !contains(got, "repo #1") {
+	if !contains(got, "repo#1") {
 		t.Fatalf("tile footer lost the issue ref: %v", got)
 	}
 	if contains(got, "exampleorg / repo") {
@@ -249,9 +249,9 @@ func TestShortIssueLabel(t *testing.T) {
 		want string
 	}{
 		{backend.IssueInfo{Org: "exampleorg", Repo: "sample-general-tasks", Number: 6511},
-			"exampleorg/sample-general-tasks#6511", "sample-general-tasks #6511"},
+			"exampleorg/sample-general-tasks#6511", "sample-general-tasks#6511"},
 		// Title lookup still in flight: the ref alone carries the same fields.
-		{backend.IssueInfo{}, "exampleorg/sample-intranet#42", "sample-intranet #42"},
+		{backend.IssueInfo{}, "exampleorg/sample-intranet#42", "sample-intranet#42"},
 		// Unparseable refs are passed through rather than mangled.
 		{backend.IssueInfo{}, "not-a-ref", "not-a-ref"},
 	}

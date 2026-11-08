@@ -139,6 +139,11 @@ func DrawCalendar(ui *shell.UI) {
 	for _, m := range draftByDay {
 		monthDraft += m
 	}
+	plannedByDay := ui.PlannedByDay(monthFrom, monthTo, items)
+	monthPlanned := 0
+	for _, m := range plannedByDay {
+		monthPlanned += m
+	}
 
 	grid := container.NewGridWithColumns(7)
 	for _, d := range []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"} {
@@ -150,7 +155,7 @@ func DrawCalendar(ui *shell.UI) {
 	var cells []fyne.CanvasObject
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", ui.CalMonth, shell.Pad2(day))
-		cells = append(cells, dayCell(ui, ds, day, byDayOrg[ds], draftByDay[ds]))
+		cells = append(cells, dayCell(ui, ds, day, byDayOrg[ds], draftByDay[ds], plannedByDay[ds]))
 	}
 	// A month opened, or its tab opened, arrives as Kanban's cards do: each day
 	// uncovered from the top down, column after column, left to right.
@@ -177,12 +182,15 @@ func DrawCalendar(ui *shell.UI) {
 		// not been sent.
 		summary += fmt.Sprintf(" · %d min saved here, waiting to push", monthDraft)
 	}
+	if monthPlanned > 0 {
+		summary += fmt.Sprintf(" · %d min planned", monthPlanned)
+	}
 	ui.CalSummary.SetText(summary)
 	// Always redrawn: with no day picked it shows the prompt to pick one.
 	DrawDayPanel(ui)
 }
 
-func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft int) fyne.CanvasObject {
+func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft, planned int) fyne.CanvasObject {
 	m := 0
 	for _, v := range byOrg {
 		m += v
@@ -201,12 +209,13 @@ func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft int) 
 		return c
 	}
 
-	state := shell.DayState(m, draft)
+	// Planned time counts toward the day as it does on Log Work's week.
+	state := shell.DayState(m, draft+planned)
 	// The score under the number, the way the report reads it: what the day has
 	// against what it owes, so a glance down the month compares like with like
 	// instead of asking which percentage belonged to which target.
 	var lines []fyne.CanvasObject
-	if m > 0 || draft > 0 {
+	if m > 0 || draft > 0 || planned > 0 {
 		lines = append(lines, coloured(fmt.Sprintf("%d/%d", m, backend.Target), state.TextColor))
 		switch {
 		case draft > 0:
@@ -214,6 +223,11 @@ func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft int) 
 				draft, shell.PercentOf(m+draft)), state.TextColor))
 		default:
 			lines = append(lines, coloured(fmt.Sprintf("%d%%", pc), state.TextColor))
+		}
+		if planned > 0 {
+			plan := coloured(fmt.Sprintf("+%dm · %d%%", planned, shell.PercentOf(m+draft+planned)), state.TextColor)
+			plan.Color = shell.PlannerPlanColor
+			lines = append(lines, plan)
 		}
 	}
 
@@ -238,10 +252,10 @@ func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft int) 
 	// The wash is what makes the month readable at arm's length — a done day is
 	// green, a short one yellow, an untouched one the background — while the
 	// meter over it still says how full the day was and who it was for.
-	wash := canvas.NewRectangle(shell.DayState(m, draft).Fill)
+	wash := canvas.NewRectangle(state.Fill)
 	wash.CornerRadius = shell.CellCornerRadius
 	stack := container.NewStack(floor, wash,
-		shell.VMeterFill(ui.Cfg, byOrg, draft, backend.Target, shell.CellCornerRadius), border,
+		shell.VMeterFillPlanned(ui.Cfg, byOrg, draft, planned, backend.Target, shell.CellCornerRadius), border,
 		container.NewPadded(body))
 	return shell.NewTappable(stack, func() {
 		ui.SelDay = ds
@@ -298,11 +312,17 @@ func DrawDayPanel(ui *shell.UI) {
 
 	// Same meter as the calendar cell, at a size worth reading: the day against
 	// the target, split by org, with the split spelled out underneath.
+	planned := ui.PlannedByDay(ui.SelDay, ui.SelDay, monthItems)[ui.SelDay]
 	body := []fyne.CanvasObject{
 		head,
 		widget.NewLabelWithStyle(fmt.Sprintf("%d/%d min (%d%%)", total, backend.Target, pc),
 			fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-		ui.ProgressBar("detail", ui.SelDay, byOrg, nil, backend.Target, 12),
+		ui.ProgressBarParts("detail", ui.SelDay, shell.PlannedBarParts(ui.Cfg, byOrg, nil, planned), 12),
+	}
+	if planned > 0 {
+		plan := shell.WeekCaption(fmt.Sprintf("+%dm planned", planned))
+		plan.Color = shell.PlannerPlanColor
+		body = append(body, plan)
 	}
 	for _, org := range shell.OrgsByShare(ui.Cfg, byOrg) {
 		// Border, not a ratio row: a ratio row's minimum grows with its widest

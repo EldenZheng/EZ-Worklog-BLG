@@ -103,6 +103,9 @@ func run(stage string) error {
 			return err
 		}
 	}
+	if err := patchPopupDismiss(module.Dir, dependency); err != nil {
+		return err
+	}
 	if err := patchWheel(module.Dir, dependency); err != nil {
 		return err
 	}
@@ -255,4 +258,21 @@ func writeBuildMod(stage, dependency string) error {
 		return fmt.Errorf("cannot configure the private Fyne build: %w: %s", err, out)
 	}
 	return nil
+}
+
+func patchPopupDismiss(source, dependency string) error {
+	const file = "widget/popup.go"
+	code, err := readSource(source, file)
+	if err != nil {
+		return err
+	}
+	const original = "dismiss := p.Hide"
+	if !strings.Contains(code, original) {
+		return fmt.Errorf("review popup dismissal for this Fyne version")
+	}
+	code = strings.Replace(code, original, `dismiss := func() {
+  if h, ok := p.Content.(interface{ DismissPopup() bool }); ok && h.DismissPopup() { return }
+  p.Hide()
+ }`, 1)
+	return writePatched(dependency, file, code)
 }

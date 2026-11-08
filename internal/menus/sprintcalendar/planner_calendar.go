@@ -179,6 +179,14 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	if selected := selectedCalendarSprint(k); selected.ID != "" && selected.Contains(shell.Today()) {
 		sprintControl = container.NewThemeOverride(sprintSelect, widgets.DropdownTheme{Theme: theme.Current(), Current: true})
 	}
+	refreshSprint := widget.NewButtonWithIcon("Refresh sprint", theme.ViewRefreshIcon(), func() {
+		k.RefreshSprint(backend.SprintKey(selectedCalendarSprint(k)))
+	})
+	if k.Loading || k.Busy || selectedCalendarSprint(k).ID == "" {
+		refreshSprint.Disable()
+	}
+	sprintControl = container.NewBorder(nil, nil, nil, refreshSprint, sprintControl)
+
 	today := widget.NewButton("Today", func() {
 		k.Week = backend.WeekStartOf(shell.Today())
 		k.Month = shell.ThisMonth()

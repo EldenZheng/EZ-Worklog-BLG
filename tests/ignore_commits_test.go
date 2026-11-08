@@ -66,7 +66,7 @@ func TestPendingBubbleLeadsWithTheIssueTitle(t *testing.T) {
 	// the heading and then being replaced a moment later.
 	ui.IssueInfo = map[string]backend.IssueInfo{}
 	got = labels(logwork.GroupBubble(ui, g, false))
-	if !contains(got, "exampleorg/sample-intranet#42") {
+	if !contains(got, "sample-intranet#42") || contains(got, "exampleorg/sample-intranet#42") {
 		t.Fatalf("with no title the ref should lead: %v", got)
 	}
 

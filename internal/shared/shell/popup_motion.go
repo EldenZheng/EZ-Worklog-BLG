@@ -74,6 +74,7 @@ func animationsOn() bool { return fyne.CurrentApp().Settings().ShowAnimations() 
 
 // ShowDialog shows d over win and animates it in. Close it with CloseDialog.
 func ShowDialog(d dialog.Dialog, win fyne.Window) {
+	FinishDropdownClosings()
 	d.Show()
 	if popup := topPopUp(win.Canvas()); popup != nil && AnimateOpening(win.Canvas()) != nil {
 		dialogPopups[d] = popup
@@ -84,6 +85,7 @@ func ShowDialog(d dialog.Dialog, win fyne.Window) {
 // buttons close it. dismiss names those buttons, so they close it with the
 // motion too.
 func ShowStockDialog(d dialog.Dialog, win fyne.Window, dismiss ...string) {
+	FinishDropdownClosings()
 	d.Show()
 	AnimateStockDialog(win, dismiss...)
 }
@@ -182,6 +184,19 @@ func AnimateOpening(c fyne.Canvas) *fyne.Animation {
 // dropTime is how long a drop-down takes to unfold or fold.
 const dropTime = 240 * time.Millisecond
 
+var dropdownOpening = map[*widget.PopUp]*fyne.Animation{}
+var dropdownClosing = map[*widget.PopUp]*fyne.Animation{}
+
+// Complete old folds before adding an overlay: hiding an old Fyne popup later
+// would also remove any new overlay opened above it.
+func FinishDropdownClosings() {
+	for p, a := range dropdownClosing {
+		a.Stop()
+		delete(dropdownClosing, p)
+		p.Hide()
+	}
+}
+
 // UnfoldPopUp opens p, a drop-down already shown at its place, down from its top
 // edge to size, uncovering r, its content, as it goes. r must have Fold set.
 func UnfoldPopUp(p *widget.PopUp, r *Reveal, size fyne.Size) *fyne.Animation {
@@ -194,8 +209,18 @@ func UnfoldPopUp(p *widget.PopUp, r *Reveal, size fyne.Size) *fyne.Animation {
 		return nil
 	}
 	step(0)
-	anim := fyne.NewAnimation(dropTime, step)
-	anim.Curve = easeOutCubic
+	var anim *fyne.Animation
+	anim = fyne.NewAnimation(dropTime, func(share float32) {
+		if dropdownOpening[p] != anim {
+			return
+		}
+		step(share)
+		if share >= 1 {
+			delete(dropdownOpening, p)
+		}
+	})
+	anim.Curve = easeOutQuart
+	dropdownOpening[p] = anim
 	anim.Start()
 	return anim
 }
@@ -203,20 +228,31 @@ func UnfoldPopUp(p *widget.PopUp, r *Reveal, size fyne.Size) *fyne.Animation {
 // FoldPopUp folds a drop-down opened by UnfoldPopUp back up into its top edge
 // and hides it.
 func FoldPopUp(p *widget.PopUp, r *Reveal) *fyne.Animation {
+	if a := dropdownOpening[p]; a != nil {
+		a.Stop()
+		delete(dropdownOpening, p)
+	}
 	size := p.Size()
 	if r == nil || !animationsOn() {
 		p.Hide()
 		return nil
 	}
-	anim := fyne.NewAnimation(dropTime, func(done float32) {
+	startShare := r.Share()
+	var anim *fyne.Animation
+	anim = fyne.NewAnimation(dropTime, func(done float32) {
+		if dropdownClosing[p] != anim {
+			return
+		}
 		share := 1 - done
-		r.SetShare(share)
+		r.SetShare(startShare * share)
 		p.Resize(fyne.NewSize(size.Width, size.Height*share))
 		if done >= 1 {
+			delete(dropdownClosing, p)
 			p.Hide()
 		}
 	})
-	anim.Curve = easeOutCubic
+	anim.Curve = easeOutQuart
+	dropdownClosing[p] = anim
 	anim.Start()
 	return anim
 }

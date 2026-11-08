@@ -325,6 +325,11 @@ const MeterTint = 0.4
 // the banked colours in yellow, so a day that only looks empty because nothing
 // has been sent yet stops looking empty.
 func VMeterFill(cfg backend.Config, byOrg map[string]int, draft, goal int, radius float32) fyne.CanvasObject {
+	return VMeterFillPlanned(cfg, byOrg, draft, 0, goal, radius)
+}
+
+// VMeterFillPlanned is VMeterFill with planned time in purple on top.
+func VMeterFillPlanned(cfg backend.Config, byOrg map[string]int, draft, planned, goal int, radius float32) fyne.CanvasObject {
 	if goal <= 0 {
 		return canvas.NewRectangle(color.Transparent)
 	}
@@ -335,6 +340,9 @@ func VMeterFill(cfg backend.Config, byOrg map[string]int, draft, goal int, radiu
 	}
 	if draft > 0 {
 		total += draft
+	}
+	if planned > 0 {
+		total += planned
 	}
 	if total <= 0 {
 		return canvas.NewRectangle(color.Transparent)
@@ -374,6 +382,12 @@ func VMeterFill(cfg backend.Config, byOrg map[string]int, draft, goal int, radiu
 	// draft is stacked on, not the other way round.
 	if w := float32(float64(draft) / float64(goal) * scale); draft > 0 && w > 0 {
 		seg := canvas.NewRectangle(DraftYellow(MeterTint))
+		seg.CornerRadius = radius
+		weights = append(weights, w)
+		segs = append(segs, seg)
+	}
+	if w := float32(float64(planned) / float64(goal) * scale); planned > 0 && w > 0 {
+		seg := canvas.NewRectangle(BlendColor(theme.Color(theme.ColorNameBackground), PlannerPlanColor, MeterTint))
 		seg.CornerRadius = radius
 		weights = append(weights, w)
 		segs = append(segs, seg)

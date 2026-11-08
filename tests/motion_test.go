@@ -149,3 +149,73 @@ func TestProgressDoesNotAnimateHiddenTabs(t *testing.T) {
 		t.Fatal("hidden view should show final values without an animation")
 	}
 }
+
+func TestUnderlineSurvivesFinishedSlideAndRendererRebuild(t *testing.T) {
+	a := newMotionTestApp(t).(*motionTestApp)
+	driver := &cascadeFrameDriver{Driver: a.driver}
+	a.driver = driver
+	tabs := shell.NewUnderlineTabs([]string{"Commits", "Worklog"}, nil)
+	tabs.Resize(fyne.NewSize(500, 70))
+	tabs.SetSelected("Commits")
+	test.WidgetRenderer(tabs).Layout(tabs.Size())
+	tabs.SetSelected("Worklog")
+	if driver.animation == nil {
+		t.Fatal("selection should animate")
+	}
+	driver.animation.Tick(1)
+	tabs.Resize(fyne.NewSize(500, 90))
+	renderer := test.WidgetRenderer(tabs)
+	objects := renderer.Objects()
+	line := objects[len(objects)-1].(*canvas.Rectangle)
+	if line.Size().Width <= 0 || line.Position().Y != 87 {
+		t.Fatalf("lost underline after layout: %v %v", line.Position(), line.Size())
+	}
+	tabs.SetSelected("Commits")
+	renderer.Destroy()
+	renderer = tabs.CreateRenderer()
+	renderer.Layout(tabs.Size())
+	objects = renderer.Objects()
+	line = objects[len(objects)-1].(*canvas.Rectangle)
+	if line.Size().Width <= 0 || line.Position().Y != 87 {
+		t.Fatal("lost underline on renderer rebuild")
+	}
+}
+
+func TestDropdownOutsideClickFoldsAndReopeningCancelsOldClose(t *testing.T) {
+	a := newMotionTestApp(t).(*motionTestApp)
+	driver := &cascadeFrameDriver{Driver: a.driver}
+	a.driver = driver
+	defer shell.FinishDropdownClosings()
+	w := a.NewWindow("dropdown")
+	selectBox := shell.NewGoldSelect([]string{"One", "Two"}, nil)
+	w.SetContent(selectBox)
+	w.Resize(fyne.NewSize(400, 300))
+	selectBox.Tapped(nil)
+	opening := driver.animation
+	if opening == nil {
+		t.Fatal("dropdown did not animate")
+	}
+	opening.Tick(1)
+	old := selectBox.Popup
+	full := old.Size().Height
+	w.Canvas().Overlays().Top().(fyne.Tappable).Tapped(nil)
+	closing := driver.animation
+	if selectBox.Popup != nil || closing == opening {
+		t.Fatal("outside click skipped closing motion")
+	}
+	closing.Tick(.5)
+	if !old.Visible() || old.Size().Height >= full {
+		t.Fatal("dropdown should fold before disappearing")
+	}
+	selectBox.Tapped(nil)
+	current := selectBox.Popup
+	if current == nil || !current.Visible() || old.Visible() {
+		t.Fatal("reopen must retire old popup")
+	}
+	closing.Tick(1)
+	if !current.Visible() || w.Canvas().Overlays().Top() == nil {
+		t.Fatal("stale closing animation hid the new dropdown")
+	}
+	selectBox.CloseChoices()
+	driver.animation.Tick(1)
+}

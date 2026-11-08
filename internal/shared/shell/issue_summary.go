@@ -37,6 +37,9 @@ func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, ro
 	if strings.TrimSpace(title) == "" {
 		title = backend.OrDefault(issue, "(untitled)")
 	}
+	if title == issue && ref != "" {
+		title = ref
+	}
 	name := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	name.Truncation = fyne.TextTruncateEllipsis
 	name.Wrapping = fyne.TextWrapWord
@@ -57,7 +60,7 @@ func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, ro
 		refLine = container.NewBorder(nil, nil, container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), mark)), nil,
 			container.NewThemeOverride(meta, gold))
 	}
-	footer := container.NewBorder(nil, nil, nil, badge, refLine)
+	footer := container.New(widgets.NewSidesLayout(refLine, badge, 0), refLine, badge)
 	var onTap func()
 	if target != nil {
 		onTap = func() { _ = fyne.CurrentApp().OpenURL(target) }
@@ -79,7 +82,7 @@ func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, ro
 
 // IssueSummaryGrid fits several compact bubbles across a wide summary panel.
 func IssueSummaryGrid(cards ...fyne.CanvasObject) *fyne.Container {
-	return container.New(widgets.NewFlowGrid(320, 0, 112), cards...)
+	return container.New(widgets.NewFlowGrid(320, 0, 112).CompactColumns(976, 120, 3), cards...)
 }
 
 // IssueSummaryPanel keeps its gold heading visible above its own scroll area.
@@ -174,7 +177,7 @@ func (s *tipState) showBody(owner tipOwner, content fyne.CanvasObject, wraps boo
 		bg.FillColor = MixColor(color.Transparent, theme.Color(theme.ColorNameMenuBackground), done)
 		bg.Refresh()
 	})
-	s.anim.Curve = fyne.AnimationEaseOut
+	s.anim.Curve = easeOutQuart
 	s.anim.Start()
 	return true
 }
@@ -247,7 +250,13 @@ func (t *TipCaption) Tapped(*fyne.PointEvent) {
 func (t *TipCaption) hideTitle() { t.state.hide(t) }
 
 func newSummaryTitle(label *widget.Label, title string, tapped func()) *SummaryTitle {
-	b := &SummaryTitle{Label: *label, title: title, onTap: tapped}
+	// Copy presentation fields only. An initialized Label's BaseWidget points
+	// at that original widget; copying it routes resizes to a different renderer.
+	b := &SummaryTitle{Label: widget.Label{
+		Text: label.Text, Alignment: label.Alignment, TextStyle: label.TextStyle,
+		Wrapping: label.Wrapping, Truncation: label.Truncation,
+		Importance: label.Importance, SizeName: label.SizeName,
+	}, title: title, onTap: tapped}
 	b.ExtendBaseWidget(b)
 	return b
 }

@@ -353,3 +353,62 @@ func TestArrivalWaitsForTheFetchToLand(t *testing.T) {
 		t.Fatalf("the week should arrive once the fetch lands: %T", first())
 	}
 }
+
+// Completed columns must not rebuild their meter on every remaining cascade frame.
+func TestCompletedMeterShareRetainsSegments(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	ui := &shell.UI{}
+	bar := ui.ProgressBarParts("strip/Mon", "day", []shell.MeterPart{{Key: "work", Weight: .5}}, 8).(*fyne.Container)
+	fill := bar.Objects[1].(*fyne.Container)
+	ui.MeterShare("strip/Mon", .5)
+	ui.MeterShare("strip/Mon", 1)
+	segment := fill.Objects[0]
+	for i := 0; i < 30; i++ {
+		ui.MeterShare("strip/Mon", 1)
+	}
+	if fill.Objects[0] != segment {
+		t.Fatal("finished meter recreated its segment")
+	}
+	bar.Resize(fyne.NewSize(200, 8))
+	if fill.Objects[0].Size().Width != 100 {
+		t.Fatalf("final width = %v", fill.Objects[0].Size().Width)
+	}
+}
+
+// Charts flush each animation frame from the last piece's callback, even
+// while its delayed share is still zero.
+type cascadeFrameDriver struct {
+	fyne.Driver
+	animation *fyne.Animation
+}
+
+func (d *cascadeFrameDriver) StartAnimation(a *fyne.Animation) { d.animation = a }
+func (d *cascadeFrameDriver) StopAnimation(*fyne.Animation)    {}
+func TestCascadeFlushesFramesBeforeLastBarStarts(t *testing.T) {
+	base := test.NewApp()
+	driver := &cascadeFrameDriver{Driver: base.Driver()}
+	fyne.SetCurrentApp(&motionTestApp{App: base, driver: driver})
+	defer func() { fyne.SetCurrentApp(base); base.Quit() }()
+	var first, last float32
+	flushes := 0
+	(&shell.UI{}).Arrival("report", "period").Cascade([]time.Duration{0, 650 * time.Millisecond}, func(i int, share float32) {
+		if i == 0 {
+			first = share
+		} else {
+			last = share
+			flushes++
+		}
+	})
+	flushes = 0
+	driver.animation.Tick(.1)
+	before := first
+	driver.animation.Tick(.2)
+	if flushes != 2 || last != 0 || first <= before {
+		t.Fatalf("frames=%d first=%v before=%v last=%v", flushes, first, before, last)
+	}
+	driver.animation.Tick(1)
+	if first != 1 || last != 1 {
+		t.Fatal("cascade did not finish")
+	}
+}

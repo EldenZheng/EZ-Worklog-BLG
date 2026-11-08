@@ -118,7 +118,7 @@ func (l *SidesLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	if l.stacked {
 		left.Resize(fyne.NewSize(size.Width, lm.Height))
 		right.Move(fyne.NewPos(0, lm.Height+theme.Padding()))
-		right.Resize(rm)
+		right.Resize(fyne.NewSize(min(rm.Width, size.Width), rm.Height))
 		return
 	}
 	// The left group gets all the room the right leaves it, so one that wraps

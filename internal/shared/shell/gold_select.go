@@ -17,6 +17,7 @@ import (
 // in its popup so selected and current options remain distinguishable.
 type GoldSelect struct {
 	widget.Select
+	unfold *Reveal
 	Popup  *widget.PopUp
 	Rows   *fyne.Container
 	active int
@@ -144,7 +145,7 @@ func (s *GoldSelect) CloseChoices() {
 		s.Flash.Animation.Stop()
 	}
 	if s.Popup != nil {
-		s.Popup.Hide()
+		FoldPopUp(s.Popup, s.unfold)
 		s.Popup = nil
 	}
 	s.Scroll = nil
@@ -158,6 +159,7 @@ func (s *GoldSelect) showChoices() {
 		return
 	}
 	s.CloseChoices()
+	FinishDropdownClosings()
 	c := fyne.CurrentApp().Driver().CanvasForObject(s)
 	if c == nil {
 		return
@@ -194,13 +196,16 @@ func (s *GoldSelect) showChoices() {
 	s.Flash = &widgets.ChoiceFeedback{Content: body, Pulse: canvas.NewRectangle(color.Transparent)}
 	s.Flash.Pulse.CornerRadius = 6
 	s.Flash.ExtendBaseWidget(s.Flash)
-	s.Popup = widget.NewPopUp(s.Flash, c)
+	s.unfold = NewReveal(s.Flash)
+	s.unfold.Fold = true
+	s.unfold.OnDismiss = s.CloseChoices
+	s.Popup = widget.NewPopUp(s.unfold, c)
 	width := fyne.Max(s.Size().Width, 200)
 	s.Popup.Resize(fyne.NewSize(width, height))
 	origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(s)
 	s.Popup.ShowAtPosition(origin.Add(fyne.NewPos(0, s.Size().Height)))
 	s.centerActive()
-	s.Flash.Flash()
+	UnfoldPopUp(s.Popup, s.unfold, s.Popup.Size())
 	if s.Find != nil {
 		c.Focus(s.Find) // type straight away, without clicking the field first
 	}

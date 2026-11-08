@@ -37,7 +37,9 @@ func (ui *UI) CommitWeekSummary(commits []backend.Commit, loading, cached bool) 
 }
 
 func (ui *UI) CommitDaysPanel(days []string, byDay map[string][]backend.Commit) *fyne.Container {
-	return ui.CommitDaysPanelWithIssueLabel(days, byDay, IssueTag)
+	return ui.CommitDaysPanelWithIssueLabel(days, byDay, func(issue string) string {
+		return backend.OrDefault(ShortIssueRef(issue), IssueTag(issue))
+	})
 }
 
 // CommitDaysPanelWithIssueLabel lets views that share the commit calendar

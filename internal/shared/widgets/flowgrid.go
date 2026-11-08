@@ -29,6 +29,7 @@ type FlowGrid struct {
 	// their content needs. width is what the last Layout was given.
 	compactBelow, compactWidth float32
 	width                      float32
+	compactColumns             int
 }
 
 func NewFlowGrid(minWidth, maxWidth, height float32) *FlowGrid {
@@ -39,6 +40,14 @@ func NewFlowGrid(minWidth, maxWidth, height float32) *FlowGrid {
 // screen. At or above it nothing changes.
 func (g *FlowGrid) Compact(below, minWidth float32) *FlowGrid {
 	g.compactBelow, g.compactWidth = below, minWidth
+	return g
+}
+
+// CompactColumns keeps summary cards in the requested number of columns on
+// smaller screens, until even their readable minimum width no longer fits.
+func (g *FlowGrid) CompactColumns(below, minWidth float32, columns int) *FlowGrid {
+	g.Compact(below, minWidth)
+	g.compactColumns = columns
 	return g
 }
 
@@ -60,6 +69,9 @@ func (g *FlowGrid) Columns(w float32, count int) (cols int, cellW float32) {
 	cols = 1
 	if w > minWidth {
 		cols = int(math.Floor(float64(w+gap) / float64(minWidth+gap)))
+	}
+	if g.compactAt(w) && g.compactColumns > 0 {
+		cols = min(cols, g.compactColumns)
 	}
 	// Fewer tiles than fit across: let them share the row rather than sit at
 	// their minimum with a hole beside them.
@@ -83,7 +95,7 @@ func (g *FlowGrid) Columns(w float32, count int) (cols int, cellW float32) {
 // every tile in the grid is the same height whatever its text does.
 func (g *FlowGrid) cellHeight(objects []fyne.CanvasObject) float32 {
 	h := g.height
-	if g.compactAt(g.width) {
+	if g.compactAt(g.width) && g.compactColumns == 0 {
 		h = 0
 	}
 	for _, o := range objects {
@@ -107,6 +119,14 @@ func (g *FlowGrid) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	}
 	gap := g.Gap()
 	cols, cellW := g.Columns(size.Width, visible)
+	// Wrapped labels and responsive action rows report their height for the
+	// last width they received. Give every card its new width before measuring,
+	// both when shrinking and when growing back onto a larger screen.
+	for _, child := range objects {
+		if child.Visible() {
+			child.Resize(fyne.NewSize(cellW, max(child.Size().Height, child.MinSize().Height)))
+		}
+	}
 	cellH := g.cellHeight(objects)
 
 	i, rows := 0, 0

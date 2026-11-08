@@ -121,6 +121,12 @@ func DrawMeeting(ui *shell.UI) {
 
 	EnsureMeetingCommitCache(ui)
 	loading := ui.MeetingCommitLoad[weekStart]
+	if loading {
+		ui.MeetingBox.Objects = []fyne.CanvasObject{widget.NewLabel("Loading commits and issue details...")}
+		ui.MeetingBox.Refresh()
+		shell.Relayout(ui.MeetingBody)
+		return
+	}
 	commits, cached := ui.MeetingCommits[weekStart]
 	errs := ui.MeetingCommitErrs[weekStart]
 
@@ -366,9 +372,9 @@ func LoadMeetingCommits(ui *shell.UI, force bool) {
 		commits, errs, ferr = ui.Store.FetchWeekCommits(ui.Cfg, from, to, composer.Phase(commitsWeight))
 		return nil
 	}, func() {
-		ui.MeetingCommitLoad[weekStart] = false
 		composer.Advance(commitsWeight)
 		if ferr != nil {
+			ui.MeetingCommitLoad[weekStart] = false
 			finish()
 			ui.MeetingCommitErrs[weekStart] = []string{ferr.Error()}
 			DrawMeeting(ui)
@@ -377,8 +383,11 @@ func LoadMeetingCommits(ui *shell.UI, force bool) {
 		ui.MeetingCommits[weekStart] = commits
 		ui.MeetingCommitErrs[weekStart] = errs
 		ui.MeetingCommitAt[weekStart] = time.Now()
-		loadMeetingIssueInfos(ui, commits, weekStart, composer, titlesWeight, finish)
-		DrawMeeting(ui)
+		loadMeetingIssueInfos(ui, commits, weekStart, composer, titlesWeight, func() {
+			ui.MeetingCommitLoad[weekStart] = false
+			finish()
+			DrawMeeting(ui)
+		})
 	})
 }
 
@@ -429,7 +438,6 @@ func loadMeetingIssueInfos(ui *shell.UI, commits []backend.Commit, week string, 
 		for ref, info := range infos {
 			ui.IssueInfo[ref] = info
 		}
-		DrawMeeting(ui)
 	})
 }
 

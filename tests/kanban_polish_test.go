@@ -109,8 +109,11 @@ func TestSprintGoldDropdownSelectionAndKeyboard(t *testing.T) {
 		}
 	})
 	selector.Tapped(nil)
-	if selector.Popup == nil || !selector.Popup.Visible() || selector.Flash.Animation == nil {
+	if selector.Popup == nil || !selector.Popup.Visible() {
 		t.Fatal("dropdown did not open with animation")
+	}
+	if reveal, ok := selector.Popup.Content.(*shell.Reveal); !ok || !reveal.Fold {
+		t.Fatal("dropdown must use the shared unfold animation")
 	}
 	goldFill, goldCurrent := false, false
 	walkCanvas(selector.Rows, func(o fyne.CanvasObject) {

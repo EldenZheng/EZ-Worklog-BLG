@@ -52,10 +52,8 @@ type WorklogDatePicker struct {
 
 	// The month unfolds down from the field and folds back up into it.
 	unfold *shell.Reveal
-	// folding is a month still folding away, and folded the popup it is
-	// folding: finished at once if the month is opened again meanwhile.
-	folding *fyne.Animation
-	folded  *widget.PopUp
+	// Each picker owns its calendar entrance and progress-bar animations.
+	motion shell.UI
 }
 
 func NewWorklogDatePicker(ui *shell.UI, iso string) *WorklogDatePicker {
@@ -182,15 +180,10 @@ func (p *WorklogDatePicker) openCalendar() {
 	}
 	p.Refresh()
 
-	// A month still folding away goes now: hiding it later would take this one
-	// with it, as Fyne hides a popup by dropping everything above it too.
-	if p.folding != nil {
-		p.folding.Stop()
-		p.folding = nil
-		p.folded.Hide()
-	}
+	shell.FinishDropdownClosings()
 	p.unfold = shell.NewReveal(container.NewPadded(p.Cal))
 	p.unfold.Fold = true
+	p.unfold.OnDismiss = p.closeCalendar
 	p.pop = widget.NewPopUp(p.unfold, canvas)
 	at := drv.AbsolutePositionForObject(p)
 	p.pop.ShowAtPosition(fyne.NewPos(at.X, at.Y+p.Size().Height))
@@ -204,13 +197,14 @@ func (p *WorklogDatePicker) openCalendar() {
 		want.Width = p.Size().Width
 	}
 	p.pop.Resize(want)
+	p.motion.ReplayArrival("picker")
+	p.Refresh()
 	shell.UnfoldPopUp(p.pop, p.unfold, want)
 }
 
 func (p *WorklogDatePicker) closeCalendar() {
 	if p.pop != nil {
-		p.folded = p.pop
-		p.folding = shell.FoldPopUp(p.pop, p.unfold)
+		shell.FoldPopUp(p.pop, p.unfold)
 		p.pop = nil
 	}
 }
@@ -268,6 +262,17 @@ func (p *WorklogDatePicker) Refresh() {
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", p.Month, shell.Pad2(day))
 		grid.Add(p.dayCell(ds, day, byDay[ds], drafts[ds], planned[ds]))
+	}
+	if p.CalendarOpen() {
+		days := grid.Objects[7:]
+		arrive := p.motion.Arrival("picker", p.Month)
+		days = arrive.Reveal(days, shell.GridDelays(len(days), 7, firstWd), func(i int, share float32) {
+			day := i - firstWd + 1
+			if day > 0 && day <= daysIn {
+				p.motion.MeterShare(strconv.Itoa(day), share)
+			}
+		})
+		grid.Objects = append(grid.Objects[:7], days...)
 	}
 	p.Grid.Objects = []fyne.CanvasObject{grid}
 	p.Grid.Refresh()
@@ -379,7 +384,7 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 
 	// Use the Status cell's org fill and the Log tab's progress bar. Both read
 	// the same minutes; drafts stay yellow and never count as pushed work.
-	bar := shell.MeterPartsBar(shell.PlannedBarParts(p.ui.Cfg, byOrg, map[string]int{"@draft": draft}, planned), 6)
+	bar := p.motion.ProgressBarParts(strconv.Itoa(day), ds, shell.PlannedBarParts(p.ui.Cfg, byOrg, map[string]int{"@draft": draft}, planned), 6)
 	stack := container.NewStack(floor, wash,
 		shell.VMeterFill(p.ui.Cfg, byOrg, draft, backend.Target, shell.CellCornerRadius), border,
 		container.NewPadded(container.NewBorder(nil, bar, nil, nil, container.NewVBox(body...))))

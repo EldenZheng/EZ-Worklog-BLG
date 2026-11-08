@@ -306,6 +306,9 @@ func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	caption := func(s string) fyne.CanvasObject { return fitCaption(shell.Truncate(s, 56), muted) }
 
 	what := RowTitle(ui, r)
+	if what == r["issue"] {
+		what = backend.OrDefault(shell.ShortIssueRef(what), what)
+	}
 	title := widget.NewLabelWithStyle(shell.Truncate(what, BubbleTitleChars),
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.Wrapping = fyne.TextWrapWord

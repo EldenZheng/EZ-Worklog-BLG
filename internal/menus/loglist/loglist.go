@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -76,7 +77,9 @@ func BuildLogListTab(ui *shell.UI) fyne.CanvasObject {
 
 	ui.ListBox = container.NewStack()
 	ui.ListProgress = shell.NewLoadingIndicator()
-	ui.ListBody = container.NewBorder(container.NewVBox(head, ui.ListProgress.View), nil, nil, nil, ui.ListBox)
+	ui.ListHead = container.NewVBox(head, ui.ListProgress.View)
+	ui.ListBox.Add(ui.ListHead)
+	ui.ListBody = container.NewStack(ui.ListBox)
 	return shell.PageInset(ui.ListBody)
 }
 
@@ -131,11 +134,15 @@ func DrawLogList(ui *shell.UI) {
 	progress := weekProgressPanel(ui, days, byDay, weekItems)
 	arrive.Cascade(shell.ArriveDelays(1), func(_ int, share float32) { ui.MeterShare("week", share) })
 
-	ui.ListBox.Objects = []fyne.CanvasObject{
-		container.NewBorder(
-			container.NewVBox(progress, listDaysPanel(ui, days, byDay, arrive), shell.Hooks.WeekBoardsPanel(ui, from, to)),
-			nil, nil, nil, columns),
-	}
+	summary := container.NewVBox(progress, listDaysPanel(ui, days, byDay, arrive))
+	toggle, area := shell.CollapsibleTitle("Week Summary", summary, !ui.ListSummaryCollapsed,
+		func(open bool) { ui.ListSummaryCollapsed = !open },
+		func(bool) { shell.Relayout(ui.ListBody) })
+	// The same heading, room and divider as Log Work's Saved locally.
+	gap := theme.InnerPadding()
+	toggleRoom := container.New(layout.NewCustomPaddedLayout(gap, gap, 0, 0), toggle)
+	ui.ListBox.Objects = []fyne.CanvasObject{shell.ShortPage(
+		container.NewVBox(ui.ListHead, toggleRoom, shell.PanelDivider(), area, shell.Hooks.WeekBoardsPanel(ui, from, to)), columns, 320)}
 	ui.ListBox.Refresh()
 	shell.Relayout(ui.ListBody)
 }
@@ -278,6 +285,7 @@ func weekProgressPanel(ui *shell.UI, days []string, byDay map[string][]backend.W
 	}
 
 	draftByOrg := map[string]int{}
+	localByDay := map[string][]backend.Row{}
 	waiting := 0
 	if rows, err := ui.Store.ReadRows(); err == nil {
 		inWeek := map[string]bool{}
@@ -290,7 +298,14 @@ func weekProgressPanel(ui *shell.UI, days []string, byDay map[string][]backend.W
 			}
 			draftByOrg[shell.RowOrg(r)] += r.Minutes()
 			waiting += r.Minutes()
+			localByDay[r["date"]] = append(localByDay[r["date"]], r)
 		}
+	}
+	// The purple on the end of the bar is the same planned time each day's own
+	// bar shows, so the week agrees with the days that sum into it.
+	planned := 0
+	for _, d := range days {
+		planned += shell.Hooks.PlannedMinutes(ui, d, byDay[d], localByDay[d])
 	}
 	// Support pencilled onto every eligible weekday in the week: same rule as the
 	// strip and the day columns, so the week total agrees with the days that sum
@@ -312,33 +327,64 @@ func weekProgressPanel(ui *shell.UI, days []string, byDay map[string][]backend.W
 	if banked >= goal && goal > 0 {
 		line += " ✓"
 	}
+	// What the week would score if everything saved here went up, then if the
+	// plans were done as well. Each section counts the ones before it.
+	sections := []lineSection{{line, theme.Color(theme.ColorNameForeground)}}
 	if waiting > 0 {
-		// What the week would score if everything saved here went up. Without
-		// it the drafts were a number with nothing to measure against, and the
-		// question they actually raise — does this week get there once I push —
-		// still had to be done in your head.
-		projected := banked + waiting
-		line += fmt.Sprintf("   ·   +%d min waiting · %d/%d min", waiting, projected, goal)
-		// How much the week would still owe after the push. Only while it owes
-		// something: "(0m left)" beside a tick is the same fact twice.
-		if left := goal - projected; left > 0 {
-			line += fmt.Sprintf(" (%dm left)", left)
-		}
-		if goal > 0 {
-			line += fmt.Sprintf(" %d%%", projected*100/goal)
-		}
-		if projected >= goal && goal > 0 {
-			line += " ✓"
-		}
+		sections = append(sections, lineSection{weekProjection("waiting", waiting, banked+waiting, goal), theme.Color(theme.ColorNameWarning)})
+	}
+	if planned > 0 {
+		sections = append(sections, lineSection{weekProjection("planned", planned, banked+waiting+planned, goal), shell.PlannerPlanColor})
 	}
 
-	summary := widget.NewLabelWithStyle(line, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true})
-	summary.Wrapping = fyne.TextWrapWord
-	normal := widget.NewLabel(normalWeekProgress(banked, waiting))
-	normal.Wrapping = fyne.TextWrapWord
-	bar := ui.ProgressBar("week", strings.Join(days, ","), byOrg, draftByOrg, goal, 10)
-	return container.NewVBox(shell.Bold("This week"), summary, normal,
-		normalWeekMarker(bar, max(goal, banked+waiting)))
+	inset := theme.InnerPadding()
+	summary := sectionLine(fyne.TextStyle{Monospace: true}, sections, inset, inset)
+	normal := sectionLine(fyne.TextStyle{}, normalWeekProgress(banked, waiting, planned), inset-2, inset-2)
+	bar := ui.ProgressBarParts("week", strings.Join(days, ","), shell.PlannedBarPartsOf(ui.Cfg, byOrg, draftByOrg, planned, goal), 10)
+	return container.NewVBox(summary, normal, normalWeekMarker(bar, max(goal, banked+waiting+planned)))
+}
+
+// weekProjection is one coloured section of the week's score: the minutes it
+// adds and what the week comes to with them. The time left is only said while
+// the week owes some: "(0m left)" beside a tick is the same fact twice.
+func weekProjection(label string, added, projected, goal int) string {
+	line := fmt.Sprintf("+%d min %s · %d/%d min", added, label, projected, goal)
+	if left := goal - projected; left > 0 {
+		line += fmt.Sprintf(" (%dm left)", left)
+	}
+	if goal > 0 {
+		line += fmt.Sprintf(" %d%%", projected*100/goal)
+	}
+	if projected >= goal && goal > 0 {
+		line += " ✓"
+	}
+	return line
+}
+
+// lineSection is one coloured run of a sectionLine.
+type lineSection struct {
+	text string
+	ink  color.Color
+}
+
+// sectionLine sets sections on one line, dotted apart, moving a section that
+// does not fit to the next line whole. top and bottom stand in for a label's
+// padding, as does the inset at the sides.
+func sectionLine(style fyne.TextStyle, sections []lineSection, top, bottom float32) fyne.CanvasObject {
+	add := func(row *fyne.Container, s string, ink color.Color) {
+		t := canvas.NewText(s, ink)
+		t.TextStyle = style
+		row.Add(t)
+	}
+	row := container.New(&widgets.WrapRowLayout{})
+	for i, s := range sections {
+		if i > 0 {
+			add(row, "  ·  ", theme.Color(theme.ColorNameForeground))
+		}
+		add(row, s.text, s.ink)
+	}
+	side := theme.InnerPadding()
+	return container.New(layout.NewCustomPaddedLayout(top, bottom, side, side), row)
 }
 
 // WeekGoal is what the week is measured against: the daily target for every day

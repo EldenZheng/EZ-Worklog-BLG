@@ -53,13 +53,20 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 			current = container.NewCenter(container.NewStack(frame, container.NewPadded(label)))
 		}
 		count := shell.CountBadge(g.Count)
+		selected := (k.Filter == "current" && g.Sprint.Contains(shell.Today())) || k.Filter == "sprint" && k.Sprint == g.Key
 		right := container.NewHBox()
+		if selected {
+			refresh := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() { k.RefreshSprint(g.Key) })
+			if k.Loading || k.Busy {
+				refresh.Disable()
+			}
+			right.Add(shell.QuietButton(refresh))
+		}
 		if current != nil {
 			right.Add(current)
 		}
 		right.Add(container.NewCenter(count))
 		var content fyne.CanvasObject = container.NewBorder(nil, nil, container.NewCenter(widget.NewIcon(theme.HistoryIcon())), right, container.NewVBox(name, meta))
-		selected := (k.Filter == "current" && g.Sprint.Contains(shell.Today())) || k.Filter == "sprint" && k.Sprint == g.Key
 		if selected {
 			content = container.NewThemeOverride(content, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: color.NRGBA{R: 24, G: 24, B: 24, A: 255}})
 		}

@@ -312,7 +312,7 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 	task := k.Plan.Tasks[key]
 	estimate := widget.NewEntry()
 	estimate.SetText(strconv.Itoa(backend.SprintEstimate(it, task)))
-	complexity := widget.NewSelect(append([]string{"Use GitHub value"}, backend.SprintComplexities...), nil)
+	complexity := shell.NewGoldSelect(append([]string{"Use GitHub value"}, backend.SprintComplexities...), nil)
 	complexity.SetSelected(backend.OrDefault(task.Complexity, "Use GitHub value"))
 	complexity.OnChanged = func(v string) {
 		t := backend.SprintTask{}
@@ -331,7 +331,7 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 	for _, o := range b.Field("Status").Options {
 		statusOptions = append(statusOptions, o.Name)
 	}
-	status := widget.NewSelect(statusOptions, nil)
+	status := shell.NewGoldSelect(statusOptions, nil)
 	status.SetSelected(backend.OrDefault(it.Status, "No status"))
 	sprintOptions := []string{"No sprint"}
 	ids := []string{""}
@@ -339,7 +339,7 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 		sprintOptions = append(sprintOptions, s.Title+" · "+s.StartDate)
 		ids = append(ids, s.ID)
 	}
-	sprint := widget.NewSelect(sprintOptions, nil)
+	sprint := shell.NewGoldSelect(sprintOptions, nil)
 	sprint.SetSelectedIndex(0)
 	for i, id := range ids {
 		if id == it.SprintID {

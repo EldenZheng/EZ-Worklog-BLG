@@ -79,7 +79,7 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 	}
 	wants := [][]string{
 		{"Payable", "RM 258.00", "1.00 days × RM 133.00", "(RM 133.00 before support)", "Converted: IDR 980.40"},
-		{"Payable after drafts", "RM 324.50", "1.50 days × RM 133.00", "(RM 199.50 before support)", "Converted: IDR 1,233.10"},
+		{"Payable after pendings", "RM 324.50", "1.50 days × RM 133.00", "(RM 199.50 before support)", "Converted: IDR 1,233.10"},
 		{"Support bonus", "RM 125.00", "Converted: IDR 475.00"},
 	}
 	for i, want := range wants {

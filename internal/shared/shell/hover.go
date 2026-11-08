@@ -673,7 +673,7 @@ func Ripple(layer *fyne.Container, area fyne.CanvasObject, at fyne.Position) {
 			layer.Remove(box)
 		}
 	})
-	anim.Curve = fyne.AnimationEaseOut
+	anim.Curve = easeOutQuart
 	anim.Start()
 }
 
@@ -696,7 +696,7 @@ func NewWipe(content fyne.CanvasObject, delay time.Duration) *Wipe {
 		w.layout(w.Size())
 		canvas.Refresh(w)
 	})
-	anim.Curve = fyne.AnimationEaseOut
+	anim.Curve = easeOutQuart
 	if delay <= 0 {
 		anim.Start()
 	} else {

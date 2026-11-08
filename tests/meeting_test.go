@@ -89,7 +89,7 @@ func TestMeetingLoggedPaddingScrollsWithCards(t *testing.T) {
 	}
 }
 
-func TestMeetingIssueLabelOmitsOrgOnlyForMeeting(t *testing.T) {
+func TestCalendarIssueLabelsOmitOrg(t *testing.T) {
 	issue := "exampleorg/sample-intranet#42"
 	if got := meeting.MeetingIssueLabel(issue); got != "sample-intranet#42" {
 		t.Fatalf("meeting issue label = %q, want repo and number only", got)
@@ -108,8 +108,8 @@ func TestMeetingIssueLabelOmitsOrgOnlyForMeeting(t *testing.T) {
 		t.Fatalf("meeting labels should omit the org: %v", meetingLabels)
 	}
 	commitListLabels := labels(ui.CommitDaysPanel([]string{"2026-09-17"}, commits))
-	if !contains(commitListLabels, issue) {
-		t.Fatalf("commit-list labels should keep the org: %v", commitListLabels)
+	if !contains(commitListLabels, "sample-intranet#42") || contains(commitListLabels, issue) {
+		t.Fatalf("commit-list labels should omit the org: %v", commitListLabels)
 	}
 }
 

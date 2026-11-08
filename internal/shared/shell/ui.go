@@ -95,11 +95,14 @@ type UI struct {
 
 	// The column each tab's panels stand in. Held so a panel that changed height
 	// can have its column re-measure it — see relayout.
-	LogBody    *fyne.Container
-	CalBody    *fyne.Container
-	RepBody    *fyne.Container
-	ListBody   *fyne.Container
-	CommitBody *fyne.Container
+	LogBody              *fyne.Container
+	CalBody              *fyne.Container
+	RepBody              *fyne.Container
+	ListBody             *fyne.Container
+	ListSummaryCollapsed bool
+	ListHead             *fyne.Container
+	RepHead              *fyne.Container
+	CommitBody           *fyne.Container
 
 	// The bottom list is a to-do, not a history: it shows what is still waiting
 	// to reach GitHub. This ticks over to the full month when the pushed ones
@@ -500,9 +503,9 @@ func (ui *UI) LoadWeekCommits(force bool) {
 		commits, errs, ferr = ui.Store.FetchWeekCommits(ui.Cfg, from, to, composer.Phase(commitsWeight))
 		return nil
 	}, func() {
-		ui.WeekCommitLoad[weekStart] = false
 		composer.Advance(commitsWeight)
 		if ferr != nil {
+			ui.WeekCommitLoad[weekStart] = false
 			finish()
 			ui.WeekCommitErrs[weekStart] = []string{ferr.Error()}
 			Hooks.DrawCommitList(ui)
@@ -514,8 +517,11 @@ func (ui *UI) LoadWeekCommits(force bool) {
 		// Seed issue titles for the commits' parent issues so bubbles show a
 		// title rather than a bare owner/repo#123. Reuses loadPending's cache
 		// and rides on the same progress job so the strip carries through.
-		ui.loadCommitIssueInfos(commits, weekStart, composer, titlesWeight, finish)
-		Hooks.DrawCommitList(ui)
+		ui.loadCommitIssueInfos(commits, weekStart, composer, titlesWeight, func() {
+			ui.WeekCommitLoad[weekStart] = false
+			finish()
+			Hooks.DrawCommitList(ui)
+		})
 	})
 }
 
@@ -560,7 +566,6 @@ func (ui *UI) loadCommitIssueInfos(commits []backend.Commit, week string, compos
 		composer.Advance(weight)
 		defer finish()
 		ui.LearnIssueInfos(infos)
-		Hooks.DrawCommitList(ui)
 	})
 }
 

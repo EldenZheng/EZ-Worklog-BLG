@@ -57,7 +57,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	back := widget.NewEntry()
 	cleanup := widget.NewEntry()
 	cleanup.SetPlaceHolder("Blank keeps everything")
-	mode := widget.NewSelect([]string{"Create Worklog sub-issue", "Write on the issue itself"}, nil)
+	mode := shell.NewGoldSelect([]string{"Create Worklog sub-issue", "Write on the issue itself"}, nil)
 	key := widget.NewPasswordEntry()
 	key.SetPlaceHolder("sk-ant-...")
 	// One board per org, one per line. Status and Report read the union of
@@ -471,7 +471,7 @@ func sidebarField(label string, field fyne.CanvasObject) fyne.CanvasObject {
 // control alongside Entries. Fyne's default Select renderer paints no visible
 // outline on the app's gold theme, which made the "Default push mode" box
 // blend into the panel background beside the neighbouring Entry.
-func outlinedSelect(sel *widget.Select) fyne.CanvasObject {
+func outlinedSelect(sel *shell.GoldSelect) fyne.CanvasObject {
 	return outlined(shell.WideSelect(sel))
 }
 

@@ -80,7 +80,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// single Code Review, where the user is filing against an existing issue.
 	// Independent has a fixed creation flow; Meeting and Bulk Review always use
 	// their daily issue, and Commits carries its own mode per group.
-	mMode := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
+	mMode := shell.NewGoldSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
 	if strings.EqualFold(ui.Cfg.DefaultMode, "issue") {
 		mMode.SetSelected("The issue itself")
 	} else {
@@ -640,7 +640,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	if ui.DraftSort == "" {
 		ui.DraftSort = DraftSortDuration
 	}
-	draftSortPick := widget.NewSelect([]string{DraftSortDuration, DraftSortCreated}, nil)
+	draftSortPick := shell.NewGoldSelect([]string{DraftSortDuration, DraftSortCreated}, nil)
 	draftSortPick.SetSelected(ui.DraftSort)
 	draftSortPick.OnChanged = func(selected string) {
 		ui.DraftSort = selected
@@ -1024,7 +1024,7 @@ func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasOb
 	case info.Title != "":
 		title = info.Title
 	case g.Issue != "":
-		title = g.Issue
+		title = ShortIssueLabel(info, g.Issue)
 	case len(g.Commits) == 1:
 		title = backend.CommitSubject(g.Commits[0])
 	}
@@ -1085,10 +1085,10 @@ func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasOb
 // half the tile width.
 func ShortIssueLabel(info backend.IssueInfo, ref string) string {
 	if info.Repo != "" {
-		return fmt.Sprintf("%s #%d", info.Repo, info.Number)
+		return fmt.Sprintf("%s#%d", info.Repo, info.Number)
 	}
 	if _, repo, num, err := backend.SplitIssue(ref); err == nil {
-		return fmt.Sprintf("%s #%d", repo, num)
+		return fmt.Sprintf("%s#%d", repo, num)
 	}
 	return ref
 }
@@ -1556,7 +1556,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	text := CommitTextEditor(ui, backend.OrDefault(r["remarks"], r["description"]), r["issue_body"], msg)
 	remPane, aiBtn := text.pane, text.aiBtn
 
-	modeSel := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
+	modeSel := shell.NewGoldSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
 	if r["mode"] == "issue" {
 		modeSel.SetSelected("The issue itself")
 	} else {
@@ -1791,7 +1791,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 	text := CommitTextEditor(ui, g.Remarks, "", msg)
 	remE, remPane, aiBtn := text.desc, text.pane, text.aiBtn
 
-	modeSel := widget.NewSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
+	modeSel := shell.NewGoldSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
 	if ui.Cfg.DefaultMode == "issue" {
 		modeSel.SetSelected("The issue itself")
 	} else {

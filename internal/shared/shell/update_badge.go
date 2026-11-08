@@ -221,7 +221,7 @@ func (b *updateBadge) spread(at fyne.Position) {
 		}
 		b.ripple.Refresh()
 	})
-	anim.Curve = fyne.AnimationEaseOut
+	anim.Curve = easeOutQuart
 	b.rippling = anim
 	anim.Start()
 }

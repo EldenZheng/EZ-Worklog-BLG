@@ -384,10 +384,15 @@ var PlannerPlanColor = color.NRGBA{R: 151, G: 112, B: 207, A: 255}
 // PlannedBarParts is a day bar with the planned time in purple after the
 // logged and drafted parts: the bar only, the captions are left alone.
 func PlannedBarParts(cfg backend.Config, byOrg, draft map[string]int, planned int) []MeterPart {
+	return PlannedBarPartsOf(cfg, byOrg, draft, planned, backend.Target)
+}
+
+// PlannedBarPartsOf is PlannedBarParts against any goal, such as a week's.
+func PlannedBarPartsOf(cfg backend.Config, byOrg, draft map[string]int, planned, goal int) []MeterPart {
 	if planned <= 0 {
-		return MeterParts(cfg, byOrg, draft, backend.Target)
+		return MeterParts(cfg, byOrg, draft, goal)
 	}
-	denominator := backend.Target
+	denominator := goal
 	total := planned
 	for _, m := range byOrg {
 		total += m

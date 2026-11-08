@@ -108,6 +108,7 @@ func (f *cardFeedback) fade(to float32) {
 			f.Animation = nil
 		}
 	})
+	f.Animation.Curve = easeOutQuart
 	f.Animation.Start()
 }
 
@@ -295,6 +296,7 @@ func (m *meterMotion) update(next []MeterPart) {
 			m.setParts(m.Target)
 		}
 	})
+	m.Animation.Curve = easeOutQuart
 	m.Animation.Start()
 }
 

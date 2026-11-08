@@ -20,6 +20,8 @@ import (
 func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 	fn(o)
 	switch v := o.(type) {
+	case *shell.GoldSelect:
+		fn(&v.Select)
 	case *shell.Tappable:
 		walk(v.Content, fn)
 	case *shell.Fold:

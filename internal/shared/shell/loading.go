@@ -26,6 +26,8 @@ type loadingIndicator struct {
 	// Animation state for smoothing percent transitions. Each new target
 	// starts a fresh animation and cancels the running one so the bar cannot
 	// chase two targets at once.
+	lastProgress                      backend.FetchProgress
+	hasProgress                       bool
 	animCurrent, animTarget, animFrom float64
 	animRunning                       *fyne.Animation
 }
@@ -84,7 +86,10 @@ func (p *loadingIndicator) SetActive(active bool) bool {
 	if p == nil || p.View.Visible() == active {
 		return false
 	}
+	p.hasProgress = false
 	if active {
+		p.animCurrent = 0
+		p.percent.SetValue(0)
 		p.View.Show()
 		p.percent.Hide()
 		p.percentText.SetText("")
@@ -131,7 +136,7 @@ func (p *loadingIndicator) animateTo(target float64) {
 		p.animCurrent = v
 		p.percent.SetValue(v)
 	})
-	anim.Curve = fyne.AnimationEaseOut
+	anim.Curve = easeOutQuart
 	p.animRunning = anim
 	anim.Start()
 }
@@ -144,6 +149,10 @@ func (p *loadingIndicator) ShowProgress(active bool, state backend.FetchProgress
 	if !active {
 		return changed
 	}
+	if p.hasProgress && p.lastProgress == state {
+		return changed
+	}
+	p.lastProgress, p.hasProgress = state, true
 	if state.Total > 0 {
 		frac := float64(state.Done) / float64(state.Total)
 		if frac > 1 {
@@ -156,6 +165,10 @@ func (p *loadingIndicator) ShowProgress(active bool, state backend.FetchProgress
 		p.Caption.SetText(state.Stage)
 		p.percentText.SetText(fmt.Sprintf("%d%%", int(frac*100+0.5)))
 	} else {
+		if p.animRunning != nil {
+			p.animRunning.Stop()
+			p.animRunning = nil
+		}
 		p.percent.Hide()
 		if !p.Bar.Visible() {
 			p.bars.Refresh() // same expired-override repaint as setActive

@@ -177,6 +177,8 @@ func (a *Arrival) Cascade(delays []time.Duration, set func(i int, share float32)
 	at := func(elapsed time.Duration) {
 		for i, d := range delays {
 			share := min(1, max(0, float32(elapsed-d)/float32(arriveEach)))
+			// Every piece receives every frame: charts flush the entire frame
+			// from their final callback, even before that bar starts moving.
 			set(i, easeOutQuart(share))
 		}
 	}
@@ -272,12 +274,22 @@ func (a *Arrival) CountUp(texts []*canvas.Text) {
 // card's shadow or a dragged tile, is cut off afterwards.
 type Reveal struct {
 	widget.BaseWidget
-	Content fyne.CanvasObject
+	Content   fyne.CanvasObject
+	OnDismiss func()
 	// Fold makes the reveal ask for only its share of the content's height,
 	// so whatever holds it grows and shrinks with it (a drop-down).
 	Fold  bool
 	clip  *clipBox
 	share float32
+}
+
+// DismissPopup is used by the private Fyne overlay for outside clicks.
+func (r *Reveal) DismissPopup() bool {
+	if r.OnDismiss == nil {
+		return false
+	}
+	r.OnDismiss()
+	return true
 }
 
 // NewReveal wraps content, fully uncovered until SetShare says otherwise.
@@ -319,8 +331,12 @@ func (rr *revealRenderer) Layout(size fyne.Size) {
 	if r.Fold {
 		full.Height = max(size.Height, r.Content.MinSize().Height)
 	}
-	r.Content.Move(fyne.NewPos(0, 0))
-	r.Content.Resize(full)
+	if r.Content.Position() != fyne.NewPos(0, 0) {
+		r.Content.Move(fyne.NewPos(0, 0))
+	}
+	if r.Content.Size() != full {
+		r.Content.Resize(full)
+	}
 	r.clip.Resize(fyne.NewSize(size.Width, full.Height*r.share))
 }
 
@@ -369,6 +385,9 @@ func (ui *UI) MeterShare(slot string, share float32) {
 		m.Animation = nil
 	}
 	if share >= 1 {
+		if sameMeterParts(m.Parts, m.Target) {
+			return
+		}
 		m.setParts(m.Target)
 		return
 	}
