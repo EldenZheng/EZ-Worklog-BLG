@@ -188,3 +188,16 @@ func TestHoverRegionCountsTheCardsInside(t *testing.T) {
 		t.Fatal("leaving the card for outside the column should let it go dark")
 	}
 }
+
+// A Morph's change eases in and out: its first and last steps are small, so
+// it neither leaps at the start nor stops dead.
+func TestMorphEasesAtBothEnds(t *testing.T) {
+	steps := []float32{0.05, 0.5, 0.95}
+	var got []float32
+	for _, p := range steps {
+		got = append(got, shell.EaseInOutCubic(p))
+	}
+	if got[0] > 0.01 || got[1] != 0.5 || got[2] < 0.99 {
+		t.Fatalf("ease in-out at %v = %v", steps, got)
+	}
+}

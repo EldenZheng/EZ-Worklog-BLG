@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"worklog/internal/shared/backend"
 	"worklog/internal/shared/widgets"
 )
 
@@ -219,6 +220,27 @@ func (t *pillTabs) Selected() *container.TabItem {
 		return nil
 	}
 	return t.Items[t.current]
+}
+
+// SelectName opens the tab called name.
+func (t *pillTabs) SelectName(name string) {
+	for i, item := range t.Items {
+		if item.Text == name {
+			t.SelectIndex(i)
+			return
+		}
+	}
+}
+
+// ShowPlannerDate opens the Sprint Calendar on the week and month holding date.
+func (ui *UI) ShowPlannerDate(date string) {
+	if k := ui.Kanban; k != nil && backend.ValidPlannerDate(date) {
+		k.Week = backend.WeekStartOf(date)
+		k.Month = date[:7]
+	}
+	if ui.Tabs != nil {
+		ui.Tabs.SelectName(PlannerTabName)
+	}
 }
 
 func (t *pillTabs) SelectIndex(index int) {

@@ -38,7 +38,7 @@ func TestSprintCalendarHoverAndDropSaveOnlyLocally(t *testing.T) {
 	// Next week: today's date has its own thick border, which on a Monday
 	// would read as a hover highlight on the first day.
 	k.Week = backend.AddDays(k.Week, 7)
-	k.Plan.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 540, 480}}}
+	k.Plan.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 480}}}
 	kanban.Draw(k)
 	w.Content().Refresh()
 	card := sprintcalendar.PlannerCard(k, c, -1).(*shell.PlannerDragCard)
@@ -90,7 +90,7 @@ func TestSprintCalendarMonthRetainsAllBubbles(t *testing.T) {
 	for i := 0; i < 18; i++ {
 		it := backend.SprintItem{ID: fmt.Sprint(i), Title: fmt.Sprintf("Issue %d", i), SprintID: "s", Effort: 10}
 		b.Items = append(b.Items, it)
-		k.Plan.Tasks[it.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{date, 540 + i*10, 10}}}
+		k.Plan.Tasks[it.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: date, Start: 540 + i*10, Minutes: 10}}}
 	}
 	k.Plan.Boards[0] = b
 	kanban.Draw(k)

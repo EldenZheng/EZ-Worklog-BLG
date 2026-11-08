@@ -2,6 +2,7 @@ package shell
 
 import (
 	"image/color"
+	"math"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -211,7 +212,7 @@ type Morph struct {
 const morphSlide = 120
 
 // MorphTime is how long a change takes.
-const MorphTime = 380 * time.Millisecond
+const MorphTime = 440 * time.Millisecond
 
 // Snapshot keeps a picture of what the Morph shows now, to slide out of the way
 // at the next Change. Call it just before changing the content.
@@ -262,19 +263,29 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 	case dir < 0:
 		start = -slide
 	}
+	// Hold the old height from now, not from the first frame: until that
+	// frame the panel would otherwise lay out at the new form's height, which
+	// for Commits is still empty, and flash shut for an instant.
+	// The same for the slide: the new form starts off to the side.
+	m.height, m.shift, m.oldShift = from, start, 0
+	m.layoutContent(m.Size())
 	var move *fyne.Animation
 	move = fyne.NewAnimation(MorphTime, func(done float32) {
 		if m.move != move {
 			return
 		}
+		// Read every frame: the new form may still be filling in (Commits
+		// redraws its bubbles after the switch), and a height taken at the
+		// start would shrink the panel to that empty form.
 		to := m.Content.MinSize().Height
 		final := done >= 1
 		if final {
 			m.height, m.shift, m.old = -1, 0, nil
 		} else {
-			m.height = from + (to-from)*done
-			m.shift = start * (1 - done)
-			m.oldShift = -start * done
+			// Whole pixels, so text does not shimmer between them as it slides.
+			m.height = float32(math.Round(float64(from + (to-from)*done)))
+			m.shift = float32(math.Round(float64(start * (1 - done))))
+			m.oldShift = float32(math.Round(float64(-start * done)))
 		}
 		m.layoutContent(m.Size())
 		canvas.Refresh(m)
@@ -282,7 +293,9 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 			relayout(final)
 		}
 	})
-	move.Curve = easeOutCubic
+	// Eased at both ends: starting at full speed read as a jump while the
+	// first frames were still being laid out.
+	move.Curve = EaseInOutCubic
 	m.move = move
 	move.Start()
 }
@@ -324,7 +337,7 @@ func (r *morphRenderer) Objects() []fyne.CanvasObject {
 	}
 	return []fyne.CanvasObject{r.m.Content}
 }
-func (r *morphRenderer) Destroy()                     {}
+func (r *morphRenderer) Destroy() {}
 
 // pageScroll is a tab's page scroll that rides the view up when the page gets
 // shorter under it. A transparent floor at the foot of the page holds the old

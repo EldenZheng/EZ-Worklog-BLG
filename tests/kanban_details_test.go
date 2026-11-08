@@ -43,7 +43,7 @@ func TestSprintCardKeepsFullTitleRepositoryAndConditionalSprint(t *testing.T) {
 				labels["sprint tag: "+tag.Text] = true
 			}
 		})
-		if !labels[it.Title] || !labels["bigledger/invoice-engine#25"] || !labels["Estimate: 90m"] || !labels["Complexity: L - 2 hours"] {
+		if !labels[it.Title] || !labels["invoice-engine#25"] || !labels["Estimate: 90m"] || !labels["Complexity: L - 2 hours"] {
 			t.Fatal("full title/repository/details missing", labels)
 		}
 		if labels["sprint tag: Sprint"] != (filter == "all") {

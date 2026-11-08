@@ -37,10 +37,12 @@ var Hooks struct {
 	KanbanUIStartPlannedToday         func(*KanbanUI)
 	MarkDropTargets                   func(*UI)
 	PlannedMinutes                    func(*UI, string, []backend.WorklogItem, []backend.Row) int
-	RenderPending                     func(*UI)
-	SetSupport                        func(*UI, bool, ...string)
-	SupportOn                         func(*UI, string) bool
-	WeekBoardsPanel                   func(*UI, string, string) fyne.CanvasObject
-	WeekIssuesPanel                   func(*UI, []backend.WorklogItem, string, *Arrival) fyne.CanvasObject
-	WeekWorklogs                      func(*UI, []string) (map[string][]backend.WorklogItem, string)
+	// PlannedLines lists what a day's planned minutes are made of.
+	PlannedLines    func(*UI, string, []backend.WorklogItem, []backend.Row) []PlannedLine
+	RenderPending   func(*UI)
+	SetSupport      func(*UI, bool, ...string)
+	SupportOn       func(*UI, string) bool
+	WeekBoardsPanel func(*UI, string, string) fyne.CanvasObject
+	WeekIssuesPanel func(*UI, []backend.WorklogItem, string, *Arrival) fyne.CanvasObject
+	WeekWorklogs    func(*UI, []string) (map[string][]backend.WorklogItem, string)
 }

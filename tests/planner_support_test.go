@@ -96,7 +96,7 @@ func TestSprintWeekdaySupportIsDisplayOnlyAndSkipsRealSupport(t *testing.T) {
 	k := ui.Kanban
 	ui.Cfg.DisplayName = "Alex"
 	ui.Cfg.WorklogOwner = "team-alex"
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Estimate: 300, Blocks: []backend.PlanBlock{{k.Week, 540, 300}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Estimate: 300, Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 300}}}
 	if err := ui.Store.SaveSprintPlan(k.Plan); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestSprintWeekdaySupportIsDisplayOnlyAndSkipsRealSupport(t *testing.T) {
 	real := backend.SprintItem{ID: "support", Title: "Alex: Weekly Support (12PM - 3PM)", SprintID: c.Sprint.ID, Effort: 180}
 	b := &k.Plan.Boards[0]
 	b.Items = append(b.Items, real)
-	k.Plan.Tasks[real.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 840, 180}}}
+	k.Plan.Tasks[real.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 840, Minutes: 180}}}
 	kanban.Draw(k)
 	foundProjected := false
 	for _, date := range k.Dates {

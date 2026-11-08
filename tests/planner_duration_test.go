@@ -22,7 +22,7 @@ func TestSprintDurationSnapsToAbsoluteQuarterHours(t *testing.T) {
 			t.Errorf("snap(%v, %d) = %d, want %d", tt.value, tt.max, got, tt.want)
 		}
 	}
-	legacy := backend.PlanBlock{"2026-11-02", 540, 10}
+	legacy := backend.PlanBlock{Date: "2026-11-02", Start: 540, Minutes: 10}
 	if err := backend.ValidatePlannerDuration(legacy, []backend.PlanBlock{legacy}); err != nil {
 		t.Fatal("unchanged saved duration should be retained", err)
 	}
@@ -44,7 +44,7 @@ func TestSprintDurationSnapsToAbsoluteQuarterHours(t *testing.T) {
 func TestSprintDurationAllocationRoundsLocallyAndPreservesAppointments(t *testing.T) {
 	s := backend.SprintIteration{StartDate: "2026-11-02", Duration: 14}
 	c := backend.SprintCandidate{Key: "mine", Item: backend.SprintItem{Effort: 95}, Sprint: s}
-	legacy := []backend.PlanBlock{{s.StartDate, 550, 10}, {s.StartDate, 600, 10}}
+	legacy := []backend.PlanBlock{{Date: s.StartDate, Start: 550, Minutes: 10}, {Date: s.StartDate, Start: 600, Minutes: 10}}
 	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"busy": {Blocks: legacy}}}
 	block, ok := backend.PlannerSlot(p, c, -1, s.StartDate)
 	if !ok || block.Minutes != 105 || c.Item.Effort != 95 {
@@ -77,7 +77,7 @@ func TestSprintDurationAllocationRoundsLocallyAndPreservesAppointments(t *testin
 func TestSprintDurationRulerFollowsResizeAndUsesMinuteLabels(t *testing.T) {
 	ui, _, c := plannerFixture(t)
 	k := ui.Kanban
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{c.Sprint.StartDate, 540, 10}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 540, Minutes: 10}}}
 	card := sprintcalendar.PlannerCard(k, c, 0).(*shell.PlannerDragCard)
 	var grip *sprintcalendar.PlannerResizeGrip
 	walkCanvas(card.Content, func(o fyne.CanvasObject) {

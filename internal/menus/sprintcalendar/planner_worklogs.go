@@ -162,10 +162,12 @@ func PlannerIssueRef(raw string) string {
 type plannerDayTotals struct {
 	Logged, Draft, Planned, support int
 	byOrg, draftByOrg               map[string]int
+	// plannedBy is each issue's share of Planned.
+	plannedBy map[string]int
 }
 
 func DayTotals(k *shell.KanbanUI, date string, candidates []backend.SprintCandidate, work PlannerDayWork) plannerDayTotals {
-	t := plannerDayTotals{byOrg: shell.MinutesByOrg(work.Logged), draftByOrg: map[string]int{}}
+	t := plannerDayTotals{byOrg: shell.MinutesByOrg(work.Logged), draftByOrg: map[string]int{}, plannedBy: map[string]int{}}
 	credited := map[string]int{}
 	supportItems := append([]backend.WorklogItem{}, work.Logged...)
 	for _, it := range work.Logged {
@@ -208,6 +210,7 @@ func DayTotals(k *shell.KanbanUI, date string, candidates []backend.SprintCandid
 			covered = minutes
 		}
 		t.Planned += minutes - covered
+		t.plannedBy[c.Key] += minutes - covered
 		if ref != "" {
 			credited[ref] -= covered
 		}

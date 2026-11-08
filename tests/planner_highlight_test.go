@@ -15,7 +15,7 @@ import (
 func TestSprintHighlightsOnlySidebarHoverOrHeldMoveAndNeverResize(t *testing.T) {
 	ui, _, c := plannerFixture(t)
 	k := ui.Kanban
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 540, 90}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 90}}}
 	kanban.Draw(k)
 	var scheduled, sidebar *shell.PlannerDragCard
 	walkCanvas(k.CalendarBody, func(o fyne.CanvasObject) {

@@ -221,6 +221,12 @@ func DrawWeekStrip(ui *shell.UI) {
 	grid := container.New(widgets.NewDayGridLayout(dayCols, ui.WeekBox.Size().Width), dayCols...)
 
 	objs := []fyne.CanvasObject{head, ui.WeekStripProgress.View, grid}
+	// While GitHub is still being read the days would show only the drafts,
+	// and then jump: the head and its loading strip stand alone until the week
+	// lands.
+	if state == "loading" {
+		objs = objs[:2]
+	}
 
 	ui.WeekBox.Objects = objs
 	ui.WeekBox.Refresh()
@@ -392,9 +398,21 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 	// as on the calendar: on the heading's line, so a day with a plan starts its
 	// cards level with one without.
 	if planned > 0 {
-		plan := shell.WeekCaption(fmt.Sprintf("%dm planned", planned))
+		// What the day still has free once its logged, drafted and planned time
+		// are counted.
+		free := max(0, backend.Target-mins-waiting-planned)
+		plan := shell.WeekCaption(fmt.Sprintf("%dm planned (%dm left without planned)", planned, free))
 		plan.Color = shell.PlannerPlanColor
-		head = container.New(widgets.NewSidesLayout(head, plan, 0), head, container.NewCenter(plan))
+		// Under the pointer it lists the planned blocks; a click opens the
+		// Sprint Calendar on this day's week.
+		day := ds
+		trigger := shell.NewTipCaption(container.NewCenter(plan), "", func() { ui.ShowPlannerDate(day) })
+		if shell.Hooks.PlannedLines != nil {
+			if lines := shell.Hooks.PlannedLines(ui, ds, items, local); len(lines) > 0 {
+				trigger.Body = shell.PlannedTipBody(lines)
+			}
+		}
+		head = container.New(widgets.NewSidesLayout(head, trigger, 0), head, trigger)
 	}
 
 	// Left of the line is what the day actually holds and what is queued for it,

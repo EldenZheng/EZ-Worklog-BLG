@@ -22,13 +22,13 @@ import (
 
 func TestSprintAllocationPreservesBlocksSplitsAndStopsAtEnd(t *testing.T) {
 	s := backend.SprintIteration{ID: "s", StartDate: "2026-10-22", Duration: 14}
-	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"existing": {Blocks: []backend.PlanBlock{{"2026-11-02", 540, 120}}}}}
+	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"existing": {Blocks: []backend.PlanBlock{{Date: "2026-11-02", Start: 540, Minutes: 120}}}}}
 	c := []backend.SprintCandidate{{"large", backend.SprintItem{Title: "large", Effort: 600}, s}, {"overflow", backend.SprintItem{Title: "overflow", Effort: 2000}, s}, {"small", backend.SprintItem{Title: "small", Effort: 30}, s}}
 	tasks, unplaced := backend.AllocateSprint(p, c, "2026-10-31")
 	if !reflect.DeepEqual(tasks["existing"], p.Tasks["existing"]) {
 		t.Fatal("existing appointment changed")
 	}
-	want := []backend.PlanBlock{{"2026-11-02", 660, 360}, {"2026-11-03", 540, 240}}
+	want := []backend.PlanBlock{{Date: "2026-11-02", Start: 660, Minutes: 360}, {Date: "2026-11-03", Start: 540, Minutes: 240}}
 	if !reflect.DeepEqual(tasks["large"].Blocks, want) {
 		t.Fatalf("large task: %v", tasks["large"].Blocks)
 	}
@@ -55,11 +55,11 @@ func TestSprintEstimateAndBoundaries(t *testing.T) {
 	if !s.Contains("2026-11-04") || s.Contains("2026-11-05") {
 		t.Fatal("exclusive sprint boundary")
 	}
-	tasks := map[string]backend.SprintTask{"other": {Blocks: []backend.PlanBlock{{"2026-11-02", 540, 120}}}}
-	if backend.ValidatePlanBlock("mine", backend.PlanBlock{"2026-11-02", 600, 30}, tasks) == nil {
+	tasks := map[string]backend.SprintTask{"other": {Blocks: []backend.PlanBlock{{Date: "2026-11-02", Start: 540, Minutes: 120}}}}
+	if backend.ValidatePlanBlock("mine", backend.PlanBlock{Date: "2026-11-02", Start: 600, Minutes: 30}, tasks) == nil {
 		t.Fatal("overlap allowed")
 	}
-	if backend.ValidatePlanBlock("mine", backend.PlanBlock{"2026-11-02", 660, 30}, tasks) != nil {
+	if backend.ValidatePlanBlock("mine", backend.PlanBlock{Date: "2026-11-02", Start: 660, Minutes: 30}, tasks) != nil {
 		t.Fatal("adjacent block rejected")
 	}
 }
@@ -83,7 +83,7 @@ func TestSprintProjectsAreIndependentOfViews(t *testing.T) {
 
 func TestSprintCalendarDropRespectsCapacityAndPreservesDuration(t *testing.T) {
 	c := backend.SprintCandidate{Key: "mine", Item: backend.SprintItem{Effort: 90}, Sprint: backend.SprintIteration{StartDate: "2026-10-22", Duration: 14}}
-	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"other": {Blocks: []backend.PlanBlock{{"2026-11-02", 540, 120}}}}}
+	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"other": {Blocks: []backend.PlanBlock{{Date: "2026-11-02", Start: 540, Minutes: 120}}}}}
 	if _, ok := backend.PlannerSlot(p, c, -1, "2026-11-05"); ok {
 		t.Fatal("date outside sprint allowed")
 	}
@@ -106,7 +106,7 @@ func TestSprintCalendarDropRespectsCapacityAndPreservesDuration(t *testing.T) {
 	if c.Item.Effort != 90 {
 		t.Fatal("GitHub estimate changed")
 	}
-	moved.Tasks["full"] = backend.SprintTask{Blocks: []backend.PlanBlock{{"2026-11-04", 540, 480}}}
+	moved.Tasks["full"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: "2026-11-04", Start: 540, Minutes: 480}}}
 	if _, ok := backend.PlannerSlot(moved, c, 0, "2026-11-04"); ok {
 		t.Fatal("full date allowed")
 	}
@@ -144,7 +144,7 @@ func TestSprintMutationUsesSourceProjectIDs(t *testing.T) {
 
 func TestSprintPlanSaveReloadAndOfflineUI(t *testing.T) {
 	s := backend.NewStore(tempDir(t))
-	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"issue": {Estimate: 90, Notes: "local only", Blocks: []backend.PlanBlock{{"2026-11-02", 540, 90}}}}, Boards: []backend.SprintBoard{{ID: "project", Title: "Example", Fields: []backend.SprintField{{Name: "Status", Options: []backend.FieldOption{{Name: "In Progress"}}}}, Items: []backend.SprintItem{{ID: "i", Title: "Example task", Status: "In Progress"}}}}}
+	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{"issue": {Estimate: 90, Notes: "local only", Blocks: []backend.PlanBlock{{Date: "2026-11-02", Start: 540, Minutes: 90}}}}, Boards: []backend.SprintBoard{{ID: "project", Title: "Example", Fields: []backend.SprintField{{Name: "Status", Options: []backend.FieldOption{{Name: "In Progress"}}}}, Items: []backend.SprintItem{{ID: "i", Title: "Example task", Status: "In Progress"}}}}}
 	if err := s.SaveSprintPlan(p); err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +254,7 @@ func TestSprintScreenshots(t *testing.T) {
 	b.Fields[1].Configuration.Iterations = []backend.SprintIteration{{ID: "s", Title: "Current sprint", StartDate: backend.WeekStartOf(shell.Today()), Duration: 14}}
 	b.Items = append(b.Items, backend.SprintItem{ID: "pr", Kind: "PullRequest", URL: "https://github.com/bigledger/example/pull/4", Title: "Review invoice search improvements", Status: "In Review", SprintID: "s", Effort: 45, Complexity: "S - 30 mins"})
 	support := backend.SprintBoard{ID: "support", URL: backend.SprintBoardURLs[1], Title: "Support", Fields: b.Fields, Items: []backend.SprintItem{{ID: "3", URL: "https://github.com/BigLedger-Support/example/issues/3", Title: "Investigate customer reconciliation", Status: "In Progress", SprintID: "s", Effort: 60}}}
-	p := backend.SprintPlan{Boards: []backend.SprintBoard{b, support}, Tasks: map[string]backend.SprintTask{"https://github.com/bigledger/example/issues/1": {Estimate: 120, Blocks: []backend.PlanBlock{{backend.AddDays(backend.WeekStartOf(shell.Today()), 1), 540, 120}}}}}
+	p := backend.SprintPlan{Boards: []backend.SprintBoard{b, support}, Tasks: map[string]backend.SprintTask{"https://github.com/bigledger/example/issues/1": {Estimate: 120, Blocks: []backend.PlanBlock{{Date: backend.AddDays(backend.WeekStartOf(shell.Today()), 1), Start: 540, Minutes: 120}}}}}
 	if err := s.SaveSprintPlan(p); err != nil {
 		t.Fatal(err)
 	}

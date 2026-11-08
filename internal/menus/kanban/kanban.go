@@ -218,9 +218,9 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 		// The cards scroll the column's full height and pass behind the
 		// capsule, which floats over their top; at rest they start a gap
 		// below it.
-		inset := &columnInset{}
+		inset := &shell.ColumnInset{}
 		list := shell.NoScrollShadow(container.NewVScroll(container.New(inset, container.NewPadded(cards))))
-		col := dropArea(k, container.New(&floatingHeaderLayout{inset: inset, gap: theme.InnerPadding() + 2}, list, heading), "", "status", value)
+		col := dropArea(k, container.New(&shell.FloatingHeaderLayout{Inset: inset, Gap: theme.InnerPadding() + 2}, list, heading), "", "status", value)
 		frame := k.Targets[len(k.Targets)-1].Frame
 		frame.FillColor = KanbanColumnFill(status)
 		frame.StrokeColor = KanbanColumnBorder(status)
@@ -267,7 +267,11 @@ func BubbleSurface(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintIt
 func Card(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem) fyne.CanvasObject {
 	// The worklog card look of Log Work and Status: a darker org tint, and the
 	// org bar down the left sliding in only under the pointer.
-	var content fyne.CanvasObject = shell.HoverBubble(k.Accent(b, it), CardContents(k, b, it))
+	area := shell.HoverBubble(k.Accent(b, it), CardContents(k, b, it))
+	// The footer's captions carry their own padding: less below them reads as
+	// even with the top.
+	area.Bubble().TightBottom = true
+	var content fyne.CanvasObject = area
 	if p, ok := k.Pending[it.Key(b.ID)]; ok {
 		content = SavingOverlay(content, p)
 	}
@@ -402,7 +406,7 @@ func EditorFor(k *shell.KanbanUI, b backend.SprintBoard, it backend.SprintItem, 
 	if !localOnly {
 		left.Add(remote)
 		// Grey, like the cards' line, with room above it.
-		left.Add(container.New(layout.NewCustomPaddedLayout(theme.InnerPadding(), 0, 0, 0), cardDivider()))
+		left.Add(container.New(layout.NewCustomPaddedLayout(theme.InnerPadding(), 0, 0, 0), shell.CardDivider()))
 	}
 	left.Add(local)
 	// Time blocks are planned by dragging on the Sprint Calendar; the popup
@@ -489,54 +493,12 @@ func (kanbanColumnLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 func BubbleContents(k *shell.KanbanUI, title, foot fyne.CanvasObject, issueURL string) fyne.CanvasObject {
 	body := container.NewVBox(title, foot)
 	if issueURL != "" {
-		body.Add(shell.GithubHyperlink("Open issue", issueURL))
+		link := shell.GithubHyperlink(shell.IssueLinkLabel(issueURL), issueURL)
+		// Shortened rather than widening the Sprint Calendar's tray.
+		if h, ok := link.(*widget.Hyperlink); ok {
+			h.Truncation = fyne.TextTruncateEllipsis
+		}
+		body.Add(link)
 	}
 	return body
-}
-
-// columnInset holds a column's cards a set distance down from the top of
-// their scroll, under the floating header.
-type columnInset struct{ top float32 }
-
-func (c *columnInset) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	m := objects[0].MinSize()
-	return fyne.NewSize(m.Width, m.Height+c.top)
-}
-
-func (c *columnInset) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	objects[0].Move(fyne.NewPos(0, c.top))
-	objects[0].Resize(fyne.NewSize(size.Width, max(size.Height-c.top, 0)))
-}
-
-// floatingHeaderLayout lays a column's card scroll (first) from halfway down
-// its header to the foot, and its header (second) across the top, over the
-// cards. The cards'
-// inset follows the header's height, which grows when a title wraps.
-type floatingHeaderLayout struct {
-	inset *columnInset
-	gap   float32
-}
-
-func (l *floatingHeaderLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
-	list, head := objects[0].MinSize(), objects[1].MinSize()
-	return fyne.NewSize(max(list.Width, head.Width), max(list.Height, head.Height+l.gap))
-}
-
-func (l *floatingHeaderLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	head := objects[1]
-	head.Move(fyne.NewPos(0, 0))
-	head.Resize(fyne.NewSize(size.Width, head.MinSize().Height))
-	// A wrapped title knows its height only once it has its width.
-	height := head.MinSize().Height
-	head.Resize(fyne.NewSize(size.Width, height))
-	// The cards' scroll starts halfway down the capsule, so a card scrolling
-	// up slips under the capsule and is gone by its middle line.
-	clip := height / 2
-	list := objects[0]
-	if top := height - clip + l.gap; top != l.inset.top {
-		l.inset.top = top
-		list.Refresh()
-	}
-	list.Move(fyne.NewPos(0, clip))
-	list.Resize(fyne.NewSize(size.Width, max(size.Height-clip, 0)))
 }

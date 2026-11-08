@@ -57,6 +57,8 @@ func PruneSprintPlan(p SprintPlan, date string) (SprintPlan, bool) {
 type PlanBlock struct {
 	Date           string
 	Start, Minutes int
+	// Note describes the block: what a meeting is for. Shown with its title.
+	Note string `json:",omitempty"`
 }
 
 const PlannerDurationStep = 15
@@ -85,6 +87,23 @@ func ValidatePlannerDuration(block PlanBlock, previous []PlanBlock) error {
 	return fmt.Errorf("duration must use 15-minute increments (15, 30, 45, …)")
 }
 
+// PRIssue is the issue a pull request works on: its link and title.
+type PRIssue struct {
+	URL   string
+	Title string `json:",omitempty"`
+}
+
+// UnmarshalJSON also reads the bare issue link an earlier build saved.
+func (i *PRIssue) UnmarshalJSON(data []byte) error {
+	var link string
+	if err := json.Unmarshal(data, &link); err == nil {
+		*i = PRIssue{URL: link}
+		return nil
+	}
+	type plain PRIssue
+	return json.Unmarshal(data, (*plain)(i))
+}
+
 type SprintTask struct {
 	Estimate          int
 	Complexity, Notes string
@@ -106,6 +125,13 @@ type SprintPlan struct {
 	CalendarSprint string    `json:",omitempty"`
 	KanbanColumns  *[]string `json:",omitempty"`
 	KanbanTypes    *[]string `json:",omitempty"`
+	// CalendarTypes is the Sprint Calendar tray's Issues / Pull requests
+	// choice, kept apart from Kanban's.
+	CalendarTypes *[]string `json:",omitempty"`
+	// PRIssues remembers the issue each pull request on a board works on, by
+	// PR link, looked up once as Log Work's code review does. A zero PRIssue
+	// is a PR that names no issue.
+	PRIssues map[string]PRIssue `json:",omitempty"`
 	// ProjectOrder is the board IDs in the order the Kanban and Sprint Calendar
 	// legends show them.
 	ProjectOrder []string `json:",omitempty"`
@@ -123,10 +149,40 @@ func (s *Store) LoadSprintPlan() (SprintPlan, error) {
 		return p, err
 	}
 	err = json.Unmarshal(raw, &p)
+	if err != nil {
+		p, err = lenientSprintPlan(raw)
+	}
 	if p.Tasks == nil {
 		p.Tasks = map[string]SprintTask{}
 	}
 	return p, err
+}
+
+// lenientSprintPlan reads a plan one setting at a time, so a setting this
+// version cannot read (a remembered PR lookup, a filter) is left out instead
+// of keeping the whole planner shut. Only the tasks, which hold the user's
+// estimates, notes and time blocks, are worth refusing the file over: an
+// error there still preserves it untouched.
+func lenientSprintPlan(raw []byte) (SprintPlan, error) {
+	p := SprintPlan{Tasks: map[string]SprintTask{}}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return p, err
+	}
+	for name, value := range fields {
+		one, _ := json.Marshal(map[string]json.RawMessage{name: value})
+		// Into a copy, kept only when it reads: a failed read can leave a
+		// field half set.
+		next := p
+		if err := json.Unmarshal(one, &next); err != nil {
+			if name == "Tasks" {
+				return p, err
+			}
+			continue
+		}
+		p = next
+	}
+	return p, nil
 }
 
 func (s *Store) SaveSprintPlan(p SprintPlan) error {
@@ -354,6 +410,7 @@ func MovePlannerIssue(p SprintPlan, c SprintCandidate, index int, date string) (
 	t := tasks[c.Key]
 	t.Blocks = append([]PlanBlock{}, t.Blocks...)
 	if index >= 0 {
+		block.Note = t.Blocks[index].Note // a moved block keeps its description
 		t.Blocks[index] = block
 	} else {
 		t.Blocks = append(t.Blocks, block)
@@ -363,6 +420,9 @@ func MovePlannerIssue(p SprintPlan, c SprintCandidate, index int, date string) (
 	return p, nil
 }
 
+// ResizePlannerBlock sets one block's length. Growing it into the blocks
+// after it on the same day pushes them later, keeping their order and lengths,
+// as long as the day still holds them all.
 func ResizePlannerBlock(p SprintPlan, key string, index, minutes int) (SprintPlan, error) {
 	if !ValidPlannerDuration(minutes) {
 		return p, fmt.Errorf("duration must use 15-minute increments")
@@ -373,17 +433,83 @@ func ResizePlannerBlock(p SprintPlan, key string, index, minutes int) (SprintPla
 	}
 	block := t.Blocks[index]
 	block.Minutes = minutes
-	if err := ValidatePlanBlock(key, block, p.Tasks); err != nil {
-		return p, err
+	if block.Start < 0 || block.Start+block.Minutes > 24*60 {
+		return p, fmt.Errorf("time and duration must fit within one day")
 	}
-	for i, b := range t.Blocks {
-		if i != index && b.Date == block.Date && b.Start < block.Start+block.Minutes && block.Start < b.Start+b.Minutes {
-			return p, fmt.Errorf("this duration overlaps another block for the same issue")
+	tasks := map[string]SprintTask{}
+	for k, v := range p.Tasks {
+		if !v.Done && v.Blocks != nil {
+			v.Blocks = append([]PlanBlock{}, v.Blocks...)
+		}
+		tasks[k] = v
+	}
+	resized := tasks[key]
+	resized.Blocks[index] = block
+	tasks[key] = resized
+	// The blocks starting at or after this one on its day, earliest first.
+	type ref struct {
+		key   string
+		index int
+	}
+	var later []ref
+	for k, v := range tasks {
+		if v.Done {
+			continue
+		}
+		for i, b := range v.Blocks {
+			if (k != key || i != index) && b.Date == block.Date && b.Start >= t.Blocks[index].Start {
+				later = append(later, ref{k, i})
+			}
 		}
 	}
+	sort.Slice(later, func(i, j int) bool {
+		a, b := tasks[later[i].key].Blocks[later[i].index], tasks[later[j].key].Blocks[later[j].index]
+		if a.Start != b.Start {
+			return a.Start < b.Start
+		}
+		if later[i].key != later[j].key {
+			return later[i].key < later[j].key
+		}
+		return later[i].index < later[j].index
+	})
+	cursor := block.Start + block.Minutes
+	for _, r := range later {
+		b := tasks[r.key].Blocks[r.index]
+		if b.Start >= cursor {
+			break // a gap: nothing further is pushed
+		}
+		b.Start = cursor
+		if b.Start+b.Minutes > 24*60 {
+			return p, fmt.Errorf("the blocks after this one no longer fit in the day")
+		}
+		tasks[r.key].Blocks[r.index] = b
+		cursor = b.Start + b.Minutes
+	}
+	// Anything earlier in the day that the block now runs into stays put.
+	for k, v := range tasks {
+		if v.Done {
+			continue
+		}
+		for i, b := range v.Blocks {
+			if (k != key || i != index) && b.Date == block.Date && b.Start < block.Start && block.Start < b.Start+b.Minutes {
+				return p, fmt.Errorf("this time overlaps another planned issue")
+			}
+		}
+	}
+	p.Tasks = tasks
+	return p, nil
+}
+
+// SetPlannerBlockNote describes one block, as a meeting's purpose. want is the
+// block as it was shown, so a plan that changed meanwhile is not written over.
+func SetPlannerBlockNote(p SprintPlan, key string, index int, want PlanBlock, note string) (SprintPlan, error) {
+	t := p.Tasks[key]
+	if index < 0 || index >= len(t.Blocks) || t.Blocks[index] != want {
+		return p, fmt.Errorf("this time block has changed; look at the calendar again")
+	}
 	t.Blocks = append([]PlanBlock{}, t.Blocks...)
-	t.Blocks[index] = block
-	tasks := map[string]SprintTask{}
+	t.Blocks[index].Note = strings.TrimSpace(note)
+	tasks := make(map[string]SprintTask, len(p.Tasks))
 	for k, v := range p.Tasks {
 		tasks[k] = v
 	}

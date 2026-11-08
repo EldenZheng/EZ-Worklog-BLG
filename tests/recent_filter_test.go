@@ -37,6 +37,8 @@ func labels(o fyne.CanvasObject) []string {
 		out = append(out, v.Text)
 	case *canvas.Text:
 		out = append(out, v.Text)
+	case *shell.TipCaption:
+		out = append(out, labels(v.Content)...)
 	case *shell.Tappable:
 		out = append(out, labels(v.Content)...)
 	case *shell.Fold:

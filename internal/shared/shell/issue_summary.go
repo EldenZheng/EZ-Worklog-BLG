@@ -49,7 +49,15 @@ func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, ro
 	badge := container.NewStack(pill, container.NewPadded(value))
 	meta := widget.NewLabel(ref)
 	meta.Truncation = fyne.TextTruncateEllipsis
-	footer := container.NewBorder(nil, nil, nil, badge, meta)
+	// The repo#number in gold behind the issue mark, as Kanban's cards show it.
+	var refLine fyne.CanvasObject = meta
+	if ref != "" {
+		gold := widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold}
+		mark := container.NewThemeOverride(widget.NewIcon(backend.SprintItem{}.TypeIcon()), gold)
+		refLine = container.NewBorder(nil, nil, container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), mark)), nil,
+			container.NewThemeOverride(meta, gold))
+	}
+	footer := container.NewBorder(nil, nil, nil, badge, refLine)
 	var onTap func()
 	if target != nil {
 		onTap = func() { _ = fyne.CurrentApp().OpenURL(target) }
@@ -90,20 +98,153 @@ func IssueSummaryPanel(title, summary string, content fyne.CanvasObject, actions
 type SummaryTitle struct {
 	widget.Label
 	onTap  func()
-	anim   *fyne.Animation
 	title  string
-	tip    *titleTooltip
-	canvas fyne.Canvas
+	state  tipState
 	parent func(bool)
 }
 
-var activeSummaryTitle *SummaryTitle
+// activeSummaryTitle is the trigger whose tooltip is up, if any.
+var activeSummaryTitle tipOwner
+
+// tipOwner is what a tooltip belongs to: the hover catcher closes it when the
+// pointer leaves the owner and passes a click on to it.
+type tipOwner interface {
+	fyne.CanvasObject
+	hideTitle()
+	Tapped(*fyne.PointEvent)
+}
 
 func DismissSummaryTooltip() {
 	if activeSummaryTitle != nil {
 		activeSummaryTitle.hideTitle()
 	}
 }
+
+// tipState is a shown tooltip: the overlay, its rise, and the canvas it sits on.
+type tipState struct {
+	tip    *titleTooltip
+	anim   *fyne.Animation
+	canvas fyne.Canvas
+}
+
+// showTip raises the Meeting update tooltip (a gold-edged box rising into
+// place) under owner, or above it when there is no room below. It returns
+// false when owner is not on a canvas yet.
+func (s *tipState) show(owner tipOwner, text string) bool {
+	label := widget.NewLabel(text)
+	label.Wrapping = fyne.TextWrapWord
+	return s.showBody(owner, label, true)
+}
+
+// showBody is show with content of its own in the box. wraps says content
+// wraps to the box (420 wide at most); otherwise the box fits content.
+func (s *tipState) showBody(owner tipOwner, content fyne.CanvasObject, wraps bool) bool {
+	c := fyne.CurrentApp().Driver().CanvasForObject(owner)
+	if c == nil || s.tip != nil {
+		return false
+	}
+	DismissSummaryTooltip()
+	activeSummaryTitle = owner
+	bg := canvas.NewRectangle(theme.Color(theme.ColorNameMenuBackground))
+	bg.CornerRadius = CellCornerRadius
+	bg.StrokeWidth = 1
+	bg.StrokeColor = widgets.LogoGold
+	box := container.NewStack(bg, container.NewPadded(content))
+	width := max(min(420, c.Size().Width-16), 1)
+	if !wraps {
+		width = max(min(box.MinSize().Width, c.Size().Width-16), 1)
+	}
+	box.Resize(fyne.NewSize(width, 0))
+	box.Resize(fyne.NewSize(width, box.MinSize().Height))
+	at := fyne.CurrentApp().Driver().AbsolutePositionForObject(owner)
+	x := max(min(at.X, c.Size().Width-width-8), 0)
+	y := at.Y + owner.Size().Height + 4
+	if y+box.Size().Height > c.Size().Height {
+		y = max(at.Y-box.Size().Height-4, 0)
+	}
+	box.Move(fyne.NewPos(x, y))
+	// Fyne routes all hover events to the top overlay. Its hover catcher keeps
+	// this tooltip up over the trigger and dismisses it as soon as we leave.
+	s.tip = &titleTooltip{body: container.NewWithoutLayout(box), button: owner, at: at}
+	s.tip.ExtendBaseWidget(s.tip)
+	s.canvas = c
+	c.Overlays().Add(s.tip)
+	s.anim = fyne.NewAnimation(140*time.Millisecond, func(done float32) {
+		box.Move(fyne.NewPos(x, y+6*(1-done)))
+		bg.FillColor = MixColor(color.Transparent, theme.Color(theme.ColorNameMenuBackground), done)
+		bg.Refresh()
+	})
+	s.anim.Curve = fyne.AnimationEaseOut
+	s.anim.Start()
+	return true
+}
+
+// hide takes the tooltip down, reporting whether one was up.
+func (s *tipState) hide(owner tipOwner) bool {
+	if s.tip == nil {
+		return false
+	}
+	if s.anim != nil {
+		s.anim.Stop()
+		s.anim = nil
+	}
+	s.canvas.Overlays().Remove(s.tip)
+	s.tip = nil
+	if activeSummaryTitle == owner {
+		activeSummaryTitle = nil
+	}
+	return true
+}
+
+// TipCaption is a caption that shows text in the Meeting update tooltip while
+// the pointer is on it, and runs onTap when clicked.
+type TipCaption struct {
+	widget.BaseWidget
+	Content fyne.CanvasObject
+	Text    string
+	// Body, when set, is shown in the tooltip in place of Text.
+	Body  fyne.CanvasObject
+	onTap func()
+	state tipState
+}
+
+// NewTipCaption wraps content (a caption) with a tooltip and a click.
+func NewTipCaption(content fyne.CanvasObject, text string, onTap func()) *TipCaption {
+	t := &TipCaption{Content: content, Text: text, onTap: onTap}
+	t.ExtendBaseWidget(t)
+	return t
+}
+
+func (t *TipCaption) CreateRenderer() fyne.WidgetRenderer {
+	return widget.NewSimpleRenderer(t.Content)
+}
+
+func (t *TipCaption) Cursor() desktop.Cursor {
+	if t.onTap == nil {
+		return desktop.DefaultCursor
+	}
+	return desktop.PointerCursor
+}
+
+func (t *TipCaption) MouseIn(*desktop.MouseEvent) {
+	if t.Body != nil {
+		t.state.showBody(t, t.Body, false)
+	} else if t.Text != "" {
+		t.state.show(t, t.Text)
+	}
+}
+
+func (t *TipCaption) MouseMoved(*desktop.MouseEvent) {}
+func (t *TipCaption) MouseOut()                      {}
+
+func (t *TipCaption) Tapped(*fyne.PointEvent) {
+	t.hideTitle()
+	if t.onTap != nil {
+		t.onTap()
+	}
+}
+
+func (t *TipCaption) hideTitle() { t.state.hide(t) }
 
 func newSummaryTitle(label *widget.Label, title string, tapped func()) *SummaryTitle {
 	b := &SummaryTitle{Label: *label, title: title, onTap: tapped}
@@ -124,47 +265,7 @@ func (b *SummaryTitle) Cursor() desktop.Cursor { return desktop.PointerCursor }
 
 func (b *SummaryTitle) MinSize() fyne.Size { return fyne.NewSize(0, 52) }
 
-func (b *SummaryTitle) showTitle() {
-	c := fyne.CurrentApp().Driver().CanvasForObject(b)
-	if c == nil {
-		return
-	}
-	if b.tip != nil {
-		return
-	}
-	DismissSummaryTooltip()
-	activeSummaryTitle = b
-	label := widget.NewLabel(b.title)
-	label.Wrapping = fyne.TextWrapWord
-	bg := canvas.NewRectangle(theme.Color(theme.ColorNameMenuBackground))
-	bg.CornerRadius = CellCornerRadius
-	bg.StrokeWidth = 1
-	bg.StrokeColor = widgets.LogoGold
-	box := container.NewStack(bg, container.NewPadded(label))
-	width := max(min(420, c.Size().Width-16), 1)
-	box.Resize(fyne.NewSize(width, 0))
-	box.Resize(fyne.NewSize(width, box.MinSize().Height))
-	at := fyne.CurrentApp().Driver().AbsolutePositionForObject(b)
-	x := max(min(at.X, c.Size().Width-width-8), 0)
-	y := at.Y + b.Size().Height + 4
-	if y+box.Size().Height > c.Size().Height {
-		y = max(at.Y-box.Size().Height-4, 0)
-	}
-	box.Move(fyne.NewPos(x, y))
-	// Fyne routes all hover events to the top overlay. Its hover catcher keeps
-	// this tooltip up over the trigger and dismisses it as soon as we leave.
-	b.tip = &titleTooltip{body: container.NewWithoutLayout(box), button: b, at: at}
-	b.tip.ExtendBaseWidget(b.tip)
-	b.canvas = c
-	c.Overlays().Add(b.tip)
-	b.anim = fyne.NewAnimation(140*time.Millisecond, func(done float32) {
-		box.Move(fyne.NewPos(x, y+6*(1-done)))
-		bg.FillColor = MixColor(color.Transparent, theme.Color(theme.ColorNameMenuBackground), done)
-		bg.Refresh()
-	})
-	b.anim.Curve = fyne.AnimationEaseOut
-	b.anim.Start()
-}
+func (b *SummaryTitle) showTitle() { b.state.show(b, b.title) }
 
 func (b *SummaryTitle) MouseIn(e *desktop.MouseEvent) {
 	if b.parent != nil {
@@ -176,32 +277,21 @@ func (b *SummaryTitle) MouseIn(e *desktop.MouseEvent) {
 func (b *SummaryTitle) MouseMoved(*desktop.MouseEvent) {}
 
 func (b *SummaryTitle) MouseOut() {
-	if b.tip == nil && b.parent != nil {
+	if b.state.tip == nil && b.parent != nil {
 		b.parent(false)
 	}
 }
 
 func (b *SummaryTitle) hideTitle() {
-	if b.tip != nil {
-		if b.anim != nil {
-			b.anim.Stop()
-			b.anim = nil
-		}
-		b.canvas.Overlays().Remove(b.tip)
-		b.tip = nil
-		if activeSummaryTitle == b {
-			activeSummaryTitle = nil
-		}
-		if b.parent != nil {
-			b.parent(false)
-		}
+	if b.state.hide(b) && b.parent != nil {
+		b.parent(false)
 	}
 }
 
 type titleTooltip struct {
 	widget.BaseWidget
 	body   *fyne.Container
-	button *SummaryTitle
+	button tipOwner
 	at     fyne.Position
 }
 

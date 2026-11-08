@@ -92,7 +92,7 @@ func TestSprintCalendarDropdownSelectsFutureSprint(t *testing.T) {
 func TestSprintResizeGripChangesOnlyLocalDuration(t *testing.T) {
 	ui, _, c := plannerFixture(t)
 	k := ui.Kanban
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{c.Sprint.StartDate, 540, 90}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 540, Minutes: 90}}}
 	kanban.Draw(k)
 	card := sprintcalendar.PlannerCard(k, c, 0).(*shell.PlannerDragCard)
 	var grip *sprintcalendar.PlannerResizeGrip
@@ -117,13 +117,25 @@ func TestSprintResizeGripChangesOnlyLocalDuration(t *testing.T) {
 	if k.Plan.Boards[0].Items[0].Effort != 90 || k.Busy {
 		t.Fatal("resize changed GitHub estimate")
 	}
-	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{c.Sprint.StartDate, 720, 60}}}
-	if _, err = backend.ResizePlannerBlock(p, c.Key, 0, 240); err == nil {
-		t.Fatal("overlapping resize accepted")
+	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 720, Minutes: 60}}}
+	// Growing into the next block pushes it later rather than refusing.
+	grown, err := backend.ResizePlannerBlock(p, c.Key, 0, 240)
+	if err != nil || grown.Tasks["busy"].Blocks[0].Start != 780 || grown.Tasks["busy"].Blocks[0].Minutes != 60 {
+		t.Fatal("growing a block did not push the next one later", err, grown.Tasks["busy"])
 	}
-	p.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{c.Sprint.StartDate, 540, 90}, {c.Sprint.StartDate, 660, 30}}}
-	if _, err = backend.ResizePlannerBlock(p, c.Key, 0, 180); err == nil {
-		t.Fatal("resize overlapped same issue's other block")
+	if p.Tasks["busy"].Blocks[0].Start != 720 {
+		t.Fatal("resize changed the original plan")
+	}
+	p.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 540, Minutes: 90}, {Date: c.Sprint.StartDate, Start: 660, Minutes: 30}}}
+	grown, err = backend.ResizePlannerBlock(p, c.Key, 0, 180)
+	if err != nil || grown.Tasks[c.Key].Blocks[1].Start != 720 || grown.Tasks["busy"].Blocks[0].Start != 750 {
+		t.Fatal("growing a block did not push the issue's own next block and the one after it", err, grown.Tasks)
+	}
+	// A push that would run the day past midnight is refused.
+	p.Tasks["late"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 1380, Minutes: 60}}}
+	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 630, Minutes: 750}}}
+	if _, err = backend.ResizePlannerBlock(p, c.Key, 0, 105); err == nil {
+		t.Fatal("a push past the end of the day was accepted")
 	}
 }
 

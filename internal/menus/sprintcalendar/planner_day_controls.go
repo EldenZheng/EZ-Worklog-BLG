@@ -120,25 +120,25 @@ func ConfirmRemoval(k *shell.KanbanUI, title, message, action string, apply func
 	shell.AnimateOpening(k.Ui.Win.Canvas())
 }
 
+// plannerDayBarBottom is the foot of a day's progress bar: the pointer above
+// it brings the day's Delete in.
+const plannerDayBarBottom = float32(108)
+
 type plannerDayHeaderLayout struct{}
 
 func (plannerDayHeaderLayout) MinSize([]fyne.CanvasObject) fyne.Size {
 	return fyne.NewSize(80, PlannerDayHeaderHeight)
 }
 
-// Objects: date, percentage, bar, Delete, reading, planned. Delete sits at the
-// right of the date's line and takes its width from the date while shown.
+// Objects: date, percentage, bar, Delete, reading, planned. Delete floats over
+// the right of the date's line, drawn above it, so the date never moves for it.
 func (plannerDayHeaderLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	width := size.Width
 	del := objects[3].MinSize()
-	if objects[3].Visible() {
-		width -= del.Width + 4
-	}
 	objects[0].Move(fyne.Position{})
-	objects[0].Resize(fyne.NewSize(fyne.Max(1, width), 32))
+	objects[0].Resize(fyne.NewSize(fyne.Max(1, size.Width), 32))
 	objects[1].Move(fyne.NewPos(4, 35))
 	objects[1].Resize(fyne.NewSize(fyne.Max(1, size.Width-8), 16))
-	objects[2].Move(fyne.NewPos(4, 102))
+	objects[2].Move(fyne.NewPos(4, plannerDayBarBottom-6))
 	objects[2].Resize(fyne.NewSize(fyne.Max(1, size.Width-8), 6))
 	objects[3].Move(fyne.NewPos(fyne.Max(0, size.Width-del.Width-2), (32-del.Height)/2))
 	objects[3].Resize(del)

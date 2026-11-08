@@ -31,15 +31,15 @@ func TestPruneSprintPlanDropsPastBlocksAndEmptyEntries(t *testing.T) {
 	b := maintenanceBoard()
 	p := backend.SprintPlan{Boards: []backend.SprintBoard{b}, Tasks: map[string]backend.SprintTask{
 		// Past block goes, today and later stay.
-		"https://github.com/o/r/issues/1": {Blocks: []backend.PlanBlock{{"2026-11-02", 540, 60}, {day, 540, 60}, {"2026-11-04", 540, 60}}},
+		"https://github.com/o/r/issues/1": {Blocks: []backend.PlanBlock{{Date: "2026-11-02", Start: 540, Minutes: 60}, {Date: day, Start: 540, Minutes: 60}, {Date: "2026-11-04", Start: 540, Minutes: 60}}},
 		// Only past blocks and nothing else: the whole entry goes.
-		"https://github.com/o/r/issues/2": {Blocks: []backend.PlanBlock{{"2026-10-30", 540, 60}}},
+		"https://github.com/o/r/issues/2": {Blocks: []backend.PlanBlock{{Date: "2026-10-30", Start: 540, Minutes: 60}}},
 		// Past blocks but a local estimate on an issue still on the board: kept, emptied.
-		"https://github.com/o/r/issues/3": {Estimate: 90, Blocks: []backend.PlanBlock{{"2026-10-30", 540, 60}}},
+		"https://github.com/o/r/issues/3": {Estimate: 90, Blocks: []backend.PlanBlock{{Date: "2026-10-30", Start: 540, Minutes: 60}}},
 		// Off every board with nothing ahead: gone, notes and all.
 		"https://github.com/o/r/issues/9": {Notes: "old", Done: true},
 		// Off the board but still planned ahead: kept.
-		"https://github.com/o/r/issues/8": {Blocks: []backend.PlanBlock{{"2026-11-05", 540, 60}}},
+		"https://github.com/o/r/issues/8": {Blocks: []backend.PlanBlock{{Date: "2026-11-05", Start: 540, Minutes: 60}}},
 	}}
 	got, changed := backend.PruneSprintPlan(p, day)
 	if !changed {
@@ -80,20 +80,20 @@ func TestPlannedTodayStillCreatedOnlyPicksCreatedIssuesPlannedToday(t *testing.T
 	const day = "2026-11-03"
 	b := maintenanceBoard()
 	p := backend.SprintPlan{Boards: []backend.SprintBoard{b}, Tasks: map[string]backend.SprintTask{
-		"https://github.com/o/r/issues/1": {Blocks: []backend.PlanBlock{{day, 540, 60}}},
-		"https://github.com/o/r/issues/2": {Blocks: []backend.PlanBlock{{day, 600, 60}}},
-		"https://github.com/o/r/issues/3": {Blocks: []backend.PlanBlock{{day, 660, 60}}},
-		"https://github.com/o/r/issues/4": {Blocks: []backend.PlanBlock{{"2026-11-04", 540, 60}}},
+		"https://github.com/o/r/issues/1": {Blocks: []backend.PlanBlock{{Date: day, Start: 540, Minutes: 60}}},
+		"https://github.com/o/r/issues/2": {Blocks: []backend.PlanBlock{{Date: day, Start: 600, Minutes: 60}}},
+		"https://github.com/o/r/issues/3": {Blocks: []backend.PlanBlock{{Date: day, Start: 660, Minutes: 60}}},
+		"https://github.com/o/r/issues/4": {Blocks: []backend.PlanBlock{{Date: "2026-11-04", Start: 540, Minutes: 60}}},
 	}}
 	got := sprintcalendar.PlannedTodayStillCreated(p, day)
 	if len(got) != 1 || got[0].Item.ID != "a" {
 		t.Fatalf("want only the Created issue planned today, got %+v", got)
 	}
-	p.Tasks["https://github.com/o/r/issues/1"] = backend.SprintTask{Done: true, Blocks: []backend.PlanBlock{{day, 540, 60}}}
+	p.Tasks["https://github.com/o/r/issues/1"] = backend.SprintTask{Done: true, Blocks: []backend.PlanBlock{{Date: day, Start: 540, Minutes: 60}}}
 	if len(sprintcalendar.PlannedTodayStillCreated(p, day)) != 0 {
 		t.Fatal("a locally done issue was started")
 	}
-	p.Tasks["https://github.com/o/r/issues/1"] = backend.SprintTask{Blocks: []backend.PlanBlock{{day, 540, 60}}}
+	p.Tasks["https://github.com/o/r/issues/1"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: day, Start: 540, Minutes: 60}}}
 	p.Boards[0].Fields[0].Options = []backend.FieldOption{{ID: "c", Name: "Created"}}
 	if len(sprintcalendar.PlannedTodayStillCreated(p, day)) != 0 {
 		t.Fatal("a board without In Progress was targeted")
@@ -175,7 +175,7 @@ func TestOnlyCalendarMarksFetchForAutoStart(t *testing.T) {
 	b := &k.Plan.Boards[0]
 	b.Fields = append(b.Fields, backend.SprintField{Name: "Status", Options: []backend.FieldOption{{ID: "ip", Name: "In Progress"}}})
 	b.Items[0].Status = "Created"
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{shell.Today(), 540, 60}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: shell.Today(), Start: 540, Minutes: 60}}}
 
 	k.PrunePlan() // what opening Kanban does
 	if k.AutoStartPending {
@@ -203,8 +203,8 @@ func TestCalendarShowsPlannedBubblesFromOtherSprints(t *testing.T) {
 	other := backend.SprintItem{ID: "o", Title: "Other sprint", SprintID: "s2", Effort: 60}
 	b.Items = append(b.Items, other)
 	day := backend.AddDays(k.Week, 1)
-	k.Plan.Tasks[other.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{day, 540, 60}}}
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 540, 90}}}
+	k.Plan.Tasks[other.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: day, Start: 540, Minutes: 60}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 90}}}
 	k.CalendarSprint = backend.SprintKey(c.Sprint)
 	kanban.Draw(k)
 
@@ -298,7 +298,7 @@ func TestLogWorkDayGreenWhenPlannedFillsTheDay(t *testing.T) {
 	if before.BaseFill != shell.DayFill(0, 300) {
 		t.Fatal("300 min of drafts alone should not be green")
 	}
-	k.Plan.Tasks[shell.PlannerMeetingKey] = backend.SprintTask{Blocks: []backend.PlanBlock{{ds, 540, 180}}}
+	k.Plan.Tasks[shell.PlannerMeetingKey] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: ds, Start: 540, Minutes: 180}}}
 	after := logwork.WeekColumn(ui, ds, nil, drafts)
 	if after.BaseFill != shell.DayFill(0, 480) || after.Planned != 180 {
 		t.Fatalf("drafts + planned at 480 should turn the day green: planned=%d", after.Planned)
@@ -318,7 +318,7 @@ func TestDayTotalFillCountsPlannedTime(t *testing.T) {
 	if got := ui.DayTotalFill(ds, nil, drafts); got != shell.DayFill(0, 300) {
 		t.Fatal("300 min of drafts alone should not be green")
 	}
-	k.Plan.Tasks[shell.PlannerMeetingKey] = backend.SprintTask{Blocks: []backend.PlanBlock{{ds, 540, 180}}}
+	k.Plan.Tasks[shell.PlannerMeetingKey] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: ds, Start: 540, Minutes: 180}}}
 	if got := ui.DayTotalFill(ds, nil, drafts); got != shell.DayFill(0, 480) {
 		t.Fatal("drafts + planned at 480 should turn the day green")
 	}

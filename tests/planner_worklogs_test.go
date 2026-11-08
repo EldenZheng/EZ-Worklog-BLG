@@ -57,7 +57,7 @@ func TestSprintRemainingPlansCreditLoggedAndDraftMinutesOnce(t *testing.T) {
 	c.Item.URL = "https://github.com/bigledger/example/issues/42"
 	c.Key = c.Item.URL
 	date := k.Week
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{date, 540, 60}, {date, 660, 120}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: date, Start: 540, Minutes: 60}, {Date: date, Start: 660, Minutes: 120}}}
 	work := sprintcalendar.PlannerDayWork{
 		Logged: []backend.WorklogItem{{Date: date, Minutes: 40, URL: "https://github.com/bigledger/example/issues/100", ParentURL: c.Item.URL}},
 		Drafts: []backend.Row{{"date": date, "minutes": "20", "issue": "BigLedger/example#42"}},

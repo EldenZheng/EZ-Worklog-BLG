@@ -85,6 +85,28 @@ func IssueTag(issue string) string {
 	return issue
 }
 
+// IssueLinkLabel names an issue or pull request link by its repo#number, or
+// "Open issue" when raw is neither.
+func IssueLinkLabel(raw string) string {
+	return backend.OrDefault(ShortIssueRef(raw), "Open issue")
+}
+
+// ShortIssueRef is an issue or pull request link as repo#number, without the
+// owner; "" when raw is neither.
+func ShortIssueRef(raw string) string {
+	ref, err := backend.IssueRefFromAny(raw)
+	if err != nil {
+		ref = backend.SprintItem{URL: raw}.RepositoryNumber(backend.SprintBoard{})
+		if !strings.Contains(ref, "#") {
+			return ""
+		}
+	}
+	if i := strings.Index(ref, "/"); i >= 0 {
+		ref = ref[i+1:]
+	}
+	return ref
+}
+
 func GithubHyperlink(label, rawURL string) fyne.CanvasObject {
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Scheme == "" || u.Host == "" {

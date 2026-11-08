@@ -21,7 +21,7 @@ import (
 func TestSprintWeekExpandsScaleButMonthKeepsNaturalHeight(t *testing.T) {
 	ui, w, c := plannerFixture(t)
 	k := ui.Kanban
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 540, 120}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 120}}}
 	w.Resize(fyne.NewSize(1500, 1250))
 	kanban.Draw(k)
 	w.Content().Refresh()
@@ -130,7 +130,7 @@ func TestSprintDayHoverClearAndFullBackgroundKeepOtherDays(t *testing.T) {
 	ui, w, c := plannerFixture(t)
 	k := ui.Kanban
 	day := k.Week
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Notes: "keep", Blocks: []backend.PlanBlock{{day, 540, 480}, {backend.AddDays(day, 1), 540, 30}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Notes: "keep", Blocks: []backend.PlanBlock{{Date: day, Start: 540, Minutes: 480}, {Date: backend.AddDays(day, 1), Start: 540, Minutes: 30}}}
 	kanban.Draw(k)
 	w.Content().Refresh()
 	var target *shell.PlannerDateTarget
@@ -147,10 +147,15 @@ func TestSprintDayHoverClearAndFullBackgroundKeepOtherDays(t *testing.T) {
 		t.Fatal("day Clear should start hidden")
 	}
 	origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(hover)
-	// A scheduled bubble also keeps its day's Clear action visible.
+	// A block below the header has its own Delete: the day's stays away.
 	test.MoveMouse(w.Canvas(), origin.Add(fyne.NewPos(25, sprintcalendar.PlannerDayHeaderHeight+20)))
+	if hover.Clear.Visible() {
+		t.Fatal("hovering a block revealed the day's Delete")
+	}
+	// The header, down to its progress bar, brings it in.
+	test.MoveMouse(w.Canvas(), origin.Add(fyne.NewPos(25, 60)))
 	if !hover.Clear.Visible() {
-		t.Fatal("hovering a day bubble did not reveal Clear")
+		t.Fatal("hovering the day's header did not reveal Delete")
 	}
 	buttonPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(hover.Clear).Add(fyne.NewPos(13, 13))
 	test.MoveMouse(w.Canvas(), buttonPos)

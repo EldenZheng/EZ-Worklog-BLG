@@ -33,7 +33,7 @@ func (c *plannerRefreshCanvas) Refresh(o fyne.CanvasObject) {
 func TestSprintDayHoverRepaintsHiddenDeleteWithoutClick(t *testing.T) {
 	ui, w, c := plannerFixture(t)
 	k := ui.Kanban
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 540, 60}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 60}}}
 	kanban.Draw(k)
 	var day *shell.PlannerDayHover
 	for _, d := range k.Dates {
@@ -47,13 +47,14 @@ func TestSprintDayHoverRepaintsHiddenDeleteWithoutClick(t *testing.T) {
 	view := &plannerRefreshCanvas{Canvas: w.Canvas()}
 	day.View = view
 	origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(day)
-	// Hover over unused calendar space, with no click or full-page refresh.
-	test.MoveMouse(w.Canvas(), origin.Add(fyne.NewPos(15, sprintcalendar.PlannerDayHeaderHeight+200)))
+	// Hover over the header's empty space, with no click or full-page refresh.
+	test.MoveMouse(w.Canvas(), origin.Add(fyne.NewPos(15, 60)))
 	if !day.Clear.Visible() || len(view.refreshed) == 0 || view.refreshed[len(view.refreshed)-1] != day.Header {
 		t.Fatal("showing Delete did not repaint its visible header")
 	}
-	if day.Header.Objects[0].Size().Width != day.Header.Size().Width-day.ClearView.MinSize().Width-4 {
-		t.Fatal("hover did not lay out space for Delete")
+	// Delete floats over the date's line: the date keeps its width.
+	if day.Header.Objects[0].Size().Width != day.Header.Size().Width {
+		t.Fatal("Delete moved the date")
 	}
 	if dir := os.Getenv("WORKLOG_PLANNER_SCREENSHOTS"); dir != "" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -89,9 +90,9 @@ func TestSprintProgressReadsGitHubDraftsAndRemainingPlans(t *testing.T) {
 	remote := backend.SprintItem{ID: "remote-done", URL: "https://github.com/bigledger/example/issues/2", Title: "Finished in GitHub", SprintID: c.Sprint.ID, Status: "Done", Effort: 120}
 	planned := backend.SprintItem{ID: "planned", URL: "https://github.com/bigledger/example/issues/3", Title: "Still planned", SprintID: c.Sprint.ID, Effort: 240}
 	b.Items = append(b.Items, remote, planned)
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Done: true, Blocks: []backend.PlanBlock{{k.Week, 540, 120}}}
-	k.Plan.Tasks[remote.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 660, 120}}}
-	k.Plan.Tasks[planned.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 780, 240}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Done: true, Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 120}}}
+	k.Plan.Tasks[remote.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 660, Minutes: 120}}}
+	k.Plan.Tasks[planned.Key(b.ID)] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 780, Minutes: 240}}}
 	ui.Cfg.ProjectURL = b.URL
 	ui.EnsureProjectCache()
 	for _, month := range sprintcalendar.CalendarMonths(k) {

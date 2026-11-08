@@ -42,6 +42,7 @@ func WireHooks() {
 	shell.Hooks.KanbanUIStartPlannedToday = sprintcalendar.StartPlannedToday
 	shell.Hooks.MarkDropTargets = logwork.MarkDropTargets
 	shell.Hooks.PlannedMinutes = sprintcalendar.PlannedMinutes
+	shell.Hooks.PlannedLines = sprintcalendar.PlannedLines
 	shell.Hooks.RenderPending = logwork.RenderPending
 	shell.Hooks.SetSupport = sprintcalendar.SetSupport
 	shell.Hooks.SupportOn = sprintcalendar.SupportOn

@@ -245,15 +245,18 @@ type StripeBubble struct {
 	widget.BaseWidget
 	Body    fyne.CanvasObject
 	Compact bool // summary bubbles use less inset than editable worklog cards
-	accent  color.Color
-	bg      *canvas.Rectangle
-	stripe  *canvas.Rectangle
-	hover   Glow
-	on      bool // lit now
-	over    bool // the pointer is on the bubble itself
-	inside  int  // links and tags inside it the pointer is on
-	present bool // the pointer is on the bubble or something in it
-	parent  func(on bool)
+	// TightBottom halves the inset under the body, for a body whose last row
+	// brings padding of its own, as Kanban's footer captions do.
+	TightBottom bool
+	accent      color.Color
+	bg          *canvas.Rectangle
+	stripe      *canvas.Rectangle
+	hover       Glow
+	on          bool // lit now
+	over        bool // the pointer is on the bubble itself
+	inside      int  // links and tags inside it the pointer is on
+	present     bool // the pointer is on the bubble or something in it
+	parent      func(on bool)
 }
 
 const stripeWidth = 4
@@ -502,12 +505,16 @@ func (b *StripeBubble) CreateRenderer() fyne.WidgetRenderer { return &stripeBubb
 
 type stripeBubbleRenderer struct{ b *StripeBubble }
 
-func (r *stripeBubbleRenderer) insets() (left, top, right float32) {
+func (r *stripeBubbleRenderer) insets() (left, top, right, bottom float32) {
 	pad := theme.Padding()
 	if r.b.Compact {
-		return 2*pad + stripeWidth, pad, pad
+		return 2*pad + stripeWidth, pad, pad, pad
 	}
-	return 3*pad + stripeWidth, 2 * pad, 2 * pad
+	bottom = 2 * pad
+	if r.b.TightBottom {
+		bottom = pad
+	}
+	return 3*pad + stripeWidth, 2 * pad, 2 * pad, bottom
 }
 
 func (r *stripeBubbleRenderer) Layout(size fyne.Size) {
@@ -515,15 +522,15 @@ func (r *stripeBubbleRenderer) Layout(size fyne.Size) {
 	b.bg.Move(fyne.NewPos(0, 0))
 	b.bg.Resize(size)
 	b.placeStripe(size)
-	left, top, right := r.insets()
+	left, top, right, bottom := r.insets()
 	b.Body.Move(fyne.NewPos(left, top))
-	b.Body.Resize(fyne.NewSize(max(size.Width-left-right, 0), max(size.Height-2*top, 0)))
+	b.Body.Resize(fyne.NewSize(max(size.Width-left-right, 0), max(size.Height-top-bottom, 0)))
 }
 
 func (r *stripeBubbleRenderer) MinSize() fyne.Size {
-	left, top, right := r.insets()
+	left, top, right, bottom := r.insets()
 	m := r.b.Body.MinSize()
-	return fyne.NewSize(m.Width+left+right, m.Height+2*top)
+	return fyne.NewSize(m.Width+left+right, m.Height+top+bottom)
 }
 
 func (r *stripeBubbleRenderer) Refresh() {
@@ -554,6 +561,9 @@ func HoverBubble(accent color.Color, body fyne.CanvasObject) *HoverArea {
 	a.ExtendBaseWidget(a)
 	return a
 }
+
+// Bubble is the bubble the area lights.
+func (a *HoverArea) Bubble() *StripeBubble { return a.bubble }
 
 // SetHoverParent tells the bubble what it sits in, such as a Kanban column,
 // to keep that lit while the pointer is on the bubble.

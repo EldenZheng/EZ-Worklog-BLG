@@ -62,8 +62,8 @@ func TestSprintIssueAndPRCardsHaveDistinctIconsAndLinks(t *testing.T) {
 		item                  backend.SprintItem
 		kind, icon, link, ref string
 	}{
-		{backend.SprintItem{URL: "https://github.com/owner/repo/issues/12", Kind: "Issue"}, backend.KanbanIssues, "kanban-issue.svg", "owner/repo#12", "owner/repo#12"},
-		{backend.SprintItem{URL: "https://github.com/owner/repo/pull/13?tab=files"}, backend.KanbanPullRequests, "kanban-pull-request.svg", "owner/repo#13", "owner/repo#13"},
+		{backend.SprintItem{URL: "https://github.com/owner/repo/issues/12", Kind: "Issue"}, backend.KanbanIssues, "kanban-issue.svg", "repo#12", "owner/repo#12"},
+		{backend.SprintItem{URL: "https://github.com/owner/repo/pull/13?tab=files"}, backend.KanbanPullRequests, "kanban-pull-request.svg", "repo#13", "owner/repo#13"},
 		{backend.SprintItem{Kind: "PullRequest"}, backend.KanbanPullRequests, "kanban-pull-request.svg", "", backend.ProjectShortName(b)},
 	} {
 		if tc.item.ItemType() != tc.kind || tc.item.RepositoryNumber(b) != tc.ref {

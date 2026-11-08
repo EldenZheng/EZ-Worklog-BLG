@@ -15,7 +15,7 @@ import (
 )
 
 // The resize hit area is inside the bubble's bottom edge.
-const PlannerPixelsPerMinute = float32(1.2)
+const PlannerPixelsPerMinute = float32(1.6)
 
 type plannerScale struct{ pixelsPerMinute float32 }
 

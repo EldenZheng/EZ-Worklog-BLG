@@ -40,6 +40,17 @@ func PlannerMeetingCandidate() backend.SprintCandidate {
 	}
 }
 
+// PlannerBlockMark is a block on the calendar that can be edged in gold while
+// its issue's tray card is under the pointer.
+type PlannerBlockMark interface{ SetMarked(on bool) }
+
+// MarkBlocks edges key's blocks on the calendar in gold, or clears them.
+func (k *KanbanUI) MarkBlocks(key string, on bool) {
+	for _, m := range k.BlockMarks[key] {
+		m.SetMarked(on)
+	}
+}
+
 type PlannerDragCard struct {
 	widget.BaseWidget
 	K         *KanbanUI
@@ -49,6 +60,8 @@ type PlannerDragCard struct {
 	lifted    bool
 	Hover     *PlannerDateTarget
 	Day       *PlannerDayHover
+	// OnTap, when set, runs on a click in place of opening the issue.
+	OnTap func()
 }
 
 func (c *PlannerDragCard) CreateRenderer() fyne.WidgetRenderer {
@@ -57,7 +70,13 @@ func (c *PlannerDragCard) CreateRenderer() fyne.WidgetRenderer {
 
 func (c *PlannerDragCard) Cursor() desktop.Cursor { return widgets.GrabCursor{} }
 
-func (c *PlannerDragCard) Tapped(*fyne.PointEvent) { Hooks.KanbanUIOpenCandidate(c.K, c.Candidate) }
+func (c *PlannerDragCard) Tapped(*fyne.PointEvent) {
+	if c.OnTap != nil {
+		c.OnTap()
+		return
+	}
+	Hooks.KanbanUIOpenCandidate(c.K, c.Candidate)
+}
 
 func (c *PlannerDragCard) Dragged(e *fyne.DragEvent) {
 	k := c.K
@@ -134,6 +153,10 @@ func (c *PlannerDragCard) MouseIn(*desktop.MouseEvent) {
 	if c.Day != nil {
 		c.Day.Enter(c)
 	}
+	if c.Index < 0 {
+		// A tray card points out where its issue is already planned.
+		c.K.MarkBlocks(c.Candidate.Key, true)
+	}
 	if !c.lifted && c.Index < 0 && c.K.CalendarDrag == nil && !c.K.CalendarResizing {
 		c.HighlightDates(nil)
 	}
@@ -147,6 +170,9 @@ func (c *PlannerDragCard) MouseOut() {
 	}
 	if c.Day != nil {
 		c.Day.Leave(c)
+	}
+	if c.Index < 0 {
+		c.K.MarkBlocks(c.Candidate.Key, false)
 	}
 	if !c.lifted && c.Index < 0 && c.K.CalendarDrag == nil && !c.K.CalendarResizing {
 		c.ResetDates()
@@ -211,9 +237,12 @@ type PlannerDayHover struct {
 	ClearView fyne.CanvasObject
 	ClearFade *SmallDelete
 	owner     fyne.CanvasObject
-	CanClear bool
-	Header   *fyne.Container
-	View     fyne.Canvas
+	// HoverHeight is how far down the day the pointer brings Delete in: the
+	// header, to the foot of its progress bar. 0 is the whole day.
+	HoverHeight float32
+	CanClear    bool
+	Header      *fyne.Container
+	View        fyne.Canvas
 }
 
 func (h *PlannerDayHover) CreateRenderer() fyne.WidgetRenderer {
@@ -221,6 +250,11 @@ func (h *PlannerDayHover) CreateRenderer() fyne.WidgetRenderer {
 }
 
 func (h *PlannerDayHover) Enter(owner fyne.CanvasObject) {
+	// Only the day's own header and its Delete bring Delete in: the blocks
+	// below, and their links and Deletes, have their own.
+	if owner != fyne.CanvasObject(h) && owner != fyne.CanvasObject(h.Clear) {
+		return
+	}
 	h.owner = owner
 	if h.CanClear {
 		h.showClear(true)
@@ -264,9 +298,15 @@ func (h *PlannerDayHover) refreshHeader() {
 	}
 }
 
-func (h *PlannerDayHover) MouseIn(*desktop.MouseEvent) { h.Enter(h) }
+func (h *PlannerDayHover) MouseIn(e *desktop.MouseEvent) { h.MouseMoved(e) }
 
-func (h *PlannerDayHover) MouseMoved(*desktop.MouseEvent) { h.Enter(h) }
+func (h *PlannerDayHover) MouseMoved(e *desktop.MouseEvent) {
+	if h.HoverHeight > 0 && e != nil && e.Position.Y > h.HoverHeight {
+		h.Leave(h)
+		return
+	}
+	h.Enter(h)
+}
 
 func (h *PlannerDayHover) MouseOut() { h.Leave(h) }
 

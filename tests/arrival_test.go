@@ -2,6 +2,7 @@ package tests
 
 import (
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -261,6 +262,13 @@ func TestSmallDeleteFadesInAndOut(t *testing.T) {
 		t.Fatal("fading in should show it")
 	}
 	d.FadeTo(false)
+	if d.Shown() {
+		t.Fatal("a Delete on its way out should not count as shown")
+	}
+	// It lingers a moment, then fades: wait for it to be gone.
+	for deadline := time.Now().Add(2 * time.Second); d.View.Visible() && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if d.View.Visible() || b.Visible() || changes != 2 {
 		t.Fatalf("fading out should hide it once done, and say so each time: %d changes", changes)
 	}

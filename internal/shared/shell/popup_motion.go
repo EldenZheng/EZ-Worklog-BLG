@@ -46,6 +46,15 @@ func easeOutCubic(p float32) float32 {
 	return 1 - q*q*q
 }
 
+// EaseInOutCubic starts and ends gently, fastest in the middle.
+func EaseInOutCubic(p float32) float32 {
+	if p < 0.5 {
+		return 4 * p * p * p
+	}
+	q := -2*p + 2
+	return 1 - q*q*q/2
+}
+
 // popupMotion is what an open popup's closing needs from its opening: the
 // backdrop at full strength, and the opening, if it is still running.
 type popupMotion struct {

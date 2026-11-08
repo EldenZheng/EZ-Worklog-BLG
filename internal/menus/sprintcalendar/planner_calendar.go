@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -64,6 +65,7 @@ func UniqueCurrentItems(k *shell.KanbanUI) []backend.SprintCandidate {
 }
 
 func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
+	k.BlockMarks = map[string][]shell.PlannerBlockMark{}
 	loadCalendarWorklogs(k, false)
 	work := CalendarWorkData(k)
 	// A period shown for the first time, or the tab opened, arrives as Kanban's
@@ -287,29 +289,68 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	axisSpacer := canvas.NewRectangle(color.Transparent)
 	axisSpacer.SetMinSize(fyne.NewSize(plannerRulerWidth, 0))
 	dates = container.NewBorder(container.NewBorder(nil, nil, axisSpacer, nil, weekdays), nil, nil, nil, dates)
-	unscheduled := []fyne.CanvasObject{PlannerCard(k, shell.PlannerMeetingCandidate(), -1)}
-	open := k.OpenCalendarItems()
-	for _, c := range open {
+	// The Issues | Pull Request key filters the tray, as Kanban's filters its
+	// cards; blocks already on the calendar stay.
+	var open []backend.SprintCandidate
+	for _, c := range k.OpenCalendarItems() {
+		if k.VisibleCalendarType(c.Item) {
+			open = append(open, c)
+		}
+	}
+	trayItems := append([]backend.SprintCandidate{shell.PlannerMeetingCandidate()}, open...)
+	var unscheduled []fyne.CanvasObject
+	for _, c := range trayItems {
 		unscheduled = append(unscheduled, PlannerCard(k, c, -1))
 	}
 	issues := len(open)
 	grid := container.NewVBox(unscheduled...)
-	trayScroll := shell.PanelScroll(grid, true)
-	trayScroll.SetMinSize(fyne.NewSize(250, 0))
-	k.CalendarIssueClip = trayScroll
-	var tray fyne.CanvasObject = trayScroll
+	noMatch := widget.NewLabel("No issues match the search.")
+	noMatch.Wrapping = fyne.TextWrapWord
+	grid.Add(noMatch)
+	// The search hides the cards that do not match in place, so the field
+	// keeps its focus while typing.
+	filterTray := func(query string) {
+		k.CalendarSearch = query
+		found := false
+		for i, c := range trayItems {
+			show := TrayMatches(c, query)
+			shell.ShowIf(unscheduled[i], show)
+			found = found || show
+		}
+		shell.ShowIf(noMatch, !found && issues > 0)
+		grid.Refresh()
+	}
+	search := shell.NewSearchEntry("Search issues", k.CalendarSearch, filterTray)
+	filterTray(k.CalendarSearch)
 	if issues == 0 {
 		empty := widget.NewLabel("No active issues in the selected sprint.")
 		empty.Wrapping = fyne.TextWrapWord
 		grid.Add(empty)
 	}
-	// Gold, with the count at the right in the same badge as Kanban's.
+	// Gold, with the count at the right in the same badge as Kanban's, then
+	// the search, with room under it before the capsule's edge.
 	trayHeading := canvas.NewText("Sprint Issues", widgets.LogoGold)
 	trayHeading.TextStyle = fyne.TextStyle{Bold: true}
-	trayTitle := container.NewBorder(nil, nil, container.NewCenter(trayHeading), container.NewCenter(shell.CountBadge(issues)))
+	trayTitle := container.NewVBox(
+		container.NewBorder(nil, nil, container.NewCenter(trayHeading), container.NewCenter(shell.CountBadge(issues))),
+		container.New(layout.NewCustomPaddedLayout(0, theme.Padding()*2, 0, 0), search))
+	// The heading floats in its own capsule over the top of the cards, which
+	// scroll the tray's full height and pass behind it, as a Kanban column's
+	// cards pass behind its title.
+	capsule := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameBackground), theme.Color(theme.ColorNameForeground), 0.14))
+	capsule.CornerRadius = 8
+	pad := theme.Padding()
+	heading := container.New(layout.NewCustomPaddedLayout(pad, 0, pad, pad), container.NewStack(capsule, container.NewPadded(trayTitle)))
+	inset := &shell.ColumnInset{}
+	// The tray keeps its own width whatever its cards hold: they wrap and
+	// shorten to it rather than pushing the calendar to the right.
+	trayScroll := container.NewVScroll(container.New(inset, container.New(trayWidthLayout{}, container.New(layout.NewCustomPaddedLayout(0, theme.InnerPadding(), theme.InnerPadding(), theme.InnerPadding()), grid))))
+	trayScroll.SetMinSize(fyne.NewSize(trayWidth, 0))
+	k.CalendarIssueClip = trayScroll
+	tray := container.New(&shell.FloatingHeaderLayout{Inset: inset, Gap: theme.InnerPadding() + 2}, shell.NoScrollShadow(trayScroll), heading)
 	// The issue tray is its own menu, so it sits in a rounded panel like
 	// Settings; the issues scroll inside it while the panel stays put.
-	sidebar := shell.PanelFrame(container.NewBorder(shell.PanelHead(trayTitle, true), nil, nil, nil, tray))
+	sidebar := shell.PanelFrame(tray)
 	var summaries []string
 	seenSprints := map[string]bool{}
 	for _, b := range k.Plan.Boards {
@@ -361,7 +402,15 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	// Work keep theirs by their controls.
 	// The legend scrolls sideways, so it takes the row's free width; beside the
 	// checkbox as a left part it was squeezed to nothing.
-	noteRow := container.NewBorder(nil, nil, nil, shell.SupportChoice(support, rota).View, k.ProjectLegend(true))
+	types := shell.ItemTypeControls(k.VisibleCalendarType, func(selected []string) {
+		chosen := append([]string{}, selected...)
+		p := k.Plan
+		p.CalendarTypes = &chosen
+		if k.Save(p) {
+			DrawKeepingCalendarScroll(k)
+		}
+	})
+	noteRow := container.NewBorder(nil, nil, nil, container.NewHBox(types, shell.SupportChoice(support, rota).View), k.ProjectLegend(true))
 	shell.ShowIf(periodNote, periodNote.Text != "")
 	legend := container.NewBorder(nil, nil, nil, shell.WeekCaption("Projects: GitHub · Gold: drafts/support · Purple: plans"), nil)
 	return container.NewBorder(container.NewVBox(toolbar, periodNote, noteRow), legend, sidebar, nil, dates)
@@ -373,6 +422,7 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 	hover := &shell.PlannerDayHover{View: k.Ui.Win.Canvas()}
 	hover.ExtendBaseWidget(hover)
 	hover.Clear = newPlannerDayClear(k, date, hover)
+	hover.HoverHeight = plannerDayBarBottom
 	type appointment struct {
 		c            backend.SprintCandidate
 		index, start int
@@ -386,11 +436,17 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 		}
 	}
 	sort.SliceStable(appointments, func(i, j int) bool { return appointments[i].start < appointments[j].start })
+	numbers := map[string]map[int][2]int{}
 	for _, a := range appointments {
-		card := plannerCardWithScale(k, a.c, a.index, scale).(*shell.PlannerDragCard)
+		if numbers[a.c.Key] == nil {
+			numbers[a.c.Key] = blockNumbers(k.Plan.Tasks[a.c.Key].Blocks, date)
+		}
+		nc := numbers[a.c.Key][a.index]
+		card := plannerCardTitled(k, a.c, a.index, scale, blockTitle(issueTitle(k, a.c.Item), nc[0], nc[1])).(*shell.PlannerDragCard)
 		card.Day = hover
 		face := card.Content.(*fyne.Container).Objects[0].(*PlannerTimedFace)
 		face.day = hover
+		k.BlockMarks[a.c.Key] = append(k.BlockMarks[a.c.Key], face)
 		list.Add(card)
 	}
 	hover.CanClear = len(appointments) > 0
@@ -413,7 +469,10 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 	reading := container.New(shell.SplitCaption{}, shell.WeekCaption(fmt.Sprintf("%dm GitHub", totals.Logged)), shell.WeekCaption(draftLabel))
 	planCaption := shell.WeekCaption(fmt.Sprintf("%dm planned", totals.Planned))
 	planCaption.Color = shell.PlannerPlanColor
-	heading := container.New(plannerDayHeaderLayout{}, dateCaption, shell.WeekCaption(PlannerDayPercentage(projected)), progress, hover.ClearView, reading, planCaption)
+	// What the day still has room for once GitHub, the drafts and the plans
+	// are counted, on the planned line.
+	left := container.New(shell.SplitCaption{}, planCaption, shell.WeekCaption(fmt.Sprintf("%dm left", max(0, backend.Target-projected))))
+	heading := container.New(plannerDayHeaderLayout{}, dateCaption, shell.WeekCaption(PlannerDayPercentage(projected)), progress, hover.ClearView, reading, left)
 	hover.Header = heading
 	base := shell.DayFill(totals.Logged, totals.Draft+totals.support+totals.Planned)
 	bg := canvas.NewRectangle(base)
@@ -438,6 +497,12 @@ func PlannerCard(k *shell.KanbanUI, c backend.SprintCandidate, index int) fyne.C
 }
 
 func plannerCardWithScale(k *shell.KanbanUI, c backend.SprintCandidate, index int, scale *plannerScale) fyne.CanvasObject {
+	return plannerCardTitled(k, c, index, scale, "")
+}
+
+// plannerCardTitled is a card whose block is called title ("" for the issue's
+// own title), as the numbered blocks of an issue planned twice in a day are.
+func plannerCardTitled(k *shell.KanbanUI, c backend.SprintCandidate, index int, scale *plannerScale, title string) fyne.CanvasObject {
 	b, it, ok := k.BoardItem(c)
 	if !ok {
 		return widget.NewLabel(c.Item.Title)
@@ -445,30 +510,45 @@ func plannerCardWithScale(k *shell.KanbanUI, c backend.SprintCandidate, index in
 	t := k.Plan.Tasks[c.Key]
 	finished := backend.PlannerIssueFinished(it, t)
 	duration := backend.SprintEstimate(it, t)
-	caption := fmt.Sprintf("%dm", duration)
-	if it.Complexity != "" {
-		caption += "\n" + it.Complexity
-	}
 	compact := index >= 0
-	if compact && index < len(t.Blocks) {
-		block := t.Blocks[index]
-		caption = fmt.Sprintf("%s–%s · %dm", backend.PlanClock(block.Start), backend.PlanClock(block.Start+block.Minutes), block.Minutes)
+	// A pull request links to the issue it works on, and is named after it.
+	linked := it
+	linked.URL = issueLink(k, it)
+	linked.Title = issueTitle(k, it)
+	var content fyne.CanvasObject
+	if c.Key == shell.PlannerMeetingKey {
+		// The meeting in the sidebar is a template, not a task: its title is
+		// enough.
+		content = k.Bubble(b, it, "", compact)
+	} else {
+		// Kanban's card, with the issue's planned block count as a gold badge
+		// at the right of its link, like the tray's own count.
+		var badge fyne.CanvasObject
+		if index < 0 && len(t.Blocks) > 0 {
+			badge = shell.CountBadge(len(t.Blocks))
+		}
+		body := shell.CardBody(b, it, shell.CardOptions{Link: linked.URL, LinkLabel: shell.ShortIssueRef(linked.URL), Title: linked.Title, Estimate: duration, Badge: badge})
+		if finished {
+			body.Add(widget.NewLabel("Completed"))
+		}
+		content = shell.Hooks.KanbanUIBubbleSurface(k, b, it, body)
 	}
-	if index < 0 && len(t.Blocks) > 0 {
-		caption += fmt.Sprintf("\n%d blocks planned · drag to add", len(t.Blocks))
-	}
-	if finished {
-		caption = "Completed · " + caption
-	}
-	// The meeting in the sidebar is a template, not a task: its title is enough.
-	if index < 0 && c.Key == shell.PlannerMeetingKey {
-		caption = ""
-	}
-	content := k.Bubble(b, it, caption, compact)
 	card := &shell.PlannerDragCard{K: k, Candidate: c, Index: index, Content: content}
 	if compact && index < len(t.Blocks) {
 		size := &PlannerDurationLayout{minutes: t.Blocks[index].Minutes, scale: scale}
-		face := newPlannerTimedFace(it.Title, "", it.URL, t.Blocks[index].Minutes, k.Accent(b, it))
+		if title == "" {
+			title = linked.Title
+		}
+		// A block's description rides where a project name would.
+		var icon fyne.Resource
+		if c.Key != shell.PlannerMeetingKey {
+			icon = it.TypeIcon()
+		}
+		face := newPlannerTimedFace(title, t.Blocks[index].Note, linked.URL, t.Blocks[index].Minutes, k.Accent(b, it), icon)
+		if c.Key == shell.PlannerMeetingKey {
+			// A meeting has no issue to open: a click describes it instead.
+			card.OnTap = func() { editMeetingNote(k, c, index) }
+		}
 		face.finished = finished
 		face.onDelete = func() { confirmDeleteBlock(k, c, index) }
 		card.Content = container.New(size, face)
@@ -496,4 +576,36 @@ func selectedCalendarSprint(k *shell.KanbanUI) backend.SprintIteration {
 		}
 	}
 	return backend.SprintIteration{}
+}
+
+// TrayMatches reports whether a tray card answers the search: its title,
+// owner/repo#number or link, ignoring case. An empty search matches all.
+func TrayMatches(c backend.SprintCandidate, query string) bool {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return true
+	}
+	ref, _ := backend.IssueRefFromAny(c.Item.URL)
+	for _, s := range []string{c.Item.Title, ref, c.Item.URL} {
+		if strings.Contains(strings.ToLower(s), query) {
+			return true
+		}
+	}
+	return false
+}
+
+// trayWidth is the Sprint Issues tray's width, whatever its cards hold.
+const trayWidth = float32(260)
+
+// trayWidthLayout asks for no width of its own, so the tray's width is fixed
+// and its one child is laid out to it.
+type trayWidthLayout struct{}
+
+func (trayWidthLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(0, objects[0].MinSize().Height)
+}
+
+func (trayWidthLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	objects[0].Move(fyne.Position{})
+	objects[0].Resize(size)
 }

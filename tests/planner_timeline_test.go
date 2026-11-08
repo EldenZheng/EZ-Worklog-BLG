@@ -62,7 +62,7 @@ func TestSprintKanbanColumnsFillRightViewportAndKeepSidebarWidth(t *testing.T) {
 func TestSprintCalendarBubbleEdgeHitTestResizesTheBubble(t *testing.T) {
 	ui, w, c := plannerFixture(t)
 	k := ui.Kanban
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{k.Week, 540, 60}, {k.Week, 720, 30}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 60}, {Date: k.Week, Start: 720, Minutes: 30}}}
 	kanban.Draw(k)
 	w.Content().Refresh()
 	var cards []*shell.PlannerDragCard
@@ -112,8 +112,8 @@ func TestSprintCalendarBubbleEdgeHitTestResizesTheBubble(t *testing.T) {
 
 func TestSprintCalendarClearPreservesOtherSprintsAndMetadata(t *testing.T) {
 	s := backend.SprintIteration{StartDate: "2026-11-02", Duration: 14}
-	inside := backend.PlanBlock{s.StartDate, 540, 60}
-	outside := backend.PlanBlock{"2026-12-01", 540, 60}
+	inside := backend.PlanBlock{Date: s.StartDate, Start: 540, Minutes: 60}
+	outside := backend.PlanBlock{Date: "2026-12-01", Start: 540, Minutes: 60}
 	original := backend.SprintPlan{Tasks: map[string]backend.SprintTask{
 		"mine":   {Estimate: 90, Notes: "keep me", Complexity: "M", Blocks: []backend.PlanBlock{inside, outside}},
 		"hidden": {Blocks: []backend.PlanBlock{inside}},
@@ -188,7 +188,7 @@ func TestSprintCalendarSidebarAndDropColorsWithTopProgressMeters(t *testing.T) {
 func TestSprintCalendarClearButtonConfirmsAndSavesLocally(t *testing.T) {
 	ui, w, c := plannerFixture(t)
 	k := ui.Kanban
-	k.Plan.Tasks[c.Key] = backend.SprintTask{Estimate: 90, Notes: "keep", Blocks: []backend.PlanBlock{{c.Sprint.StartDate, 540, 60}}}
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Estimate: 90, Notes: "keep", Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 540, Minutes: 60}}}
 	kanban.Draw(k)
 	var clear *widget.Button
 	walkCanvas(k.CalendarBody, func(o fyne.CanvasObject) {

@@ -12,6 +12,8 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
@@ -53,14 +55,22 @@ type KanbanUI struct {
 	CalendarBody, CalendarGhost         *fyne.Container
 	CalendarMessage                     *widget.Label
 	CalendarMode, Month                 string
-	Dates                               []*PlannerDateTarget
-	CalendarClip                        fyne.CanvasObject
-	CalendarIssueClip                   fyne.CanvasObject
-	CalendarDrawnMode                   string
-	CalendarOffsets                     map[string]fyne.Position
-	AutoStarted                         map[string]bool // issues already auto-started this session
-	AutoStartPending                    bool            // next board fetch should start today's planned issues
-	Pending                             map[string]KanbanPending
+	// CalendarSearch filters the Sprint Calendar's issue tray.
+	CalendarSearch string
+	// BlockMarks holds each issue's blocks drawn on the calendar, by key, so
+	// the tray card under the pointer can edge them in gold.
+	BlockMarks map[string][]PlannerBlockMark
+	// PRAsked is the pull requests looked up this session, answered or not,
+	// so a redraw does not ask GitHub again.
+	PRAsked           map[string]bool
+	Dates             []*PlannerDateTarget
+	CalendarClip      fyne.CanvasObject
+	CalendarIssueClip fyne.CanvasObject
+	CalendarDrawnMode string
+	CalendarOffsets   map[string]fyne.Position
+	AutoStarted       map[string]bool // issues already auto-started this session
+	AutoStartPending  bool            // next board fetch should start today's planned issues
+	Pending           map[string]KanbanPending
 	// Queue holds GitHub writes waiting their turn; Running is the one in
 	// flight. Writes go one at a time, in the order they were made.
 	Queue                      []*KanbanJob
@@ -225,12 +235,33 @@ func (k *KanbanUI) Accent(b backend.SprintBoard, it backend.SprintItem) color.NR
 }
 
 func (k *KanbanUI) Bubble(b backend.SprintBoard, it backend.SprintItem, caption string, compact bool) fyne.CanvasObject {
-	title := widget.NewLabelWithStyle(it.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	title.Wrapping = fyne.TextWrapWord
+	return k.BadgedBubble(b, it, caption, nil)
+}
+
+// BadgedBubble is Bubble with badge (a CountBadge, say) at the right of the
+// title's line. A nil badge leaves the title the whole width.
+func (k *KanbanUI) BadgedBubble(b backend.SprintBoard, it backend.SprintItem, caption string, badge fyne.CanvasObject) fyne.CanvasObject {
+	label := widget.NewLabelWithStyle(it.Title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	label.Wrapping = fyne.TextWrapWord
+	var title fyne.CanvasObject = label
+	var icon fyne.CanvasObject
+	if b.ID != plannerMeetingBoard.ID {
+		// The issue or pull request mark, gold as on Kanban's cards, level
+		// with the title's first line.
+		mark := container.NewThemeOverride(widget.NewIcon(it.TypeIcon()), widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+		icon = container.NewVBox(container.New(layout.NewCustomPaddedLayout(theme.InnerPadding()-2, 0, 0, 0), container.NewGridWrap(fyne.NewSize(16, 16), mark)))
+	}
+	var side fyne.CanvasObject
+	if badge != nil {
+		side = container.NewVBox(container.NewPadded(badge))
+	}
+	if icon != nil || side != nil {
+		title = container.NewBorder(nil, nil, icon, side, label)
+	}
 	if caption == "" {
 		body := container.NewVBox(title)
 		if it.URL != "" {
-			body.Add(GithubHyperlink("Open issue", it.URL))
+			body.Add(GithubHyperlink(IssueLinkLabel(it.URL), it.URL))
 		}
 		return Hooks.KanbanUIBubbleSurface(k, b, it, body)
 	}
