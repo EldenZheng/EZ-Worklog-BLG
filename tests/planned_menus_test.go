@@ -7,10 +7,12 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 
 	"worklog/internal/menus/loglist"
+	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/report"
 	"worklog/internal/menus/status"
 	"worklog/internal/shared/backend"
@@ -66,6 +68,60 @@ func TestWeekSummaryGivesDraftsAndPlansTheirOwnColouredSections(t *testing.T) {
 	}
 }
 
+// The tooltip's time left is the day without its plans: 480 less the 245 drafted
+// is 235, however much of that the 230 planned would fill.
+func TestPlannedTipLeftLeavesThePlanOut(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	day := "2026-08-15"
+	stubPlanned(t, map[string]int{day: 230})
+	old := shell.Hooks.PlannedLines
+	shell.Hooks.PlannedLines = func(*shell.UI, string, []backend.WorklogItem, []backend.Row) []shell.PlannedLine {
+		return []shell.PlannedLine{{Title: "Fix login", Minutes: 230}}
+	}
+	t.Cleanup(func() { shell.Hooks.PlannedLines = old })
+
+	col := logwork.WeekColumn(ui, day, nil, []backend.Row{{"date": day, "minutes": "245", "issue": "exampleorg/repo#7"}})
+	var tip *shell.TipCaption
+	walk(col, func(o fyne.CanvasObject) {
+		if c, ok := o.(*shell.TipCaption); ok {
+			tip = c
+		}
+	})
+	if tip == nil || tip.Body == nil {
+		t.Fatalf("no planned tooltip: %+v", tip)
+	}
+	if got := labels(tip.Body); !contains(got, "235m left without planned") {
+		t.Fatalf("tooltip says %v", got)
+	}
+}
+
+// The readout's + sections stay against the right edge, wrapped or not.
+func TestReadoutSectionsStayOnTheRight(t *testing.T) {
+	test.NewApp()
+	a, dot, b := sizedBox(300, 40), sizedBox(10, 40), sizedBox(300, 40)
+	l := &logwork.TrailingSectionsLayout{}
+	row := container.New(l, a, dot, b)
+	row.Resize(fyne.NewSize(700, 40))
+	if b.Position().X+300 != 700 || b.Position().Y != 0 || a.Position().X != 90 || !dot.Visible() {
+		t.Fatalf("one line, at the right: a %v b %v", a.Position(), b.Position())
+	}
+	row.Resize(fyne.NewSize(500, 200))
+	if a.Position().X+300 != 500 || b.Position().X+300 != 500 || b.Position().Y <= 0 {
+		t.Fatalf("wrapped lines stay at the right: a %v b %v", a.Position(), b.Position())
+	}
+	if dot.Visible() {
+		t.Fatal("a line must not end on a dot")
+	}
+	if h := l.MinSize(row.Objects).Height; h <= 40 {
+		t.Fatalf("two lines need more height: %g", h)
+	}
+	row.Resize(fyne.NewSize(700, 40))
+	if !dot.Visible() {
+		t.Fatal("back on one line the dot returns")
+	}
+}
+
 func TestStatusDayCarriesItsPlanInPurple(t *testing.T) {
 	ui := statusUI(t)
 	defer fyne.CurrentApp().Quit()
@@ -77,6 +133,24 @@ func TestStatusDayCarriesItsPlanInPurple(t *testing.T) {
 	}
 	if !strings.Contains(ui.CalSummary.Text, "240 min planned") {
 		t.Fatalf("the month should say what is planned: %q", ui.CalSummary.Text)
+	}
+}
+
+// The panel beside the calendar is what GitHub holds, not time management.
+func TestStatusDayPanelLeavesPlansOut(t *testing.T) {
+	ui := statusUI(t)
+	defer fyne.CurrentApp().Quit()
+	stubPlanned(t, map[string]int{"2026-08-11": 240})
+	ui.SelDay = "2026-08-11"
+	status.DrawCalendar(ui)
+
+	if contains(labels(ui.DaySwap), "planned") {
+		t.Fatalf("the day panel should not mention plans: %v", labels(ui.DaySwap))
+	}
+	for _, part := range ui.Meters["detail"].Target {
+		if part.Key == "@plan" {
+			t.Fatal("the day panel's bar should show GitHub's minutes only")
+		}
 	}
 }
 

@@ -171,7 +171,7 @@ func TestTabNamesAndIndicesMatchTheBarThatIsBuilt(t *testing.T) {
 	assemble.BuildAllTabs(ui)
 
 	want := []string{
-		shell.LogWorkTabName, shell.LogListTabName, shell.CommitListTabName, shell.MeetingTabName, shell.StatusTabName, shell.ReportTabName, shell.SettingsTabName, shell.KanbanTabName, shell.PlannerTabName,
+		shell.LogWorkTabName, shell.LogListTabName, shell.CommitListTabName, shell.MeetingTabName, shell.StatusTabName, shell.ReportTabName, shell.SettingsTabName, shell.KanbanTabName, shell.PlannerTabName, shell.ProjectsTabName,
 	}
 	if len(ui.Tabs.Items) != len(want) {
 		t.Fatalf("expected %d tabs, got %d", len(want), len(ui.Tabs.Items))
@@ -200,7 +200,7 @@ func TestOpenDayOnCalendarSwitchesTabs(t *testing.T) {
 	ui.Cfg = backend.Config{Repos: []string{"exampleorg"}} // no project URL: stays offline
 	assemble.BuildAllTabs(ui)
 
-	report.OpenDayOnCalendar(ui, "2026-07-15")
+	ui.OpenDayOnStatus("2026-07-15")
 	if ui.CalMonth != "2026-07" {
 		t.Fatalf("the calendar should follow the bar's month, got %q", ui.CalMonth)
 	}

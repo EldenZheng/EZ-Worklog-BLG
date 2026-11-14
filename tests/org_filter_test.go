@@ -2,13 +2,18 @@ package tests
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/report"
@@ -16,6 +21,74 @@ import (
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 )
+
+// A legend tap updates the report immediately while only that button fades.
+// Repeated taps replace that picture; stale frames cannot erase the new
+// fade, and leaving the tab clears it instead of painting over the next page.
+func TestOrgFilterFadesOnlyButtonAndCancelsCleanly(t *testing.T) {
+	ui := statusUI(t)
+	base := fyne.CurrentApp()
+	defer base.Quit()
+	ui.HasCfg = true
+	page := report.BuildReportTab(ui)
+	key := shell.ReportCacheKey(ui.RepMonth)
+	ui.ProjItems[key] = append([]backend.WorklogItem(nil), ui.ProjItems[shell.StatusCacheKey(ui.CalMonth)]...)
+	ui.ProjLoaded[key] = true
+	report.DrawReport(ui)
+	ui.Tabs = shell.NewPillTabs(container.NewTabItem("Report", page),
+		container.NewTabItem("Other", widget.NewLabel("another page")))
+	ui.Win.Resize(fyne.NewSize(1400, 1000))
+	shell.FitScreen(ui.Win, ui.Tabs)
+	// FitScreen settles its initial width on a timer. The test driver runs
+	// fyne.Do on that timer's goroutine, so let it finish before rendering
+	// snapshots; the font painter requires these operations to be serial.
+	time.Sleep(150 * time.Millisecond)
+	// This test changes tabs, not window widths. Keep the established layout
+	// without starting another deferred resize while the test driver swaps tabs.
+	ui.Win.Content().(*fyne.Container).Layout = layout.NewStackLayout()
+	driver := &cascadeFrameDriver{Driver: base.Driver()}
+	fyne.SetCurrentApp(&motionTestApp{App: base, driver: driver})
+	defer fyne.SetCurrentApp(base)
+	layer := ui.Win.Content().(*fyne.Container).Objects[1].(*fyne.Container)
+
+	button := tapKey(t, ui.RepBox, "exampleorg")
+	if ui.OrgShown("exampleorg") || driver.animation == nil || len(layer.Objects) != 1 {
+		t.Fatal("the report filter should apply immediately and leave a fading picture")
+	}
+	first := driver.animation
+	old := layer.Objects[0].(*canvas.Image)
+	if old.Size() != button.Size() {
+		t.Fatalf("only the button should fade: picture %v, button %v", old.Size(), button.Size())
+	}
+	first.Tick(.5)
+	if old.Translucency <= 0 || old.Translucency >= 1 {
+		t.Fatal("the old view should blend with the new view during the fade")
+	}
+	tapKey(t, ui.RepBox, "exampleorg")
+	second := driver.animation
+	if !ui.OrgShown("exampleorg") || second == first || len(layer.Objects) != 1 || layer.Objects[0] == old {
+		t.Fatal("a second tap should restore the org and replace the previous fade")
+	}
+	first.Tick(1)
+	if len(layer.Objects) != 1 {
+		t.Fatal("a cancelled animation must not remove the next fade")
+	}
+	second.Tick(1)
+	if len(layer.Objects) != 0 {
+		t.Fatal("a completed fade must leave no picture behind")
+	}
+	ui.ToggleOrg(shell.DraftsKey)
+	if len(layer.Objects) != 0 {
+		t.Fatal("a programmatic filter change should not fade the page")
+	}
+	tapKey(t, ui.RepBox, "exampleorg")
+	third := driver.animation
+	ui.Tabs.SelectIndex(1)
+	third.Tick(.25)
+	if len(layer.Objects) != 0 {
+		t.Fatal("switching tabs must clear the previous page's fade")
+	}
+}
 
 // The Report tab opens on the period today is being worked into. A period runs
 // the 21st to the 20th, so from the 21st the calendar month is the period that
@@ -167,7 +240,7 @@ func TestTheReportNamesWhatCarriesToTheNextPeriod(t *testing.T) {
 // tapKey finds the colour-key entry for an org and clicks it. The match is on
 // "<org> (" so that tapping exampleorg does not land on example-support, which
 // starts with the same letters.
-func tapKey(t *testing.T, root fyne.CanvasObject, org string) {
+func tapKey(t *testing.T, root fyne.CanvasObject, org string) *shell.Tappable {
 	t.Helper()
 	var hit *shell.Tappable
 	walk(root, func(o fyne.CanvasObject) {
@@ -185,6 +258,7 @@ func tapKey(t *testing.T, root fyne.CanvasObject, org string) {
 		t.Fatalf("no key entry for %q among %v", org, labels(root))
 	}
 	hit.Tapped(&fyne.PointEvent{})
+	return hit
 }
 
 // The target line is what a bar is being measured against, so it cannot be
@@ -365,8 +439,9 @@ func TestTheKeyFiltersTheSavedListAndTheWeekToo(t *testing.T) {
 }
 
 // The calendar is the other way round: a month of one org is one colour, and a
-// key naming the only colour on screen is furniture above the grid.
-func TestNoKeyWhenThereIsOnlyOneOrg(t *testing.T) {
+// chip naming the only org on screen is furniture above the grid. The draft and
+// plan colours still get named.
+func TestNoOrgChipWhenThereIsOnlyOneOrg(t *testing.T) {
 	ui := statusUI(t)
 	defer fyne.CurrentApp().Quit()
 
@@ -375,9 +450,108 @@ func TestNoKeyWhenThereIsOnlyOneOrg(t *testing.T) {
 		URL: "https://github.com/exampleorg/sample-intranet/issues/1"}}
 	status.DrawCalendar(ui)
 
-	if len(ui.CalLegend.Objects) != 0 {
-		t.Fatalf("a single org needs no key: %v", labels(ui.CalLegend))
+	got := labels(ui.CalLegend)
+	if !reflect.DeepEqual(got, []string{"Filter", shell.DraftLogsLabel, shell.PlannedIssuesLabel}) {
+		t.Fatalf("a single org needs no chip, only the two colour keys: %v", got)
 	}
+}
+
+// Drafts Logs is a filter like the orgs: its chip takes the drafts off Status
+// and off Log Work's week and list, says so, and stays in the key to undo it.
+func TestTheDraftKeyHidesDrafts(t *testing.T) {
+	ui := statusUI(t)
+	defer fyne.CurrentApp().Quit()
+	if _, err := ui.Store.AppendRows([]backend.Row{{"date": "2026-08-11", "minutes": "45", "type": "commit",
+		"issue": "exampleorg/sample-intranet#42", "description": "draft work"}}); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	status.DrawCalendar(ui)
+	if !strings.Contains(ui.CalSummary.Text, "45 min saved here") {
+		t.Fatalf("the draft should start on show: %q", ui.CalSummary.Text)
+	}
+	tapKey(t, ui.CalLegend, shell.DraftLogsLabel)
+	if strings.Contains(ui.CalSummary.Text, "saved here") {
+		t.Fatalf("the draft should be hidden: %q", ui.CalSummary.Text)
+	}
+	if !contains(labels(ui.CalLegend), shell.DraftLogsLabel) {
+		t.Fatalf("the key must stay to undo it: %v", labels(ui.CalLegend))
+	}
+	tapKey(t, ui.CalLegend, shell.DraftLogsLabel)
+	if !strings.Contains(ui.CalSummary.Text, "45 min saved here") {
+		t.Fatalf("tapping again should bring it back: %q", ui.CalSummary.Text)
+	}
+
+	log := weekUI(t)
+	if _, err := log.Store.AppendRows([]backend.Row{{"date": "2026-08-11", "minutes": "45", "type": "commit",
+		"issue": "exampleorg/sample-intranet#42", "description": "draft work"}}); err != nil {
+		t.Fatalf("seed rows: %v", err)
+	}
+	logwork.DrawRecent(log)
+	if n := len(dragTilesIn(log.WeekBox)); n != 1 {
+		t.Fatalf("the draft should stand on its day, got %d", n)
+	}
+	log.ToggleOrg(shell.DraftsKey)
+	if n := len(dragTilesIn(log.WeekBox)); n != 0 {
+		t.Fatalf("the draft should be off its day, got %d", n)
+	}
+	got := labels(log.RecentBox)
+	if !contains(got, "Drafts hidden by the filter") || contains(got, "Everything logged has been pushed to GitHub.") {
+		t.Fatalf("the list should say the filter hid them: %v", got)
+	}
+}
+
+// Tapping a key replays the content's entrance as well as fading its button.
+func TestTappingTheKeyReplaysTheArrival(t *testing.T) {
+	ui := statusUI(t)
+	defer fyne.CurrentApp().Quit()
+	reveals := func() int {
+		n := 0
+		walkCanvas(ui.CalBox, func(o fyne.CanvasObject) {
+			if _, ok := o.(*shell.Reveal); ok {
+				n++
+			}
+		})
+		return n
+	}
+	status.DrawCalendar(ui)
+	if n := reveals(); n != 0 {
+		t.Fatalf("a plain redraw should not replay the arrival, got %d", n)
+	}
+	tapKey(t, ui.CalLegend, "exampleorg")
+	if reveals() == 0 {
+		t.Fatal("tapping the key should replay the content's entrance")
+	}
+}
+
+// Drafts and plans close the legend on Log Work, Status and Report, after every
+// org, even a month when neither has any minutes.
+func TestDraftAndPlanKeysCloseEveryOrgLegend(t *testing.T) {
+	endsWithKeys := func(t *testing.T, got []string) {
+		t.Helper()
+		if len(got) < 2 || got[len(got)-2] != shell.DraftLogsLabel || got[len(got)-1] != shell.PlannedIssuesLabel {
+			t.Fatalf("the legend should end with the draft and plan keys: %v", got)
+		}
+	}
+
+	ui := statusUI(t)
+	defer fyne.CurrentApp().Quit()
+	endsWithKeys(t, labels(ui.CalLegend))
+
+	ui.HasCfg = true
+	ui.Win.SetContent(report.BuildReportTab(ui))
+	key := shell.ReportCacheKey("2026-08")
+	ui.ProjItems[key] = []backend.WorklogItem{{Date: "2026-08-11", Minutes: 120,
+		URL: "https://github.com/exampleorg/sample-intranet/issues/1"}}
+	ui.ProjLoaded[key] = true
+	report.DrawReport(ui)
+	got := labels(ui.RepBox)
+	if !inOrder(got, "exampleorg", shell.DraftLogsLabel, shell.PlannedIssuesLabel) {
+		t.Fatalf("the report's split should end with the two keys: %v", got)
+	}
+
+	log := pendingUI(t)
+	logwork.DrawLogLegend(log)
+	endsWithKeys(t, labels(log.LogLegend))
 }
 
 // The filter is one decision about what you are looking at, so it holds across

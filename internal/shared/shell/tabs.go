@@ -20,3 +20,6 @@ const (
 const KanbanTabName = "Kanban"
 
 const PlannerTabName = "Sprint Calendar"
+
+// ProjectsTabName stands beside the Sprint Calendar, at the right of the bar.
+const ProjectsTabName = "Projects"

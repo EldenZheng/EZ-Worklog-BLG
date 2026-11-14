@@ -6,6 +6,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 
@@ -63,16 +64,27 @@ func TestTheChartWashesColumnsThatFellShort(t *testing.T) {
 		}
 	}
 
-	// Hovering a short column still lights it up, over the wash rather than
-	// instead of it — the pointer must not make a short day look finished.
-	c.Hovered = 0
-	r.Layout(fyne.NewSize(900, 300))
-	hovered := r.Slots[0].Highlight.FillColor
-	if sameColor(hovered, shell.ShortFill()) {
-		t.Fatal("a hovered column should light up, not stay flat")
+	// The shared gold pill lights the hovered day while its semantic wash
+	// remains underneath, so a short day still reads as short.
+	c.MouseIn(&desktop.MouseEvent{PointEvent: fyne.PointEvent{Position: fyne.NewPos(report.ChartSideMargin+10, 50)}})
+	r.Layout(c.Size())
+	if !sameColor(r.Slots[0].Highlight.FillColor, shell.ShortFill()) {
+		t.Fatal("hover must preserve the short-day wash")
 	}
-	if sameColor(hovered, r.Slots[1].Highlight.FillColor) {
-		t.Fatal("a hovered short day must not look like a finished one")
+	var pill *canvas.Rectangle
+	for _, object := range r.Objects() {
+		if rect, ok := object.(*canvas.Rectangle); ok && rect.StrokeWidth == 1 {
+			if _, _, _, alpha := rect.StrokeColor.RGBA(); alpha > 0 {
+				pill = rect
+			}
+		}
+	}
+	if pill == nil || pill.Size().Width <= 0 {
+		t.Fatal("hover should show the shared gold pill")
+	}
+	c.MouseOut()
+	if _, _, _, alpha := pill.FillColor.RGBA(); alpha != 0 {
+		t.Fatal("leaving should fade the pill out")
 	}
 }
 

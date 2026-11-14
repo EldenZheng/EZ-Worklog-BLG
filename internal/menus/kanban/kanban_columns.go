@@ -2,11 +2,11 @@ package kanban
 
 import (
 	"image/color"
-	"strings"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
@@ -38,26 +38,10 @@ func ColumnOrder(k *shell.KanbanUI, status string) []ColumnCard {
 var PrimaryKanbanStatuses = []string{"Created", "Analysis - Investigation", "In Progress", "Pending Customer Feedback", "Pending Test", "Server Update Required", "In Review", "Done"}
 
 func KanbanStatusColor(name string) color.Color {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "created":
-		return shell.OrgUnknown
-	case "analysis - investigation":
-		return color.NRGBA{R: 22, G: 52, B: 88, A: 255}
-	case "in progress":
-		return color.NRGBA{R: 220, G: 183, B: 40, A: 255}
-	case "pending customer feedback":
-		return color.NRGBA{R: 58, G: 30, B: 82, A: 255}
-	case "pending test":
-		return color.NRGBA{R: 202, G: 104, B: 31, A: 255}
-	case "server update required":
-		return color.NRGBA{R: 205, G: 112, B: 161, A: 255}
-	case "in review":
-		return color.NRGBA{R: 126, G: 76, B: 177, A: 255}
-	case "done":
-		return color.NRGBA{R: 42, G: 127, B: 74, A: 255}
-	default:
-		return theme.Color(theme.ColorNameOverlayBackground)
+	if hue, ok := shell.StatusHue(name); ok {
+		return hue
 	}
+	return theme.Color(theme.ColorNameOverlayBackground)
 }
 
 // Keep the established status hues, but distribute them as soft surfaces and
@@ -110,7 +94,7 @@ func StatusColumns(k *shell.KanbanUI) (shown, extra []string) {
 		}
 	}
 	extra = append(extra, "No status")
-	ordered = append(ordered, extra...)
+	ordered = OrderColumns(k.Plan.KanbanColumnOrder, append(ordered, extra...))
 	for _, name := range ordered {
 		if k.ExtraStatuses == nil && primary[name] || k.ExtraStatuses != nil && k.ExtraStatuses[name] {
 			shown = append(shown, name)
@@ -133,7 +117,7 @@ func columnControls(k *shell.KanbanUI, extra []string) fyne.CanvasObject {
 			options = append(options, name)
 		}
 	}
-	options = append(options, extra...)
+	options = OrderColumns(k.Plan.KanbanColumnOrder, append(options, extra...))
 	if k.StatusChoices == nil {
 		group := widgets.NewCompactCheckGroup(options, func(selected []string) {
 			columns := append([]string{}, selected...)
@@ -151,8 +135,44 @@ func columnControls(k *shell.KanbanUI, extra []string) fyne.CanvasObject {
 			}
 			Draw(k)
 		})
+		// Dragging a check along the row reorders the columns, as dragging a
+		// column's heading does.
+		group.OnReorder = func(order []string) { MoveColumns(k, order) }
+		// The check being carried follows the pointer as a ghost in its
+		// column's colour, as a column's heading does when dragged.
+		var ghost fyne.CanvasObject
+		group.OnLift = func(name string, at fyne.Position) {
+			layer := k.GhostLayer
+			if layer == nil {
+				return
+			}
+			if ghost == nil {
+				k.Dragging = true
+				ghost = shell.DragGhost(name, 0, KanbanStatusColor(name))
+				layer.Objects = []fyne.CanvasObject{ghost}
+			}
+			origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(layer)
+			ghost.Move(at.Subtract(origin).Add(fyne.NewPos(12, 12)))
+			layer.Refresh()
+		}
+		group.OnLand = func(moved bool) {
+			ghost = nil
+			k.Dragging = false
+			if k.GhostLayer != nil {
+				k.GhostLayer.Objects = nil
+				k.GhostLayer.Refresh()
+			}
+			// A save that finished mid-drag held its redraw back.
+			if !moved && k.RedrawPending {
+				Draw(k)
+			}
+		}
 		k.StatusChoices = &group.CheckGroup
-		k.StatusChoiceView = container.NewHScroll(shell.GoldChoice(group))
+		// The checks can be dragged; the menu icon at the far right opens the
+		// column order, the plain way.
+		reorder := shell.QuietButton(widget.NewButtonWithIcon("", theme.MenuIcon(), func() { ShowColumnOrder(k) }))
+		k.StatusChoiceView = container.NewBorder(nil, nil, nil, container.NewCenter(reorder),
+			container.NewHScroll(shell.GoldChoice(group)))
 	}
 	k.StatusChoices.Options = options
 	k.StatusChoices.Selected = append([]string{}, shown...)

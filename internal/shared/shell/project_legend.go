@@ -6,6 +6,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -178,7 +179,7 @@ func (c *ProjectChip) DragEnd() {
 // ProjectLegend is a menu's project key: a filter, and the order projects stack
 // in. The chips count what that menu shows.
 func (k *KanbanUI) ProjectLegend(calendar bool) fyne.CanvasObject {
-	box := container.NewHBox(widget.NewLabelWithStyle("Projects", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
+	box := FilterGroup(layout.NewHBoxLayout(), widget.NewLabelWithStyle("Projects", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
 	row := &legendRow{layer: k.GhostLayer}
 	if calendar {
 		row.layer = k.CalendarGhost
@@ -191,6 +192,14 @@ func (k *KanbanUI) ProjectLegend(calendar bool) fyne.CanvasObject {
 		box.Add(chip)
 	}
 	scroll := container.NewHScroll(box)
+	previous := k.LegendClip
+	if calendar {
+		previous = k.CalendarLegendClip
+	}
+	if old, ok := previous.(*container.Scroll); ok {
+		scroll.Resize(old.Size())
+		scroll.ScrollToOffset(old.Offset)
+	}
 	row.clip = scroll
 	if calendar {
 		k.CalendarLegendClip = scroll

@@ -1,13 +1,17 @@
 package tests
 
 import (
+	"errors"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
@@ -17,6 +21,138 @@ import (
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
 )
+
+type refreshAnimationDriver struct {
+	fyne.Driver
+	animations []*fyne.Animation
+}
+
+func (d *refreshAnimationDriver) StartAnimation(a *fyne.Animation) {
+	d.animations = append(d.animations, a)
+}
+func (*refreshAnimationDriver) StopAnimation(*fyne.Animation) {}
+
+func TestSprintRefreshSpinsOnClickWithoutHoverAndSurvivesRedraw(t *testing.T) {
+	for _, noSprint := range []bool{false, true} {
+		for _, offline := range []bool{false, true} {
+			t.Run(map[bool]string{false: "sprint", true: "no sprint"}[noSprint]+map[bool]string{false: "/success", true: "/error"}[offline], func(t *testing.T) {
+				ui, w, _ := plannerFixture(t)
+				k := ui.Kanban
+				if noSprint {
+					k.Filter = "none"
+					k.Plan.Boards[0].Items = append(k.Plan.Boards[0].Items, backend.SprintItem{ID: "unscheduled", Title: "Unscheduled"})
+				}
+				ui.Cfg.KanbanBoards = []backend.KanbanSource{{URL: k.Plan.Boards[0].URL, Filter: backend.SprintProjectFilter}}
+				w.SetContent(k.Root)
+				kanban.Draw(k)
+				base := fyne.CurrentApp()
+				driver := &refreshAnimationDriver{Driver: base.Driver()}
+				fyne.SetCurrentApp(&motionTestApp{App: base, driver: driver})
+				defer fyne.SetCurrentApp(base)
+
+				oldGh, oldInline := backend.Gh, shell.RunAsyncInline
+				defer func() { backend.Gh, shell.RunAsyncInline = oldGh, oldInline }()
+				calls := 0
+				var spin *fyne.Animation
+				var lastIcon string
+				var button fyne.CanvasObject
+				icon := func() string {
+					var content string
+					for _, o := range test.WidgetRenderer(button.(fyne.Widget)).Objects() {
+						if image, ok := o.(*canvas.Image); ok && image.Resource != nil {
+							content = string(image.Resource.Content())
+						}
+					}
+					return content
+				}
+				backend.Gh = func([]string, ...string) (string, error) {
+					calls++
+					if !k.Loading {
+						t.Fatal("refresh must stay loading until the request completes")
+					}
+					for _, animation := range driver.animations {
+						if animation.Duration == 600*time.Millisecond && animation.RepeatCount == fyne.AnimationRepeatForever {
+							spin = animation
+						}
+					}
+					if spin == nil {
+						t.Fatal("click must start a looping rotation")
+					}
+					spin.Tick(.25)
+					if !strings.Contains(icon(), `rotate(90 12 12)`) {
+						t.Fatal("a quarter turn must rotate the refresh glyph clockwise")
+					}
+					spin.Tick(1)
+					spin.Tick(.6)
+					lastIcon = icon()
+					if !strings.Contains(lastIcon, `rotate(216 12 12)`) {
+						t.Fatal("refresh must keep turning after a full loop")
+					}
+					kanban.Draw(k)
+					if k.SprintRefresh != button || icon() != lastIcon {
+						t.Fatal("redraw while loading must retain the same angle and control")
+					}
+					before := calls
+					button.(fyne.Tappable).Tapped(nil)
+					if calls != before {
+						t.Fatal("an active load must not start another refresh")
+					}
+					if offline {
+						return "", errors.New("offline")
+					}
+					return `{"data":{"node":{"items":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}`, nil
+				}
+				shell.RunAsyncInline = true
+				button = k.SprintRefresh
+				if button == nil {
+					t.Fatal("selected sprint needs its refresh icon")
+				}
+				hover := button.(desktop.Hoverable)
+				hover.MouseIn(nil)
+				hover.MouseOut()
+				if calls != 0 || len(driver.animations) != 0 {
+					t.Fatal("hover must neither animate nor fetch")
+				}
+				button.(fyne.Tappable).Tapped(nil)
+				if calls == 0 || k.SprintRefresh != button {
+					t.Fatalf("click must fetch and keep the spinning control through the completed refresh: calls=%d same=%v loading=%v busy=%v", calls, k.SprintRefresh == button, k.Loading, k.Busy)
+				}
+				var settle *fyne.Animation
+				for _, animation := range driver.animations {
+					if animation.Duration > 450*time.Millisecond && animation.Duration < 500*time.Millisecond && animation.Curve(.5) == .75 {
+						settle = animation
+					}
+				}
+				if settle == nil || settle.RepeatCount == fyne.AnimationRepeatForever || !strings.Contains(icon(), `rotate(216 12 12)`) || k.Loading {
+					t.Fatal("completion must ease out from the loop's last angle")
+				}
+				lastIcon = icon()
+				spin.Tick(.9)
+				if icon() != lastIcon {
+					t.Fatal("a stale loop frame must not interrupt the smooth stop")
+				}
+				if first, last := settle.Curve(.1)-settle.Curve(0), settle.Curve(1)-settle.Curve(.9); first <= last || last > .02 {
+					t.Fatal("the final turn must slow down near rest")
+				}
+				settle.Tick(settle.Curve(.5))
+				if icon() == lastIcon {
+					t.Fatal("completion must keep moving before it comes to rest")
+				}
+				settle.Tick(1)
+				if strings.Contains(icon(), "rotate(") {
+					t.Fatal("rotation must restore the original refresh glyph")
+				}
+				before := calls
+				k.Loading = true
+				button.(fyne.Tappable).Tapped(nil)
+				k.Loading = false
+				if calls != before {
+					t.Fatal("an active load must not start another refresh")
+				}
+			})
+		}
+	}
+}
 
 func TestSprintSidebarMergesBoardsAndHidesZeroCounts(t *testing.T) {
 	ui, _, c := plannerFixture(t)
@@ -117,25 +253,20 @@ func TestSprintResizeGripChangesOnlyLocalDuration(t *testing.T) {
 	if k.Plan.Boards[0].Items[0].Effort != 90 || k.Busy {
 		t.Fatal("resize changed GitHub estimate")
 	}
-	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 720, Minutes: 60}}}
-	// Growing into the next block pushes it later rather than refusing.
+	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Minutes: 60, Pos: 1}}}
+	// Growing a block changes only its own minutes: the others keep theirs
+	// and their places.
 	grown, err := backend.ResizePlannerBlock(p, c.Key, 0, 240)
-	if err != nil || grown.Tasks["busy"].Blocks[0].Start != 780 || grown.Tasks["busy"].Blocks[0].Minutes != 60 {
-		t.Fatal("growing a block did not push the next one later", err, grown.Tasks["busy"])
+	if err != nil || grown.Tasks[c.Key].Blocks[0].Minutes != 240 || grown.Tasks["busy"].Blocks[0] != p.Tasks["busy"].Blocks[0] {
+		t.Fatal("growing a block changed another", err, grown.Tasks)
 	}
-	if p.Tasks["busy"].Blocks[0].Start != 720 {
+	if p.Tasks[c.Key].Blocks[0].Minutes != 120 {
 		t.Fatal("resize changed the original plan")
 	}
-	p.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 540, Minutes: 90}, {Date: c.Sprint.StartDate, Start: 660, Minutes: 30}}}
-	grown, err = backend.ResizePlannerBlock(p, c.Key, 0, 180)
-	if err != nil || grown.Tasks[c.Key].Blocks[1].Start != 720 || grown.Tasks["busy"].Blocks[0].Start != 750 {
-		t.Fatal("growing a block did not push the issue's own next block and the one after it", err, grown.Tasks)
-	}
-	// A push that would run the day past midnight is refused.
-	p.Tasks["late"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 1380, Minutes: 60}}}
-	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Start: 630, Minutes: 750}}}
+	// A day cannot hold more than 24 hours.
+	p.Tasks["busy"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: c.Sprint.StartDate, Minutes: 1380, Pos: 1}}}
 	if _, err = backend.ResizePlannerBlock(p, c.Key, 0, 105); err == nil {
-		t.Fatal("a push past the end of the day was accepted")
+		t.Fatal("a resize past a full day was accepted")
 	}
 }
 

@@ -17,6 +17,9 @@ import (
 // draws the live commits in one and the ignored ones in another.
 func flowGrids(o fyne.CanvasObject) []*fyne.Container {
 	var out []*fyne.Container
+	if f, ok := o.(*shell.Fold); ok {
+		return flowGrids(f.Content)
+	}
 	c, ok := o.(*fyne.Container)
 	if !ok {
 		return nil
@@ -127,9 +130,22 @@ func TestIgnoreAndRestoreAPendingCommit(t *testing.T) {
 
 	// Opening the section shows it with a Restore button, and restoring puts it
 	// back in the list and back on disk.
-	tapButton(t, ui.PendingBox, "Show 1 ignored")
+	if ui.IgnoredToggle == nil || ui.IgnoredToggle.Text != "Show 1 ignored" {
+		t.Fatal("the ignored toggle should offer to show the ignored commit")
+	}
+	ui.IgnoredToggle.Tapped(nil)
 	if grids = flowGrids(ui.PendingBox); len(grids) != 2 {
 		t.Fatalf("the ignored tiles need their own grid, got %d", len(grids))
+	}
+	// Hiding slides them shut and takes them out of the list; showing brings
+	// them back. (The test driver runs each slide straight to its end.)
+	ui.IgnoredToggle.Tapped(nil)
+	if grids = flowGrids(ui.PendingBox); len(grids) != 1 || ui.IgnoredToggle.Text != "Show 1 ignored" {
+		t.Fatalf("hiding should leave only the list, got %d grid(s), %q", len(grids), ui.IgnoredToggle.Text)
+	}
+	ui.IgnoredToggle.Tapped(nil)
+	if grids = flowGrids(ui.PendingBox); len(grids) != 2 || ui.IgnoredToggle.Text != "Hide 1 ignored" {
+		t.Fatalf("showing again should bring the tiles back, got %d grid(s), %q", len(grids), ui.IgnoredToggle.Text)
 	}
 	tapButton(t, grids[1], "Restore")
 

@@ -266,6 +266,10 @@ func TestMeetingBubbleIsAlwaysAvailable(t *testing.T) {
 	if got := sprintcalendar.PlannedMinutes(ui, outside, nil, nil); got != 60 {
 		t.Fatalf("Log Work would not see the meeting: %d", got)
 	}
+	ui.OrgOff = map[string]bool{shell.PlansKey: true}
+	if got := sprintcalendar.PlannedMinutes(ui, outside, nil, nil); got != 0 {
+		t.Fatalf("the key should hide planned time: %d", got)
+	}
 }
 
 func TestPlannedBarPartsAddsPurpleAfterLoggedAndDrafts(t *testing.T) {

@@ -34,6 +34,7 @@ func confirmClearDay(k *shell.KanbanUI, date string) {
 	ConfirmRemoval(k, "Delete "+date, fmt.Sprintf("Remove %d local time blocks from %s for the visible project issues?", count, date), "Delete", func() {
 		p, _ := backend.ClearPlannerDay(k.Plan, ScheduledItems(k), date)
 		if k.Save(p) {
+			k.Ui.ReplayArrival("planner")
 			k.SetMessage("Local schedule cleared for " + date + ".")
 			shell.Hooks.KanbanUIDraw(k)
 		}
@@ -81,7 +82,7 @@ func confirmDeleteBlock(k *shell.KanbanUI, c backend.SprintCandidate, index int)
 		return
 	}
 	b := blocks[index]
-	when := fmt.Sprintf("%s, %s–%s", b.Date, backend.PlanClock(b.Start), backend.PlanClock(b.Start+b.Minutes))
+	when := fmt.Sprintf("%s, %d min", b.Date, b.Minutes)
 	ConfirmRemoval(k, "Delete time block", fmt.Sprintf("Remove %s (%s) from the calendar? Its other blocks, estimate and notes are kept; GitHub is unchanged.", c.Item.Title, when), "Delete", func() {
 		p, err := backend.RemovePlannerBlock(k.Plan, c.Key, index, b)
 		if err != nil {
@@ -89,6 +90,7 @@ func confirmDeleteBlock(k *shell.KanbanUI, c backend.SprintCandidate, index int)
 			return
 		}
 		if k.Save(p) {
+			k.Ui.ReplayArrival("planner")
 			k.SetMessage("Time block removed · saved locally.")
 			shell.Hooks.KanbanUIDrawKeepingCalendarScroll(k)
 		}

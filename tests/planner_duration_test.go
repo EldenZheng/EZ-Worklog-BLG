@@ -74,6 +74,35 @@ func TestSprintDurationAllocationRoundsLocallyAndPreservesAppointments(t *testin
 	}
 }
 
+func TestFinishedCalendarBlocksKeepTheirDayCapacity(t *testing.T) {
+	s := backend.SprintIteration{StartDate: "2026-11-02", Duration: 1}
+	p := backend.SprintPlan{Tasks: map[string]backend.SprintTask{
+		"done": {Done: true, Blocks: []backend.PlanBlock{{Date: s.StartDate, Minutes: 450}}},
+		"open": {Blocks: []backend.PlanBlock{{Date: s.StartDate, Minutes: 30}}},
+	}}
+	c := backend.SprintCandidate{Key: "new", Item: backend.SprintItem{Effort: 60}, Sprint: s}
+	if _, ok := backend.PlannerSlot(p, c, -1, s.StartDate); ok {
+		t.Fatal("drop ignored the finished block's reserved minutes")
+	}
+	tasks, unplaced := backend.AllocateSprint(p, []backend.SprintCandidate{c}, s.StartDate)
+	if len(unplaced) != 1 || len(tasks[c.Key].Blocks) != 0 || !reflect.DeepEqual(tasks["done"], p.Tasks["done"]) {
+		t.Fatal("allocation ignored or changed the finished block", tasks, unplaced)
+	}
+	if _, err := backend.ResizePlannerBlock(p, "open", 0, 1005); err == nil {
+		t.Fatal("resize ignored the finished block and exceeded 24 hours")
+	}
+	if _, err := backend.ResizePlannerBlock(p, "open", 0, 990); err != nil {
+		t.Fatal("resize should allow exactly 24 hours including the finished block", err)
+	}
+	finished := backend.SprintCandidate{Key: "done", Sprint: s}
+	if _, ok := backend.PlannerSlot(p, finished, 0, s.StartDate); !ok {
+		t.Fatal("moving a finished block counted its existing minutes twice")
+	}
+	if _, ok := backend.PlannerSlot(p, finished, -1, s.StartDate); ok {
+		t.Fatal("finished tray issue should not create a new block")
+	}
+}
+
 func TestSprintDurationRulerFollowsResizeAndUsesMinuteLabels(t *testing.T) {
 	ui, _, c := plannerFixture(t)
 	k := ui.Kanban

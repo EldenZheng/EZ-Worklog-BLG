@@ -15,7 +15,7 @@ import (
 )
 
 // UnderlineTabs picks one of a few options, drawn as a row of large labels:
-// the picked one bright with a gold line under it, the rest dimmed. Picking
+// the picked one gold with a gold line under it, the rest dimmed. Picking
 // another slides the line across to it. It keeps RadioGroup's Options,
 // Selected, OnChanged and SetSelected, so it stands in for one.
 type UnderlineTabs struct {
@@ -23,9 +23,32 @@ type UnderlineTabs struct {
 	Options   []string
 	Selected  string
 	OnChanged func(string)
+	// Trailing is how many of the last options stand at the right end of the
+	// row, apart from the rest, when the row is wider than they all need.
+	Trailing int
+	// Inks gives an option its own colour while it is not picked, in place of
+	// the dimmed foreground.
+	Inks map[string]color.Color
+	// Action is an option that does something rather than being picked, such
+	// as a + at the end that adds another: tapping it runs OnAction and leaves
+	// the pick where it was.
+	Action   string
+	OnAction func()
+	// OnMenu, when set, gives the picked option a drop-down arrow: tapping the
+	// picked option again runs OnMenu with the option and its label, to drop
+	// a menu from under it. Tapping another option picks it as usual.
+	OnMenu func(option string, anchor fyne.CanvasObject)
+	// OnReorder, when set, lets the options be dragged along the row into a
+	// new order, which it is handed when one is dropped somewhere new. The
+	// Action option stays where it is, at the end.
+	OnReorder func(order []string)
 
-	items        []*underlineTab
-	line, track  *canvas.Rectangle
+	items       []*underlineTab
+	line, track *canvas.Rectangle
+	// drop marks where a dragged option would land; order is what dropping
+	// it there makes, nil while that is the order already.
+	drop         *canvas.Rectangle
+	order        []string
 	lineX, lineW float32
 	slide        *fyne.Animation
 }
@@ -54,7 +77,13 @@ func (t *UnderlineTabs) SetSelected(option string) {
 		return
 	}
 	t.Selected = option
-	t.paint()
+	for _, item := range t.items {
+		target := float32(0)
+		if item.option == option {
+			target = 1
+		}
+		item.ease(&item.pick, target)
+	}
 	t.slideLine()
 	if t.OnChanged != nil {
 		t.OnChanged(option)
@@ -74,28 +103,44 @@ func (t *UnderlineTabs) CreateRenderer() fyne.WidgetRenderer {
 	objects := []fyne.CanvasObject{t.track}
 	for _, option := range t.Options {
 		item := newUnderlineTab(t, option)
+		if option == t.Selected {
+			item.pick.level = 1 // already picked: no fade on first draw
+		}
 		t.items = append(t.items, item)
 		objects = append(objects, item)
 	}
-	objects = append(objects, t.line)
+	t.drop = canvas.NewRectangle(widgets.LogoGold)
+	t.drop.CornerRadius = 1.5
+	t.drop.Hide()
+	objects = append(objects, t.drop, t.line)
 	t.paint()
 	return &underlineTabsRenderer{t: t, objects: objects}
 }
 
-// paint colours each label by whether it is picked or under the pointer.
+// paint colours each label by how far it is picked and under the pointer.
 func (t *UnderlineTabs) paint() {
+	for _, item := range t.items {
+		t.paintItem(item)
+	}
+}
+
+// paintItem colours one label: dimmed at rest (or its own ink), brighter under
+// the pointer, and the line's gold once picked. Both levels ease, so the
+// colour fades between them rather than jumping.
+func (t *UnderlineTabs) paintItem(item *underlineTab) {
 	ink := theme.Color(theme.ColorNameForeground)
 	bg := theme.Color(theme.ColorNameBackground)
-	for _, item := range t.items {
-		share := float32(tabDimmedShare)
-		switch {
-		case item.option == t.Selected:
-			share = 0
-		case item.hovered:
-			share = tabHoveredShare
-		}
-		item.text.Color = BlendColor(ink, bg, share)
-		item.text.Refresh()
+	share := tabDimmedShare + (tabHoveredShare-tabDimmedShare)*item.hover.level
+	if own, ok := t.Inks[item.option]; ok {
+		ink = own // dimmed the same as the others, so it reads as unfocused
+	}
+	rest := BlendColor(ink, bg, share)
+	item.text.Color = MixColor(rest, widgets.LogoGold, item.pick.level)
+	item.text.Refresh()
+	// The arrow fades in with the pick, so only the picked option shows one.
+	if item.arrow != nil {
+		item.arrow.Translucency = float64(1 - item.pick.level)
+		item.arrow.Refresh()
 	}
 }
 
@@ -157,8 +202,12 @@ type underlineTabsRenderer struct {
 }
 
 func (r *underlineTabsRenderer) Layout(size fyne.Size) {
-	x := float32(0)
-	for _, item := range r.t.items {
+	x, need := float32(0), r.MinSize().Width
+	lead := len(r.t.items) - min(max(r.t.Trailing, 0), len(r.t.items))
+	for i, item := range r.t.items {
+		if i == lead && size.Width > need {
+			x += size.Width - need // the trailing ones go to the right end
+		}
 		m := item.MinSize()
 		item.Move(fyne.NewPos(x, 0))
 		item.Resize(fyne.NewSize(m.Width, size.Height))
@@ -202,10 +251,41 @@ func (r *underlineTabsRenderer) Destroy() {
 // underlineTab is one label in the row.
 type underlineTab struct {
 	widget.BaseWidget
-	owner   *UnderlineTabs
-	option  string
-	text    *canvas.Text
-	hovered bool
+	owner       *UnderlineTabs
+	option      string
+	text        *canvas.Text
+	arrow       *canvas.Image // the drop-down arrow, gold like the picked label
+	hover, pick Glow
+}
+
+// hasMenu says whether the option carries a drop-down arrow.
+func (i *underlineTab) hasMenu() bool {
+	return i.owner.OnMenu != nil && i.option != i.owner.Action
+}
+
+const (
+	tabArrowSize = float32(18)
+	tabArrowGap  = float32(2)
+)
+
+// tabArrow is the drop-down arrow beside a tab with a menu: the same filled
+// triangle a drop-down field shows, in the logo's gold.
+var tabArrow = fyne.NewStaticResource("tab-arrow.svg", []byte(
+	`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#cda236" d="M7 10l5 5 5-5z"/></svg>`))
+
+// ease fades one of the label's levels to target, or sets it at once with
+// animations off.
+func (i *underlineTab) ease(g *Glow, target float32) {
+	if !animationsOn() {
+		if g.anim != nil {
+			g.anim.Stop()
+			g.anim = nil
+		}
+		g.level = target
+		i.owner.paintItem(i)
+		return
+	}
+	g.To(target, func(float32) { i.owner.paintItem(i) })
 }
 
 func newUnderlineTab(owner *UnderlineTabs, option string) *underlineTab {
@@ -213,24 +293,77 @@ func newUnderlineTab(owner *UnderlineTabs, option string) *underlineTab {
 	text.TextSize = theme.TextSize() + tabTextGrowth
 	text.TextStyle = fyne.TextStyle{Bold: true}
 	item := &underlineTab{owner: owner, option: option, text: text}
+	item.arrow = canvas.NewImageFromResource(tabArrow)
+	item.arrow.FillMode = canvas.ImageFillContain
+	item.arrow.Translucency = 1
 	item.ExtendBaseWidget(item)
 	return item
 }
 
-func (i *underlineTab) Tapped(*fyne.PointEvent) { i.owner.SetSelected(i.option) }
-func (i *underlineTab) Cursor() desktop.Cursor  { return desktop.PointerCursor }
-
-func (i *underlineTab) MouseIn(*desktop.MouseEvent) {
-	i.hovered = true
-	i.owner.paint()
+func (i *underlineTab) Tapped(*fyne.PointEvent) {
+	if o := i.owner; o.OnAction != nil && i.option == o.Action {
+		o.OnAction()
+		return
+	}
+	if i.hasMenu() && i.option == i.owner.Selected {
+		i.owner.OnMenu(i.option, i)
+		return
+	}
+	i.owner.SetSelected(i.option)
 }
+func (i *underlineTab) Cursor() desktop.Cursor { return desktop.PointerCursor }
+
+// Dragged moves the drop mark to where the option would land.
+func (i *underlineTab) Dragged(e *fyne.DragEvent) {
+	t := i.owner
+	if t.OnReorder == nil || i.option == t.Action || t.drop == nil {
+		return
+	}
+	x := i.Position().X + e.Position.X
+	var spans []ChipSpan
+	var current []string
+	for _, item := range t.items {
+		if item.option == t.Action {
+			continue
+		}
+		left := item.Position().X
+		spans = append(spans, ChipSpan{item.option, left, left + item.Size().Width})
+		current = append(current, item.option)
+	}
+	order, lineX := LegendSlot(spans, i.option, x, 0)
+	t.order = nil
+	t.drop.Hide()
+	if !slices.Equal(order, current) {
+		t.order = order
+		t.drop.Move(fyne.NewPos(lineX-1.5, tabEndPadding/2))
+		t.drop.Resize(fyne.NewSize(3, t.Size().Height-tabEndPadding))
+		t.drop.Show()
+	}
+	t.drop.Refresh()
+}
+
+// DragEnd hands the new order over, the Action option back on the end.
+func (i *underlineTab) DragEnd() {
+	t := i.owner
+	if t.drop != nil {
+		t.drop.Hide()
+	}
+	order := t.order
+	t.order = nil
+	if order == nil || t.OnReorder == nil {
+		return
+	}
+	if t.Action != "" && slices.Contains(t.Options, t.Action) {
+		order = append(order, t.Action)
+	}
+	t.OnReorder(order)
+}
+
+func (i *underlineTab) MouseIn(*desktop.MouseEvent) { i.ease(&i.hover, 1) }
 
 func (i *underlineTab) MouseMoved(*desktop.MouseEvent) {}
 
-func (i *underlineTab) MouseOut() {
-	i.hovered = false
-	i.owner.paint()
-}
+func (i *underlineTab) MouseOut() { i.ease(&i.hover, 0) }
 
 func (i *underlineTab) CreateRenderer() fyne.WidgetRenderer {
 	return &underlineTabRenderer{i: i}
@@ -238,15 +371,33 @@ func (i *underlineTab) CreateRenderer() fyne.WidgetRenderer {
 
 type underlineTabRenderer struct{ i *underlineTab }
 
+// arrowRoom is the width the drop-down arrow takes beside the label.
+func (r *underlineTabRenderer) arrowRoom() float32 {
+	if r.i.hasMenu() {
+		return tabArrowGap + tabArrowSize
+	}
+	return 0
+}
+
 func (r *underlineTabRenderer) Layout(size fyne.Size) {
 	m := r.i.text.MinSize()
-	r.i.text.Move(fyne.NewPos((size.Width-m.Width)/2, (size.Height-tabLineHeight-m.Height)/2))
+	x := (size.Width - m.Width - r.arrowRoom()) / 2
+	y := (size.Height - tabLineHeight - m.Height) / 2
+	r.i.text.Move(fyne.NewPos(x, y))
 	r.i.text.Resize(m)
+	// The arrow sits just after the label, centred on its line.
+	r.i.arrow.Move(fyne.NewPos(x+m.Width+tabArrowGap, y+(m.Height-tabArrowSize)/2))
+	r.i.arrow.Resize(fyne.NewSquareSize(tabArrowSize))
+	if r.i.hasMenu() {
+		r.i.arrow.Show()
+	} else {
+		r.i.arrow.Hide()
+	}
 }
 
 func (r *underlineTabRenderer) MinSize() fyne.Size {
 	m := r.i.text.MinSize()
-	return fyne.NewSize(m.Width+tabSidePadding*2, m.Height+tabEndPadding*2+tabLineHeight)
+	return fyne.NewSize(m.Width+r.arrowRoom()+tabSidePadding*2, m.Height+tabEndPadding*2+tabLineHeight)
 }
 
 func (r *underlineTabRenderer) Refresh() {
@@ -255,5 +406,7 @@ func (r *underlineTabRenderer) Refresh() {
 	canvas.Refresh(r.i)
 }
 
-func (r *underlineTabRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.i.text} }
-func (r *underlineTabRenderer) Destroy()                     {}
+func (r *underlineTabRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.i.text, r.i.arrow}
+}
+func (r *underlineTabRenderer) Destroy() {}

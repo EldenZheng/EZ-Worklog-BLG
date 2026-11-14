@@ -125,6 +125,20 @@ type Config struct {
 	// as "#RRGGBB" hex. Anything absent falls back to orgPalette in the order
 	// the org appears under Repos.
 	OrgColors map[string]string `json:"org_colors,omitempty"`
+	// ReportMonths is how many months the Projects finished report shows at a
+	// time. Zero means one.
+	ReportMonths int `json:"finished_report_months,omitempty"`
+}
+
+// MaxReportMonths is the longest page Settings takes for the finished report.
+const MaxReportMonths = 120
+
+// FinishedReportMonths is cfg's finished report page length, one by default.
+func FinishedReportMonths(cfg Config) int {
+	if cfg.ReportMonths < 1 {
+		return 1
+	}
+	return cfg.ReportMonths
 }
 
 func DefaultConfig() Config {

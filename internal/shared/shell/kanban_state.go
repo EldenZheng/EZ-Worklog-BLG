@@ -57,6 +57,19 @@ type KanbanUI struct {
 	CalendarMode, Month                 string
 	// CalendarSearch filters the Sprint Calendar's issue tray.
 	CalendarSearch string
+	// CalendarShowDone opens the tray's Done section, folded by default.
+	CalendarShowDone bool
+	// TrayCards are the Sprint Issues tray's open issue cards, top to bottom,
+	// which a tray card dragged among them is reordered against. TraySlot is
+	// the gap under the pointer, and TrayDropLine marks it.
+	TrayCards    []*PlannerDragCard
+	TraySlot     KanbanSlot
+	TrayDropLine *canvas.Rectangle
+	// DayCards are each calendar day's blocks, top to bottom, which a card
+	// dropped on that day is placed among; DaySlot is the gap under the
+	// pointer, marked by the same gold line.
+	DayCards map[string][]*PlannerDragCard
+	DaySlot  KanbanSlot
 	// BlockMarks holds each issue's blocks drawn on the calendar, by key, so
 	// the tray card under the pointer can edge them in gold.
 	BlockMarks map[string][]PlannerBlockMark
@@ -84,6 +97,7 @@ type KanbanUI struct {
 	Activity, CalendarActivity *loadingIndicator
 	CalendarPage               *fyne.Container
 	RefreshButtons             []*widget.Button
+	SprintRefresh              fyne.CanvasObject // keep its click animation across board redraws
 	CalendarDrag               *PlannerDragCard
 	CalendarResizing           bool
 	CalendarActive             bool
@@ -113,20 +127,18 @@ func (k *KanbanUI) Save(p backend.SprintPlan) bool {
 	return true
 }
 
-func (k *KanbanUI) Load(force bool) { k.load(force, "") }
+func (k *KanbanUI) Load(force bool) { k.load(force, "", false) }
 
+// RefreshSprint refreshes one sprint; an empty key selects unscheduled items.
 func (k *KanbanUI) RefreshSprint(key string) {
-	if key == "" {
-		return
-	}
 	if k.Loading || k.Busy || len(k.Queue) > 0 {
 		k.SetMessage("Wait for the current GitHub operation, then refresh this sprint.")
 		return
 	}
-	k.load(true, key)
+	k.load(true, key, true)
 }
 
-func (k *KanbanUI) load(force bool, sprintKey string) {
+func (k *KanbanUI) load(force bool, sprintKey string, scoped bool) {
 	if k.Busy || len(k.Queue) > 0 {
 		// Never refresh under queued writes: the fresh boards would race
 		// them. Refresh once the queue is empty instead.
@@ -153,10 +165,10 @@ func (k *KanbanUI) load(force bool, sprintKey string) {
 	// the further pages and passes it finds it needs as it reads.
 	var counted sync.Mutex
 	progress := backend.FetchProgress{Total: len(sources) * backend.SprintBoardSteps}
-	if sprintKey != "" {
+	if scoped {
 		progress.Total = 0
 		for _, b := range previousBoards {
-			if b.SprintByKey(sprintKey).ID != "" {
+			if sprintKey == "" || b.SprintByKey(sprintKey).ID != "" {
 				progress.Total++
 			}
 		}
@@ -185,14 +197,14 @@ func (k *KanbanUI) load(force bool, sprintKey string) {
 			u := source.URL
 			var b backend.SprintBoard
 			var err error
-			if sprintKey == "" {
+			if !scoped {
 				b, err = backend.FetchSprintBoardTracked(u, source.Filter, step)
 			} else {
 				found := false
 				for _, old := range previousBoards {
 					if backend.SameSprintProject(old.URL, u) {
 						found = true
-						if old.SprintByKey(sprintKey).ID == "" {
+						if sprintKey != "" && old.SprintByKey(sprintKey).ID == "" {
 							b = old
 						} else {
 							old.Filter = source.Filter
@@ -223,7 +235,7 @@ func (k *KanbanUI) load(force bool, sprintKey string) {
 			k.Load(true)
 			return
 		}
-		if sprintKey == "" {
+		if !scoped {
 			k.Loaded = len(errors) == 0
 		}
 		p := k.Plan
@@ -475,6 +487,43 @@ type KanbanSlot struct {
 // Unchanged: dropped back into its own gap in its own column.
 func (s KanbanSlot) Unchanged() bool { return s.InColumn && s.AfterID == s.CurrentAfter }
 
+// SlotCard is a drawn card's place in a column, in absolute coordinates.
+type SlotCard struct {
+	BoardID, ItemID string
+	Top, Bottom     float32
+}
+
+// DropSlotFor finds the gap nearest y among the column's cards of boardID.
+func DropSlotFor(cards []SlotCard, boardID, dragID string, y, gap float32) KanbanSlot {
+	var s KanbanSlot
+	prev := ""
+	var same []SlotCard
+	for _, c := range cards {
+		if c.BoardID != boardID {
+			continue
+		}
+		if c.ItemID == dragID {
+			s.InColumn, s.CurrentAfter = true, prev
+			continue
+		}
+		prev = c.ItemID
+		same = append(same, c)
+	}
+	if len(same) == 0 {
+		return s
+	}
+	s.Ok = true
+	for _, c := range same {
+		if y < (c.Top+c.Bottom)/2 {
+			s.LineY = c.Top - gap/2
+			return s
+		}
+		s.AfterID = c.ItemID
+	}
+	s.LineY = same[len(same)-1].Bottom + gap/2
+	return s
+}
+
 func newDropLine() *canvas.Rectangle {
 	line := canvas.NewRectangle(widgets.LogoGold)
 	line.CornerRadius = 1.5
@@ -524,6 +573,11 @@ func (k *KanbanUI) PendingWrites() int {
 // while a fetch or a write is running (only on the tab in view, as the other
 // tabs do), and disables Refresh GitHub meanwhile.
 func (k *KanbanUI) SyncActivity() {
+	if !k.Loading {
+		if refresh, ok := k.SprintRefresh.(interface{ FinishRefresh() }); ok {
+			refresh.FinishRefresh()
+		}
+	}
 	on := k.Busy || k.Loading
 	stage := "Loading project boards"
 	if k.Busy {
@@ -667,17 +721,27 @@ func (k *KanbanUI) CalendarItems() []backend.SprintCandidate {
 // issues, merged by position. A position counts only the issues left, so a
 // project's finished issues do not push its open ones down the list.
 func (k *KanbanUI) OpenCalendarItems() []backend.SprintCandidate {
+	return backend.ApplyTrayOrder(k.calendarItemsFinished(false), k.Plan.TrayOrder)
+}
+
+// DoneCalendarItems is the selected sprint's finished issues (Done, closed or
+// merged, or marked done here), which the tray keeps folded at its foot.
+func (k *KanbanUI) DoneCalendarItems() []backend.SprintCandidate {
+	return k.calendarItemsFinished(true)
+}
+
+func (k *KanbanUI) calendarItemsFinished(finished bool) []backend.SprintCandidate {
 	seen := map[string]bool{}
 	var projects [][]backend.SprintCandidate
 	for _, b := range k.OrderedBoards() {
-		var open []backend.SprintCandidate
+		var picked []backend.SprintCandidate
 		for _, c := range k.calendarBoardItems(b) {
-			if !seen[c.Key] && !backend.PlannerIssueFinished(c.Item, k.Plan.Tasks[c.Key]) {
+			if !seen[c.Key] && backend.PlannerIssueFinished(c.Item, k.Plan.Tasks[c.Key]) == finished {
 				seen[c.Key] = true
-				open = append(open, c)
+				picked = append(picked, c)
 			}
 		}
-		projects = append(projects, open)
+		projects = append(projects, picked)
 	}
 	return MergeByPosition(projects)
 }

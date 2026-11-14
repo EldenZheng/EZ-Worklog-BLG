@@ -24,7 +24,7 @@ const (
 	arriveStep = 65 * time.Millisecond
 	// arriveSpan caps the whole cascade, however many pieces there are.
 	arriveSpan = 650 * time.Millisecond
-	countTime  = 700 * time.Millisecond
+	countTime  = 600 * time.Millisecond
 )
 
 // arrivalLimit is how long after it started a redraw can still join an
@@ -117,6 +117,14 @@ func (ui *UI) ReplayArrival(slot string) {
 	delete(ui.arrivals, slot)
 }
 
+// ReplayWorkArrivals replays the menus that read the shared worklog data after
+// a filter change or a successful deletion. The redraw still uses cached data.
+func (ui *UI) ReplayWorkArrivals() {
+	for _, slot := range []string{"status", "statusday", "report", "week", "recent", "pending", "ignored", "loglist", "commits", "meeting"} {
+		ui.ReplayArrival(slot)
+	}
+}
+
 // play starts anim as part of the arrival, marking it done once the last of
 // its animations ends.
 func (a *Arrival) play(anim *fyne.Animation, ended *func()) {
@@ -166,17 +174,23 @@ func ArriveDelays(n int) []time.Duration {
 // and takes arriveEach, and set gets each piece's share, 0 to 1, on every
 // frame. A redraw that joins the arrival late starts where it had got to.
 func (a *Arrival) Cascade(delays []time.Duration, set func(i int, share float32)) {
-	if a == nil || len(delays) == 0 {
+	a.CascadeFor(arriveEach, delays, set)
+}
+
+// CascadeFor is Cascade with each piece taking each rather than the usual
+// arriveEach, for a piece that should move slower or quicker.
+func (a *Arrival) CascadeFor(each time.Duration, delays []time.Duration, set func(i int, share float32)) {
+	if a == nil || len(delays) == 0 || each <= 0 {
 		return
 	}
 	last := time.Duration(0)
 	for _, d := range delays {
 		last = max(last, d)
 	}
-	total := last + arriveEach
+	total := last + each
 	at := func(elapsed time.Duration) {
 		for i, d := range delays {
-			share := min(1, max(0, float32(elapsed-d)/float32(arriveEach)))
+			share := min(1, max(0, float32(elapsed-d)/float32(each)))
 			// Every piece receives every frame: charts flush the entire frame
 			// from their final callback, even before that bar starts moving.
 			set(i, easeOutQuart(share))
@@ -308,19 +322,38 @@ func (r *Reveal) SetShare(share float32) {
 	if share == r.share {
 		return
 	}
+	// Partway in, only the cut moves: lay it out and ask for a frame, rather
+	// than throw away and redraw everything in the piece (see Repaint). The
+	// first and last steps swap the clip in and out, and need a full refresh.
+	partway := r.share < 1 && share < 1 && share > 0
 	r.share = share
+	if partway {
+		r.layout(r.Size())
+		Repaint(r)
+		return
+	}
 	r.Refresh()
 }
 
-func (r *Reveal) CreateRenderer() fyne.WidgetRenderer { return &revealRenderer{r: r} }
+func (r *Reveal) CreateRenderer() fyne.WidgetRenderer {
+	rr := &revealRenderer{r: r}
+	// Built partway in, it starts cut: the steps after this one only move the
+	// cut and never swap the clip in.
+	if r.share < 1 {
+		rr.clipped = true
+		r.clip.objects.Objects = []fyne.CanvasObject{r.Content}
+	}
+	return rr
+}
 
 type revealRenderer struct {
 	r       *Reveal
 	clipped bool
 }
 
-func (rr *revealRenderer) Layout(size fyne.Size) {
-	r := rr.r
+func (rr *revealRenderer) Layout(size fyne.Size) { rr.r.layout(size) }
+
+func (r *Reveal) layout(size fyne.Size) {
 	// A reveal that was never placed is one a redraw replaced before it was
 	// shown. Its content may be shown elsewhere now (a meter is kept from draw to
 	// draw), so it must not be resized to nothing from here.

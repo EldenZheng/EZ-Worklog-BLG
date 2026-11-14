@@ -41,7 +41,7 @@ func ItemTypeControls(visible func(backend.SprintItem) bool, set func([]string))
 		content := container.NewPadded(container.NewHBox(
 			container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), widget.NewIcon(it.TypeIcon()))),
 			container.NewCenter(bar), container.NewCenter(name)))
-		row.Add(NewCardTappable(container.NewThemeOverride(content, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink}), func() {
+		row.Add(NewFilterTappable(container.NewThemeOverride(content, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink}), func() {
 			var selected []string
 			for _, candidate := range []backend.SprintItem{{Kind: "Issue"}, {Kind: "PullRequest"}} {
 				shown := visible(candidate)

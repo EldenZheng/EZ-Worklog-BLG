@@ -33,6 +33,9 @@ func TestLogListIssuesScrollIndependentlyInsideThePage(t *testing.T) {
 	var scrolls []*container.Scroll
 	walk(ui.ListBox, func(o fyne.CanvasObject) {
 		if s, ok := o.(*container.Scroll); ok {
+			if s.Direction == container.ScrollHorizontalOnly {
+				return // the org key has its own sideways scroll
+			}
 			if _, page := s.Content.(*fyne.Container); page && contains(labels(s.Content), "Boards for this week") {
 				return
 			}

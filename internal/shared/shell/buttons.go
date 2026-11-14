@@ -392,8 +392,17 @@ func (t smallRemovalTheme) Size(name fyne.ThemeSizeName) float32 {
 
 // QuietButton strips a button's fill, for icon buttons and Back.
 func QuietButton(button *widget.Button) fyne.CanvasObject {
+	return QuietButtonControl(button, button)
+}
+
+// QuietButtonControl applies the quiet role to an extended button while keeping
+// its own event handlers, such as a refresh icon that spins only when clicked.
+func QuietButtonControl(control interface {
+	fyne.CanvasObject
+	Disabled() bool
+}, button *widget.Button) fyne.CanvasObject {
 	button.Importance = widget.LowImportance
-	return widgets.WithPointerCursor(button)
+	return widgets.WithPointerCursor(control)
 }
 
 // DialogButtons lines a popup's buttons up at its bottom right, in the order

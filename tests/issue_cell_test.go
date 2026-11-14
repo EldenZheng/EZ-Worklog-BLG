@@ -10,6 +10,7 @@ import (
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // buttonNamed finds a button by its label anywhere in a widget tree.
@@ -112,6 +113,7 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	stubPlanned(t, map[string]int{day: 60})
 	tab := logwork.BuildLogTab(ui)
 	if buttonNamed(tab, "Fetch issue") != nil {
 		t.Fatal("single Code Review should resolve automatically, not show a Fetch issue button")
@@ -132,7 +134,7 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	if kinds == nil {
 		t.Fatal("missing Log Work kind selector")
 	}
-	wantOrder := []string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent"}
+	wantOrder := []string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent", "Create Weekend Support Slate"}
 	if len(kinds.Options) != len(wantOrder) {
 		t.Fatalf("Log Work selector options = %v, want %v", kinds.Options, wantOrder)
 	}
@@ -185,6 +187,12 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 		if !contains(got, want) {
 			t.Fatalf("bulk total should use the commit popup's day calculation; missing %q in %v", want, got)
 		}
+	}
+	if ink := inkOf(t, tab, "30 min on pending log, then "+logwork.DayScoreLine(150)); !sameColor(ink, widgets.LogoGold) {
+		t.Fatalf("the pending section is drawn in %v, want gold", ink)
+	}
+	if ink := inkOf(t, tab, "+60 min planned, then "+logwork.DayScoreLine(225)); !sameColor(ink, shell.PlannerPlanColor) {
+		t.Fatalf("the planned section is drawn in %v, want purple", ink)
 	}
 	// Cancel the debounced lookup; this is an offline UI-shape test.
 	prs[0].SetText("")

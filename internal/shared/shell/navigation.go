@@ -101,9 +101,21 @@ func (t PillTheme) Size(name fyne.ThemeSizeName) float32 {
 // the row's issue still carries other unlogged commits — one glance says
 // "there is more work here" without opening the pending list above.
 func SavedTag(text string) fyne.CanvasObject {
-	bg := canvas.NewRectangle(GitHubGreen)
-	bg.CornerRadius = 8
-	lbl := canvas.NewText(text, color.White)
+	return OutlineTag(text, widgets.LogoGold)
+}
+
+// CodeReviewTag identifies a single review wherever its work is displayed.
+func CodeReviewTag() fyne.CanvasObject {
+	return OutlineTag("Code review", PlannerPlanColor)
+}
+
+// OutlineTag is a compact caption with coloured ink and a rounded outline.
+func OutlineTag(text string, ink color.Color) fyne.CanvasObject {
+	bg := canvas.NewRectangle(color.Transparent)
+	bg.CornerRadius = 12
+	bg.StrokeColor = ink
+	bg.StrokeWidth = 1
+	lbl := canvas.NewText(text, ink)
 	lbl.TextSize = theme.CaptionTextSize()
 	lbl.TextStyle = fyne.TextStyle{Bold: true}
 	return container.NewStack(bg, container.NewPadded(container.NewCenter(lbl)))
@@ -160,7 +172,7 @@ func NewPillTabs(items ...*container.TabItem) *pillTabs {
 		if item.Text == SettingsTabName {
 			settings = container.NewCenter(t.badge)
 		} else {
-			if item.Text == KanbanTabName || item.Text == PlannerTabName {
+			if item.Text == KanbanTabName || item.Text == PlannerTabName || item.Text == ProjectsTabName {
 				right.Add(button)
 			} else {
 				row.Add(button)
@@ -248,6 +260,9 @@ func (t *pillTabs) SelectIndex(index int) {
 		return
 	}
 	DismissSummaryTooltip()
+	if c := fyne.CurrentApp().Driver().CanvasForObject(t); c != nil {
+		stopFilterFade(c)
+	}
 	if old := t.Selected(); old != nil {
 		old.Content.Hide()
 	}
@@ -265,7 +280,8 @@ func (t *pillTabs) SelectIndex(index int) {
 }
 
 // tabBarLayout puts the scrolling row of tabs on the left, filling what the
-// right-hand group (Kanban, Sprint Calendar, the gear) leaves of the width.
+// right-hand group (Kanban, Sprint Calendar, Projects, the gear) leaves of the
+// width.
 type tabBarLayout struct{ gap float32 }
 
 func (l tabBarLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {

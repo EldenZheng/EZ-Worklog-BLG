@@ -411,7 +411,7 @@ func (r *plannerTimedFaceRenderer) Layout(size fyne.Size) {
 	showIf(r.minutes, timeLine)
 	r.grip.Position1 = fyne.NewPos(size.Width/2-10, size.Height-3)
 	r.grip.Position2 = fyne.NewPos(size.Width/2+10, size.Height-3)
-	showIf(r.grip, size.Height >= 18 && !r.face.finished)
+	showIf(r.grip, size.Height >= 18)
 }
 
 func (r *plannerTimedFaceRenderer) Refresh() {

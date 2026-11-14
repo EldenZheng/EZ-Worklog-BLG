@@ -42,3 +42,28 @@ func TestRefreshSprintScopesReadsAndPreservesOtherItems(t *testing.T) {
 		t.Fatal("failed refresh must preserve board")
 	}
 }
+
+func TestRefreshNoSprintScopesReadsAndPreservesAssignedItems(t *testing.T) {
+	saved := backend.Gh
+	defer func() { backend.Gh = saved }()
+	b := backend.SprintBoard{ID: "P1", Filter: `assignee:@me -status:Done sprint:@current -no:sprint has:sprint`, Items: []backend.SprintItem{
+		{ID: "removed"}, {ID: "moved-in", SprintID: "S1"}, {ID: "untouched", SprintID: "S1"},
+	}}
+	calls := 0
+	backend.Gh = func(args []string, _ ...string) (string, error) {
+		calls++
+		if !strings.Contains(strings.Join(args, " "), "filter=assignee:@me -status:Done no:sprint") {
+			t.Fatal("No Sprint refresh must request only unscheduled items", args)
+		}
+		return `{"data":{"node":{"items":{"nodes":[{"id":"moved-in","content":{"__typename":"Issue","title":"Fresh"},"fieldValues":{"nodes":[]}}],"pageInfo":{"hasNextPage":false}}}}}`, nil
+	}
+	got, err := backend.RefreshSprint(b, "", nil)
+	if err != nil || calls != 1 || len(got.Items) != 2 || got.Items[0].Title != "Fresh" || got.Items[0].SprintID != "" || got.Items[1].ID != "untouched" {
+		t.Fatalf("err=%v calls=%d items=%+v", err, calls, got.Items)
+	}
+	backend.Gh = func([]string, ...string) (string, error) { return "", errors.New("offline") }
+	got, err = backend.RefreshSprint(b, "", nil)
+	if err == nil || !reflect.DeepEqual(got, b) {
+		t.Fatal("failed No Sprint refresh must preserve the cached board")
+	}
+}

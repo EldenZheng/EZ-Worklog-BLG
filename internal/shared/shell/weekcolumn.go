@@ -27,7 +27,7 @@ type DayColumn struct {
 
 	Mins     int // already on GitHub
 	Waiting  int // saved here, standing on this day
-	Planned  int // Sprint Calendar time not yet logged or drafted
+	Planned  int // Sprint Calendar time not yet logged on GitHub; separate from drafts
 	BaseFill color.Color
 	Pulse    *fyne.Animation // running only while a card hovers this day
 }

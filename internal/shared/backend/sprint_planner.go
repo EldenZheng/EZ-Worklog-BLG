@@ -51,14 +51,178 @@ func PruneSprintPlan(p SprintPlan, date string) (SprintPlan, bool) {
 		tasks[key] = t
 	}
 	p.Tasks = tasks
+	if len(p.Boards) > 0 && len(p.TrayOrder) > 0 {
+		var order []string
+		for _, key := range p.TrayOrder {
+			if onBoard[key] {
+				order = append(order, key)
+			}
+		}
+		if len(order) != len(p.TrayOrder) {
+			changed = true
+			p.TrayOrder = order
+		}
+	}
 	return p, changed
 }
 
+// MoveTrayIssue puts key just after afterKey ("" for the top) in the Sprint
+// Calendar tray's order. shown is the tray's order now; issues of other
+// sprints keep their places after it.
+func MoveTrayIssue(order, shown []string, key, afterKey string) []string {
+	var next []string
+	placed := afterKey == ""
+	if placed {
+		next = append(next, key)
+	}
+	for _, k := range shown {
+		if k == key {
+			continue
+		}
+		next = append(next, k)
+		if k == afterKey {
+			next = append(next, key)
+			placed = true
+		}
+	}
+	if !placed {
+		next = append(next, key)
+	}
+	inShown := map[string]bool{}
+	for _, k := range next {
+		inShown[k] = true
+	}
+	for _, k := range order {
+		if !inShown[k] {
+			next = append(next, k)
+		}
+	}
+	return next
+}
+
+// ApplyTrayOrder sorts the tray's issues into the order the user dragged them
+// to. Issues not yet in it (new to the sprint) follow, in the board's order.
+func ApplyTrayOrder(items []SprintCandidate, order []string) []SprintCandidate {
+	if len(order) == 0 {
+		return items
+	}
+	rank := map[string]int{}
+	for i, k := range order {
+		rank[k] = i
+	}
+	out := append([]SprintCandidate{}, items...)
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, iok := rank[out[i].Key]
+		rj, jok := rank[out[j].Key]
+		if iok != jok {
+			return iok
+		}
+		return iok && ri < rj
+	})
+	return out
+}
+
 type PlanBlock struct {
-	Date           string
+	Date string
+	// Start stays in the file but is always 0: a block has no time of day,
+	// only its minutes. Its place in the day is Pos.
 	Start, Minutes int
 	// Note describes the block: what a meeting is for. Shown with its title.
 	Note string `json:",omitempty"`
+	// Pos is the block's place among its day's blocks, 0 at the top.
+	Pos int `json:",omitempty"`
+}
+
+// PlannerDayCapacity is how many minutes of planned work a day takes when a
+// block is dropped or allocated onto it.
+const PlannerDayCapacity = 8 * 60
+
+// plannerDayLimit is the most a day can hold once blocks are resized.
+const plannerDayLimit = 24 * 60
+
+// PlanBlockBefore orders a day's blocks by Pos. A plan saved before positions
+// existed is ordered by its old start times until it is read again.
+func PlanBlockBefore(a, b PlanBlock) bool {
+	if a.Start != b.Start {
+		return a.Start < b.Start
+	}
+	return a.Pos < b.Pos
+}
+
+// PlannerDayUsed is the minutes planned on date, including finished issues,
+// leaving out one block (skipIndex of skipKey; -1 leaves none out).
+func PlannerDayUsed(tasks map[string]SprintTask, date, skipKey string, skipIndex int) int {
+	used := 0
+	for key, t := range tasks {
+		for i, b := range t.Blocks {
+			if b.Date == date && !(key == skipKey && i == skipIndex) {
+				used += b.Minutes
+			}
+		}
+	}
+	return used
+}
+
+// nextPlannerPos is the position after the last block on date.
+func nextPlannerPos(tasks map[string]SprintTask, date string) int {
+	next := 0
+	for _, t := range tasks {
+		for _, b := range t.Blocks {
+			if b.Date == date && b.Pos >= next {
+				next = b.Pos + 1
+			}
+		}
+	}
+	return next
+}
+
+// NormalizePlanPositions turns a plan saved with start times into one with
+// positions: each day's blocks keep their order, numbered from 0, and every
+// Start becomes 0. It reports whether anything changed.
+func NormalizePlanPositions(p SprintPlan) (SprintPlan, bool) {
+	type ref struct {
+		key   string
+		index int
+	}
+	byDate := map[string][]ref{}
+	timed := map[string]bool{}
+	for key, t := range p.Tasks {
+		for i, b := range t.Blocks {
+			byDate[b.Date] = append(byDate[b.Date], ref{key, i})
+			if b.Start != 0 {
+				timed[b.Date] = true
+			}
+		}
+	}
+	if len(timed) == 0 {
+		return p, false
+	}
+	tasks := map[string]SprintTask{}
+	for key, t := range p.Tasks {
+		if t.Blocks != nil {
+			t.Blocks = append([]PlanBlock{}, t.Blocks...)
+		}
+		tasks[key] = t
+	}
+	for date := range timed {
+		refs := byDate[date]
+		sort.SliceStable(refs, func(i, j int) bool {
+			a, b := tasks[refs[i].key].Blocks[refs[i].index], tasks[refs[j].key].Blocks[refs[j].index]
+			if a.Start != b.Start || a.Pos != b.Pos {
+				return PlanBlockBefore(a, b)
+			}
+			if refs[i].key != refs[j].key {
+				return refs[i].key < refs[j].key
+			}
+			return refs[i].index < refs[j].index
+		})
+		for n, r := range refs {
+			tasks[r.key].Blocks[r.index].Start = 0
+			tasks[r.key].Blocks[r.index].Pos = n
+		}
+	}
+	p.Tasks = tasks
+	return p, true
 }
 
 const PlannerDurationStep = 15
@@ -112,7 +276,7 @@ type SprintTask struct {
 }
 
 func PlannerIssueFinished(it SprintItem, task SprintTask) bool {
-	return task.Done || strings.EqualFold(strings.TrimSpace(it.Status), "Done")
+	return task.Done || it.Closed || strings.EqualFold(strings.TrimSpace(it.Status), "Done")
 }
 
 type SprintPlan struct {
@@ -124,7 +288,11 @@ type SprintPlan struct {
 	CalendarMode   string    `json:",omitempty"`
 	CalendarSprint string    `json:",omitempty"`
 	KanbanColumns  *[]string `json:",omitempty"`
-	KanbanTypes    *[]string `json:",omitempty"`
+	// KanbanColumnOrder is the status columns in the order they were dragged
+	// to on the Kanban board. A status it does not name keeps its usual place
+	// after those it does.
+	KanbanColumnOrder []string  `json:",omitempty"`
+	KanbanTypes       *[]string `json:",omitempty"`
 	// CalendarTypes is the Sprint Calendar tray's Issues / Pull requests
 	// choice, kept apart from Kanban's.
 	CalendarTypes *[]string `json:",omitempty"`
@@ -135,6 +303,9 @@ type SprintPlan struct {
 	// ProjectOrder is the board IDs in the order the Kanban and Sprint Calendar
 	// legends show them.
 	ProjectOrder []string `json:",omitempty"`
+	// TrayOrder is the Sprint Calendar tray's issues, by key, in the order
+	// they were dragged to. Local only: GitHub's project order is unchanged.
+	TrayOrder []string `json:",omitempty"`
 }
 
 func (s *Store) LoadSprintPlan() (SprintPlan, error) {
@@ -155,6 +326,8 @@ func (s *Store) LoadSprintPlan() (SprintPlan, error) {
 	if p.Tasks == nil {
 		p.Tasks = map[string]SprintTask{}
 	}
+	// Blocks saved with start times are read as positions in that order.
+	p, _ = NormalizePlanPositions(p)
 	return p, err
 }
 
@@ -236,17 +409,20 @@ type SprintCandidate struct {
 	Sprint SprintIteration
 }
 
-// Fill free intervals, preserving existing appointments and splitting large
-// tasks across weekdays. A sprint's end is an exclusive boundary.
+// AllocateSprint fills each weekday up to PlannerDayCapacity, after the
+// blocks already there, splitting large tasks across days. A sprint's end is
+// an exclusive boundary.
 func AllocateSprint(p SprintPlan, candidates []SprintCandidate, date string) (map[string]SprintTask, []string) {
 	tasks := map[string]SprintTask{}
-	busy := map[string][]PlanBlock{}
+	used := map[string]int{}
+	next := map[string]int{}
 	for key, t := range p.Tasks {
 		t.Blocks = append([]PlanBlock{}, t.Blocks...)
 		tasks[key] = t
-		if !t.Done {
-			for _, b := range t.Blocks {
-				busy[b.Date] = append(busy[b.Date], b)
+		for _, b := range t.Blocks {
+			used[b.Date] += b.Minutes
+			if b.Pos >= next[b.Date] {
+				next[b.Date] = b.Pos + 1
 			}
 		}
 	}
@@ -270,71 +446,52 @@ func AllocateSprint(p SprintPlan, candidates []SprintCandidate, date string) (ma
 		if err != nil {
 			continue
 		}
+		var added []PlanBlock
 		for c.Sprint.Contains(day.Format("2006-01-02")) && remaining > 0 {
 			d := day.Format("2006-01-02")
 			if day.Weekday() != time.Saturday && day.Weekday() != time.Sunday {
-				blocks := append([]PlanBlock{}, busy[d]...)
-				sort.Slice(blocks, func(i, j int) bool { return blocks[i].Start < blocks[j].Start })
-				cursor := 9 * 60
-				blocks = append(blocks, PlanBlock{Start: 17 * 60})
-				for _, b := range blocks {
-					end := b.Start
-					if end > 17*60 {
-						end = 17 * 60
-					}
-					if cursor < end && remaining > 0 {
-						n := (end - cursor) / PlannerDurationStep * PlannerDurationStep
-						if n > remaining {
-							n = remaining
-						}
-						if n > 0 {
-							block := PlanBlock{Date: d, Start: cursor, Minutes: n}
-							t.Blocks = append(t.Blocks, block)
-							busy[d] = append(busy[d], block)
-							remaining -= n
-						}
-					}
-					if b.Start+b.Minutes > cursor {
-						cursor = b.Start + b.Minutes
-					}
+				n := min(remaining, (PlannerDayCapacity-used[d])/PlannerDurationStep*PlannerDurationStep)
+				if n > 0 {
+					added = append(added, PlanBlock{Date: d, Minutes: n, Pos: next[d]})
+					used[d] += n
+					next[d]++
+					remaining -= n
 				}
 			}
 			day = day.AddDate(0, 0, 1)
 		}
 		// Do not save an incomplete allocation: leave it in the unscheduled list.
 		if remaining > 0 {
-			for _, b := range t.Blocks {
-				list := busy[b.Date]
-				for i, x := range list {
-					if x == b {
-						busy[b.Date] = append(list[:i], list[i+1:]...)
-						break
-					}
-				}
+			for _, b := range added {
+				used[b.Date] -= b.Minutes
+				next[b.Date]--
 			}
 			unplaced = append(unplaced, c.Item.Title)
-		} else {
-			tasks[c.Key] = t
+			continue
 		}
+		t.Blocks = append(t.Blocks, added...)
+		tasks[c.Key] = t
 	}
 	return tasks, unplaced
 }
 
+// ValidatePlanBlock checks a block before it is saved: a real date, a length,
+// and room for it in the day beside the other issues' blocks.
 func ValidatePlanBlock(key string, block PlanBlock, tasks map[string]SprintTask) error {
 	if _, err := time.Parse("2006-01-02", block.Date); err != nil {
 		return fmt.Errorf("enter a date as YYYY-MM-DD")
 	}
-	if block.Start < 0 || block.Minutes <= 0 || block.Start+block.Minutes > 24*60 {
-		return fmt.Errorf("time and duration must fit within one day")
+	if block.Minutes <= 0 || block.Minutes > plannerDayLimit {
+		return fmt.Errorf("the duration must fit within one day")
 	}
+	others := map[string]SprintTask{}
 	for k, t := range tasks {
-		if k != key && !t.Done {
-			for _, b := range t.Blocks {
-				if b.Date == block.Date && block.Start < b.Start+b.Minutes && b.Start < block.Start+block.Minutes {
-					return fmt.Errorf("this time overlaps another planned issue")
-				}
-			}
+		if k != key {
+			others[k] = t
 		}
+	}
+	if PlannerDayUsed(others, block.Date, "", -1)+block.Minutes > PlannerDayCapacity {
+		return fmt.Errorf("the day has no room for this block")
 	}
 	return nil
 }
@@ -350,10 +507,11 @@ func AddDays(date string, days int) string {
 }
 
 // A drag is accepted only inside the issue's sprint and when its complete
-// block fits in a free 09:00–17:00 interval. The lifted block is excluded.
+// block fits in what the day has left of PlannerDayCapacity. The lifted block
+// is left out. The new block goes after the day's last one.
 func PlannerSlot(p SprintPlan, c SprintCandidate, index int, date string) (PlanBlock, bool) {
 	t := p.Tasks[c.Key]
-	if !c.Sprint.Contains(date) || PlannerIssueFinished(c.Item, t) {
+	if !c.Sprint.Contains(date) || index < 0 && PlannerIssueFinished(c.Item, t) {
 		return PlanBlock{}, false
 	}
 	mins := PlannerDurationUp(SprintEstimate(c.Item, t))
@@ -363,39 +521,13 @@ func PlannerSlot(p SprintPlan, c SprintCandidate, index int, date string) (PlanB
 		}
 		mins = PlannerDurationUp(t.Blocks[index].Minutes)
 	}
-	if mins <= 0 || mins > 480 {
+	if mins <= 0 || mins > PlannerDayCapacity {
 		return PlanBlock{}, false
 	}
-	var occupied []PlanBlock
-	for key, task := range p.Tasks {
-		if task.Done {
-			continue
-		}
-		for i, b := range task.Blocks {
-			if key == c.Key && i == index {
-				continue
-			}
-			if b.Date == date {
-				occupied = append(occupied, b)
-			}
-		}
+	if PlannerDayUsed(p.Tasks, date, c.Key, index)+mins > PlannerDayCapacity {
+		return PlanBlock{}, false
 	}
-	sort.Slice(occupied, func(i, j int) bool { return occupied[i].Start < occupied[j].Start })
-	occupied = append(occupied, PlanBlock{Start: 17 * 60})
-	cursor := 9 * 60
-	for _, b := range occupied {
-		end := b.Start
-		if end > 17*60 {
-			end = 17 * 60
-		}
-		if end-cursor >= mins {
-			return PlanBlock{Date: date, Start: cursor, Minutes: mins}, true
-		}
-		if b.Start+b.Minutes > cursor {
-			cursor = b.Start + b.Minutes
-		}
-	}
-	return PlanBlock{}, false
+	return PlanBlock{Date: date, Minutes: mins, Pos: nextPlannerPos(p.Tasks, date)}, true
 }
 
 func MovePlannerIssue(p SprintPlan, c SprintCandidate, index int, date string) (SprintPlan, error) {
@@ -420,82 +552,72 @@ func MovePlannerIssue(p SprintPlan, c SprintCandidate, index int, date string) (
 	return p, nil
 }
 
-// ResizePlannerBlock sets one block's length. Growing it into the blocks
-// after it on the same day pushes them later, keeping their order and lengths,
-// as long as the day still holds them all.
+// PlanBlockRef names one block: an issue's key and the block's index in its
+// task. Index -1 is a block not yet planned.
+type PlanBlockRef struct {
+	Key   string
+	Index int
+}
+
+// ArrangePlannerDay sets date's blocks in order, numbering their positions
+// from 0. A ref with Index -1 adds a block of minutes for that issue; a ref to
+// a block on another date moves it here. The blocks keep their lengths and
+// notes.
+func ArrangePlannerDay(p SprintPlan, date string, order []PlanBlockRef, minutes int) (SprintPlan, error) {
+	tasks := map[string]SprintTask{}
+	for k, v := range p.Tasks {
+		if v.Blocks != nil {
+			v.Blocks = append([]PlanBlock{}, v.Blocks...)
+		}
+		tasks[k] = v
+	}
+	total := 0
+	for pos, r := range order {
+		t, ok := tasks[r.Key]
+		if r.Index >= 0 && (!ok || r.Index >= len(t.Blocks)) {
+			return p, fmt.Errorf("that time block is no longer planned")
+		}
+		if r.Index < 0 {
+			if minutes <= 0 {
+				return p, fmt.Errorf("the issue needs an estimate before it can be planned")
+			}
+			t.Blocks = append(t.Blocks, PlanBlock{Date: date, Minutes: minutes, Pos: pos})
+			total += minutes
+		} else {
+			t.Blocks[r.Index].Date = date
+			t.Blocks[r.Index].Start = 0
+			t.Blocks[r.Index].Pos = pos
+			total += t.Blocks[r.Index].Minutes
+		}
+		tasks[r.Key] = t
+	}
+	if total > plannerDayLimit {
+		return p, fmt.Errorf("the day cannot hold these blocks")
+	}
+	p.Tasks = tasks
+	return p, nil
+}
+
+// ResizePlannerBlock sets one block's length, as long as the day can hold
+// it beside its other blocks. Nothing else on the day moves.
 func ResizePlannerBlock(p SprintPlan, key string, index, minutes int) (SprintPlan, error) {
 	if !ValidPlannerDuration(minutes) {
 		return p, fmt.Errorf("duration must use 15-minute increments")
 	}
 	t := p.Tasks[key]
-	if index < 0 || index >= len(t.Blocks) || t.Done {
+	if index < 0 || index >= len(t.Blocks) {
 		return p, fmt.Errorf("this time block cannot be resized")
 	}
-	block := t.Blocks[index]
-	block.Minutes = minutes
-	if block.Start < 0 || block.Start+block.Minutes > 24*60 {
-		return p, fmt.Errorf("time and duration must fit within one day")
+	if PlannerDayUsed(p.Tasks, t.Blocks[index].Date, key, index)+minutes > plannerDayLimit {
+		return p, fmt.Errorf("the day cannot hold this block")
 	}
 	tasks := map[string]SprintTask{}
 	for k, v := range p.Tasks {
-		if !v.Done && v.Blocks != nil {
-			v.Blocks = append([]PlanBlock{}, v.Blocks...)
-		}
 		tasks[k] = v
 	}
-	resized := tasks[key]
-	resized.Blocks[index] = block
-	tasks[key] = resized
-	// The blocks starting at or after this one on its day, earliest first.
-	type ref struct {
-		key   string
-		index int
-	}
-	var later []ref
-	for k, v := range tasks {
-		if v.Done {
-			continue
-		}
-		for i, b := range v.Blocks {
-			if (k != key || i != index) && b.Date == block.Date && b.Start >= t.Blocks[index].Start {
-				later = append(later, ref{k, i})
-			}
-		}
-	}
-	sort.Slice(later, func(i, j int) bool {
-		a, b := tasks[later[i].key].Blocks[later[i].index], tasks[later[j].key].Blocks[later[j].index]
-		if a.Start != b.Start {
-			return a.Start < b.Start
-		}
-		if later[i].key != later[j].key {
-			return later[i].key < later[j].key
-		}
-		return later[i].index < later[j].index
-	})
-	cursor := block.Start + block.Minutes
-	for _, r := range later {
-		b := tasks[r.key].Blocks[r.index]
-		if b.Start >= cursor {
-			break // a gap: nothing further is pushed
-		}
-		b.Start = cursor
-		if b.Start+b.Minutes > 24*60 {
-			return p, fmt.Errorf("the blocks after this one no longer fit in the day")
-		}
-		tasks[r.key].Blocks[r.index] = b
-		cursor = b.Start + b.Minutes
-	}
-	// Anything earlier in the day that the block now runs into stays put.
-	for k, v := range tasks {
-		if v.Done {
-			continue
-		}
-		for i, b := range v.Blocks {
-			if (k != key || i != index) && b.Date == block.Date && b.Start < block.Start && block.Start < b.Start+b.Minutes {
-				return p, fmt.Errorf("this time overlaps another planned issue")
-			}
-		}
-	}
+	t.Blocks = append([]PlanBlock{}, t.Blocks...)
+	t.Blocks[index].Minutes = minutes
+	tasks[key] = t
 	p.Tasks = tasks
 	return p, nil
 }

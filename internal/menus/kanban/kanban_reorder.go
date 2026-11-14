@@ -67,42 +67,10 @@ func ReorderItems(items []backend.SprintItem, id, afterID string) []backend.Spri
 	return out
 }
 
-// SlotCard is a drawn card's place in a column, in absolute coordinates.
-type SlotCard struct {
-	BoardID, ItemID string
-	Top, Bottom     float32
-}
+// SlotCard and DropSlotFor live in shell, for the Sprint Calendar's tray too.
+type SlotCard = shell.SlotCard
 
-// DropSlotFor finds the gap nearest y among the column's cards of boardID.
-func DropSlotFor(cards []SlotCard, boardID, dragID string, y, gap float32) shell.KanbanSlot {
-	var s shell.KanbanSlot
-	prev := ""
-	var same []SlotCard
-	for _, c := range cards {
-		if c.BoardID != boardID {
-			continue
-		}
-		if c.ItemID == dragID {
-			s.InColumn, s.CurrentAfter = true, prev
-			continue
-		}
-		prev = c.ItemID
-		same = append(same, c)
-	}
-	if len(same) == 0 {
-		return s
-	}
-	s.Ok = true
-	for _, c := range same {
-		if y < (c.Top+c.Bottom)/2 {
-			s.LineY = c.Top - gap/2
-			return s
-		}
-		s.AfterID = c.ItemID
-	}
-	s.LineY = same[len(same)-1].Bottom + gap/2
-	return s
-}
+var DropSlotFor = shell.DropSlotFor
 
 // ShowDropSlot works out the slot under the pointer in the hovered status
 // column and draws the gold line there.

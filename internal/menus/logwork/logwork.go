@@ -3,13 +3,14 @@ package logwork
 import (
 	_ "embed"
 	"fmt"
-	"math"
+	"image/color"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
@@ -33,6 +34,8 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	ui.PendingBox = container.NewVBox(
 		widget.NewLabel("Loading your commits from GitHub…"),
 	)
+	pendingSize = shell.NewMorph(ui.PendingBox)
+	pendingRenderedAt = ui.PendingAt
 	search := shell.NewSearchEntry("Search issues, titles or commits", ui.LogSearch, func(value string) {
 		ui.LogSearch = value
 		if ui.PendingLoaded {
@@ -41,7 +44,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		DrawRecent(ui)
 	})
 	commitPane := container.NewVBox(
-		container.NewBorder(nil, nil, nil, shell.LeadGap(fetchBtn), search), ui.PendingBox)
+		container.NewBorder(nil, nil, nil, shell.LeadGap(fetchBtn), search), pendingSize)
 
 	// The list loads itself on first open; this button is the manual refresh.
 	// Both halves of this tab come from GitHub — the commits waiting here, and
@@ -420,22 +423,13 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 
 		mMsg.SetText("Pushing…")
-		pushProgress, stop := ui.PushSpinner("Pushing to GitHub…")
-		var res backend.PushResult
-		var perr error
-		ui.Async(func() error {
-			resolved, err := resolveForPush(ui, saved)
-			if err != nil {
-				perr = err
-				return nil
+		pushSavedEntry(ui, saved, func(updated backend.Row, res backend.PushResult, perr error) {
+			saved = updated
+			if perr == errReviewPushCancelled {
+				mMsg.SetText("Saved as draft — code reviews were not combined.")
+				resetForm()
+				return
 			}
-			saved = resolved
-			res, perr = backend.PushEntry(ui.Cfg, saved["issue"], saved["date"], saved["owner"],
-				mins, body, saved["issue_body"], backend.OrDefault(saved["mode"], "issue"), saved["issue_url"],
-				backend.SubTitleBaseFor(saved), pushProgress)
-			return nil
-		}, func() {
-			stop()
 			if perr != nil {
 				mMsg.SetText("Saved as draft, but push failed: " + perr.Error() +
 					" Retry from the entry below.")
@@ -540,8 +534,13 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// -- kind selector --
 	// Switching kind slides the new form in from the side the choice moved to
 	// and eases the panel to its new height, rather than jumping.
-	kinds := []string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent"}
-	kindForm := shell.NewMorph(container.NewVBox(commitPane, manualPane))
+	kinds := []string{"Commits", "Worklog", "Code Review", "Bulk Review", "Meeting", "Independent", shell.WeekendSlateTab}
+	// The weekend support slate files a week of issues rather than a worklog, so
+	// it stands apart at the right end of the tabs with its own form.
+	slate := ui.NewWeekendSlate()
+	slatePane := slate.InlineView()
+	slatePane.Hide()
+	kindForm := shell.NewMorph(container.NewVBox(commitPane, manualPane, slatePane))
 	var formReflow func(bool)
 	shownKind := 0
 	seg := shell.NewUnderlineTabs(kinds, func(s string) {
@@ -555,7 +554,15 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			"Bulk Review": backend.KindBulkReview,
 			"Worklog":     backend.KindOther, "Independent": backend.KindIndependent,
 		}[s]
-		if kind == backend.KindCommit {
+		shell.ShowIf(slatePane, s == shell.WeekendSlateTab)
+		if s == shell.WeekendSlateTab {
+			commitPane.Hide()
+			manualPane.Hide()
+			// The days arrive once the form has slid in, as the commits do.
+			if formReflow != nil {
+				slate.Arrive(shell.MorphTime)
+			}
+		} else if kind == backend.KindCommit {
 			commitPane.Show()
 			manualPane.Hide()
 			// Coming back to the commits brings their bubbles in again, as
@@ -563,6 +570,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			// The bubbles stay covered while the form slides in, then arrive.
 			if formReflow != nil && ui.PendingLoaded {
 				ui.ReplayArrival("pending")
+				ui.ReplayArrival("ignored")
 				pendingArriveDelay = shell.MorphTime
 				RenderPending(ui)
 			}
@@ -610,6 +618,9 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			shownKind = picked
 		}
 	})
+	seg.Trailing = 1
+	// Blue like the Report's support bonus while not picked; gold once picked.
+	seg.Inks = map[string]color.Color{shell.WeekendSlateTab: shell.SupportAccent()}
 	// One kind is always picked: tapping the picked one again keeps it.
 	seg.SetSelected("Commits")
 	// The hint line names what the push will file under; picking a new date
@@ -657,9 +668,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// The entry form is its own menu, so it sits in a rounded panel like
 	// Settings; the saved list under it is part of the page.
 	logCard := shell.Panel(container.NewVBox(choices, kindForm))
-	// The key sits at the foot of the tab, where the Status tab keeps its own:
-	// it governs everything above it — the commits, the saved entries and the
-	// week — so it belongs under the lot rather than over one of them.
+	// The key shares the week's controls row, to the right of This week.
 	ui.LogLegend = container.NewVBox()
 	// Tapping the title folds away everything but the week: the list controls
 	// and the list of entries saved for other weeks. Folded to start with.
@@ -675,14 +684,14 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		return func(final bool) { shell.Reflow(final, logScroll, ui.LogBody, page, inner) }
 	}
 	formReflow = reflow(logCard)
+	pendingReflow = formReflow
 	savedHead, savedArea := shell.CollapsibleTitle("Saved locally", savedList, false, nil,
 		func(final bool) { reflow(recentCard)(final) })
 	// Room above and below the title, so it reads as a heading between the
 	// form's panel and its divider rather than squeezed between them.
 	savedHeadRoom := container.New(layout.NewCustomPaddedLayout(gap, gap, 0, 0), savedHead)
 	recentCard = container.NewVBox(savedHeadRoom, shell.PanelDivider(), savedArea,
-		container.New(layout.NewCustomPaddedLayout(gap, 0, gap, gap), ui.WeekBox),
-		ui.LogLegend)
+		container.New(layout.NewCustomPaddedLayout(gap, 0, gap, gap), ui.WeekBox))
 
 	// The dragging layer sits above the scroll rather than inside it: the card
 	// being carried has to pass over everything, and inside the scroll it would
@@ -733,6 +742,76 @@ func IsoDate(e *widget.DateEntry) string {
 // form slides in.
 var pendingArriveDelay time.Duration
 
+// The ignored tiles sit in a fold under their toggle, so showing or hiding them
+// grows or shrinks the Commits card over a moment instead of all at once.
+var (
+	pendingSize       *shell.Morph
+	pendingRenderedAt time.Time
+	ignoredFold       *shell.Fold
+	// ignoredHidden is what the fold holds: the ignored groups the last draw
+	// found.
+	ignoredHidden []backend.Group
+	// pendingReflow re-lays the page around the card on each frame of the
+	// slide; nil until the tab is built.
+	pendingReflow func(bool)
+)
+
+// ignoredArrival brings the ignored tiles in one after another, as the list
+// does, unless a newer list is being fetched behind this one.
+func ignoredArrival(ui *shell.UI, delay time.Duration) *shell.Arrival {
+	if ui.PendingLoading {
+		return nil
+	}
+	return ui.Arrival("ignored", fmt.Sprint(ui.LogSearch, "|", ui.Pending.Range)).After(delay)
+}
+
+// toggleIgnored shows or hides the ignored tiles, sliding the card to fit.
+//
+// The fold goes in and comes out of the list as it stands: drawing the whole
+// list again at either end of the slide was a stutter, there to put back
+// exactly what was already showing.
+func toggleIgnored(ui *shell.UI) {
+	ui.ShowIgnored = !ui.ShowIgnored
+	if ui.ShowIgnored {
+		ui.ReplayArrival("ignored")
+	}
+	if pendingReflow == nil || ui.PendingBox == nil || len(ignoredHidden) == 0 {
+		RenderPending(ui)
+		return
+	}
+	if t := ui.IgnoredToggle; t != nil {
+		from, to := "Hide ", "Show "
+		if ui.ShowIgnored {
+			from, to = to, from
+		}
+		t.Text = strings.Replace(t.Text, from, to, 1)
+		t.Refresh()
+	}
+	fold := ignoredFold
+	if ui.ShowIgnored {
+		// Clicked again while still shutting: it turns round where it is.
+		if fold == nil {
+			fold = shell.NewFold(sections(ui, ignoredHidden, ignoredArrival(ui, 0)), false)
+			ignoredFold = fold
+			ui.PendingBox.Add(fold)
+		}
+		fold.Slide(true, pendingReflow)
+		return
+	}
+	if fold == nil {
+		RenderPending(ui)
+		return
+	}
+	fold.Slide(false, func(final bool) {
+		pendingReflow(final)
+		if final && ignoredFold == fold {
+			ignoredFold = nil
+			ui.PendingBox.Remove(fold)
+			shell.Repaint(ui.PendingBox)
+		}
+	})
+}
+
 func RenderPending(ui *shell.UI) {
 	// Log List counts these commits in its pending column, so it is redrawn
 	// whenever the list behind it changes — otherwise that column keeps saying
@@ -740,6 +819,7 @@ func RenderPending(ui *shell.UI) {
 	defer shell.Hooks.DrawLogList(ui)
 
 	res := ui.Pending
+	arriveDelay := pendingArriveDelay // for the ignored tiles too; the list clears it
 	var objs []fyne.CanvasObject
 	for _, e := range res.Errors {
 		objs = append(objs, shell.ColorLabel(e, theme.ColorNameError))
@@ -784,12 +864,12 @@ func RenderPending(ui *shell.UI) {
 		objs = append(objs, widget.NewLabel(fmt.Sprintf(
 			"%d unlogged commit(s)%s. Tap one to log it.", remaining, rangeNote)))
 		// The list arrives as Kanban's cards do, one bubble after another, when
-		// it first loads, when the search or the key changes it, and when the
+		// it first loads, when the search or filter changes it, and when the
 		// tab is opened. Logging or ignoring a commit leaves the rest be.
 		// Held back while a newer list is being fetched behind this one.
 		var arrive *shell.Arrival
 		if !ui.PendingLoading {
-			arrive = ui.Arrival("pending", fmt.Sprint(ui.LogSearch, "|", ui.OrgOff, "|", res.Range)).After(pendingArriveDelay)
+			arrive = ui.Arrival("pending", fmt.Sprint(ui.LogSearch, "|", res.Range)).After(pendingArriveDelay)
 		}
 		pendingArriveDelay = 0
 		objs = append(objs, sections(ui, live, arrive))
@@ -817,18 +897,40 @@ func RenderPending(ui *shell.UI) {
 		if ui.ShowIgnored {
 			label = fmt.Sprintf("Hide %d ignored", len(hidden))
 		}
-		toggle := widget.NewButton(label, func() {
-			ui.ShowIgnored = !ui.ShowIgnored
-			RenderPending(ui)
-		})
-		toggle.Importance = widget.LowImportance
-		objs = append(objs, container.NewHBox(toggle))
+		// A gold tag that fades lit under the pointer. The same one is kept
+		// from draw to draw, so clicking it (which redraws the list) leaves it
+		// lit rather than handing the pointer a fresh, unlit one.
+		if ui.IgnoredToggle == nil {
+			ui.IgnoredToggle = shell.NewGoldTag(label, func() { toggleIgnored(ui) })
+			ui.IgnoredToggle.Wide = true
+			ui.IgnoredToggle.Large = true
+		}
+		if ui.IgnoredToggle.Text != label {
+			ui.IgnoredToggle.Text = label
+			ui.IgnoredToggle.Refresh()
+		}
+		// Room above, so the toggle stands clear of the tiles over it.
+		objs = append(objs, container.New(layout.NewCustomPaddedLayout(theme.InnerPadding(), 0, 0, 0),
+			container.NewHBox(ui.IgnoredToggle)))
 		if ui.ShowIgnored {
-			objs = append(objs, sections(ui, hidden, nil))
+			ignoredFold = shell.NewFold(sections(ui, hidden, ignoredArrival(ui, arriveDelay)), true)
+			objs = append(objs, ignoredFold)
 		}
 	}
+	if !ui.ShowIgnored || len(hidden) == 0 {
+		ignoredFold = nil
+	}
+	ignoredHidden = hidden
 
 	ui.PendingBox.Objects = objs
+	// A completed scan changes the list's height. Ease the card to fit before
+	// refreshing it, preserving the height of the loading message or old list.
+	if !ui.PendingLoading && !ui.PendingAt.Equal(pendingRenderedAt) {
+		pendingRenderedAt = ui.PendingAt
+		if pendingSize != nil && pendingSize.Content == ui.PendingBox && pendingReflow != nil {
+			pendingSize.Change(0, pendingReflow)
+		}
+	}
 	ui.PendingBox.Refresh()
 	shell.Relayout(ui.LogBody)
 	DrawLogLegend(ui)
@@ -891,7 +993,7 @@ func sections(ui *shell.UI, groups []backend.Group, arrive *shell.Arrival) fyne.
 	var objs []fyne.CanvasObject
 	for i, s := range all {
 		if i > 0 {
-			objs = append(objs, container.NewPadded(widget.NewSeparator()))
+			objs = append(objs, container.NewPadded(sectionRule()))
 		}
 		// The loose tiles are "other" only when something named stands above
 		// them. With nothing grouped they are the whole list, and a heading
@@ -932,7 +1034,16 @@ func sectionHeading(ui *shell.UI, s pendingSection) fyne.CanvasObject {
 	heading.Wrapping = fyne.TextWrapWord
 	detail := widget.NewLabelWithStyle(side, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	detail.Wrapping = fyne.TextWrapBreak
-	return container.NewVBox(heading, detail)
+	// The name is gold, "Other commits" included, as a panel's heading is.
+	gold := container.NewThemeOverride(heading, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	return container.NewVBox(gold, detail)
+}
+
+// sectionRule stays light grey even inside a panel with dark separators.
+func sectionRule() fyne.CanvasObject {
+	line := canvas.NewRectangle(color.NRGBA{R: 0x68, G: 0x68, B: 0x68, A: 0xff})
+	line.SetMinSize(fyne.NewSize(0, 1))
+	return line
 }
 
 // bubbleGrid is one block of tiles, wrapped into as many rows as the width
@@ -1301,7 +1412,7 @@ func (t *commitText) growWithText(minRows int, relayout func()) {
 	var grows []func()
 	for _, e := range []*widget.Entry{t.desc, t.Remarks} {
 		e.SetMinRowsVisible(minRows)
-		grow := autoGrow(e, minRows, relayout)
+		grow := shell.AutoGrow(e, minRows, 0, relayout)
 		grows = append(grows, grow)
 		changed := e.OnChanged
 		e.OnChanged = func(text string) {
@@ -1643,22 +1754,13 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			return
 		}
 		msg.SetText("Pushing…")
-		pushProgress, stop := ui.PushSpinner("Pushing to GitHub…")
-		var res backend.PushResult
-		var perr error
-		ui.Async(func() error {
-			resolved, err := resolveForPush(ui, r)
-			if err != nil {
-				perr = err
-				return nil
+		pushSavedEntry(ui, r, func(updated backend.Row, res backend.PushResult, perr error) {
+			r = updated
+			if perr == errReviewPushCancelled {
+				msg.SetText("Saved — code reviews were not combined.")
+				refresh()
+				return
 			}
-			r = resolved
-			res, perr = backend.PushEntry(ui.Cfg, r["issue"], r["date"], r["owner"],
-				mins, body, r["issue_body"], backend.OrDefault(r["mode"], "issue"), r["issue_url"],
-				backend.SubTitleBaseFor(r), pushProgress)
-			return nil // handle the push error inline so the edit is not lost
-		}, func() {
-			stop()
 			if perr != nil {
 				msg.SetText("Saved, but push failed: " + perr.Error() + " Retry from this popup or the entry's push button.")
 				refresh()
@@ -1975,42 +2077,4 @@ func issueFieldRef(text string) (string, error) {
 		return "", nil
 	}
 	return backend.IssueRefFromAny(text)
-}
-
-// autoGrow returns a function that sizes a word-wrapped multi-line entry to
-// its text, never below minRows, and then calls relayout. Call it whenever the
-// text changes. Fyne has no wrapped line count, so it measures each paragraph
-// against the entry's text width.
-func autoGrow(e *widget.Entry, minRows int, relayout func()) func() {
-	shown := minRows
-	return func() {
-		rows := wrappedRows(e)
-		if rows < minRows {
-			rows = minRows
-		}
-		if rows == shown {
-			return
-		}
-		shown = rows
-		e.SetMinRowsVisible(rows)
-		if relayout != nil {
-			relayout()
-		}
-	}
-}
-
-func wrappedRows(e *widget.Entry) int {
-	paragraphs := strings.Split(e.Text, "\n")
-	// The text sits inside the entry's inner padding and a little more; a
-	// cautious width over-counts a row rather than leaving one hidden.
-	width := e.Size().Width - 3*theme.InnerPadding()
-	if width <= 0 {
-		return len(paragraphs)
-	}
-	rows := 0
-	for _, p := range paragraphs {
-		n := int(math.Ceil(float64(fyne.MeasureText(p, theme.TextSize(), e.TextStyle).Width / width)))
-		rows += max(n, 1)
-	}
-	return rows
 }

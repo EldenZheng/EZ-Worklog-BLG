@@ -178,6 +178,42 @@ func TestDatePickerShowsPlannedTime(t *testing.T) {
 	}
 }
 
+func TestDatePickerArrivalFollowsWeekdayColumns(t *testing.T) {
+	ui := statusUI(t)
+	base := fyne.CurrentApp()
+	driver := &cascadeFrameDriver{Driver: base.Driver()}
+	fyne.SetCurrentApp(&motionTestApp{App: base, driver: driver})
+	defer func() { fyne.SetCurrentApp(base); base.Quit() }()
+
+	p := logwork.NewWorklogDatePicker(ui, "2026-08-01") // Saturday: five blank slots.
+	ui.Win.SetContent(p)
+	p.Open.OnTapped()
+	p.Refresh() // Capture the day cascade after the popup's own unfolding.
+	grid := p.Grid.Objects[0].(*fyne.Container)
+	for _, blank := range grid.Objects[7:12] {
+		if _, ok := blank.(*shell.Reveal); ok {
+			t.Fatal("blank weekday slots must not consume day animation positions")
+		}
+	}
+	if driver.animation == nil {
+		t.Fatal("missing calendar arrival")
+	}
+	driver.animation.Tick(.2)
+	share := func(day int) float32 {
+		return grid.Objects[12+day-1].(*shell.Reveal).Share()
+	}
+	// The following week's Monday and Tuesday arrive before its Wednesday,
+	// while the first Saturday has not started. A doubled offset breaks this.
+	if !(share(3) > share(4) && share(4) > share(5) && share(1) == 0) {
+		t.Fatalf("wrong column order: Mon=%v Tue=%v Wed=%v Sat=%v", share(3), share(4), share(5), share(1))
+	}
+	driver.animation.Tick(1)
+	if p.ISO() != "2026-08-01" || share(31) != 1 {
+		t.Fatal("calendar arrival must finish without changing the picked date")
+	}
+	p.Open.OnTapped()
+}
+
 // Switching kinds slides a picture of the old form out while the new one
 // slides in, and leaves no picture behind.
 func TestKindSwitchSlidesTheOldFormOut(t *testing.T) {
@@ -210,10 +246,11 @@ func TestKindSwitchSlidesTheOldFormOut(t *testing.T) {
 // The Sprint Calendar's days arrive when a period is first shown, and not on
 // a redraw of the same one.
 func TestSprintCalendarDaysArriveOnce(t *testing.T) {
-	ui, w, _ := plannerFixture(t)
+	ui, _, _ := plannerFixture(t)
 	reveals := func() int {
 		n := 0
-		walkCanvas(w.Content(), func(o fyne.CanvasObject) {
+		// The days only: the issue tray arrives on its own.
+		walkCanvas(ui.Kanban.CalendarClip, func(o fyne.CanvasObject) {
 			if _, ok := o.(*shell.Reveal); ok {
 				n++
 			}
@@ -228,6 +265,11 @@ func TestSprintCalendarDaysArriveOnce(t *testing.T) {
 	kanban.Draw(ui.Kanban)
 	if reveals() != 0 {
 		t.Fatal("redrawing the same week should not replay its arrival")
+	}
+	ui.Kanban.ProjectOff = map[string]bool{"p": true}
+	kanban.Draw(ui.Kanban)
+	if reveals() != 7 {
+		t.Fatalf("a filter change should replay the calendar entrance, got %d reveals", reveals())
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"worklog/internal/menus/loglist"
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/meeting"
+	"worklog/internal/menus/projects"
 	"worklog/internal/menus/report"
 	"worklog/internal/menus/settings"
 	"worklog/internal/menus/sprintcalendar"
@@ -94,6 +95,7 @@ func main() {
 			logwork.DrawWeekStrip(ui)
 			if ui.PendingLoaded {
 				ui.ReplayArrival("pending")
+				ui.ReplayArrival("ignored")
 				logwork.RenderPending(ui)
 			}
 			ui.LoadPending(false)
@@ -123,6 +125,8 @@ func main() {
 			ui.ReplayArrival("report")
 			report.DrawReport(ui)
 			ui.LoadReport(false)
+		case shell.ProjectsTabName:
+			projects.Open(ui)
 		case shell.SettingsTabName:
 			settings.LoadGitHubProfile(ui, false)
 		}

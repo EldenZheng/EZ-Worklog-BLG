@@ -72,6 +72,8 @@ func BuildLogListTab(ui *shell.UI) fyne.CanvasObject {
 	// trailing buttons can push the right-hand end out to where the scroll
 	// clipped it, taking the checkbox with them if it stood over there.
 	headLeft := container.NewHBox(prev, ui.ListTitle, next, here, ui.ListSupportView.View)
+	ui.ListLegend = container.NewStack()
+	headLeft = container.NewBorder(nil, nil, headLeft, nil, ui.ListLegend)
 	headRight := container.NewHBox(refresh, mail)
 	head := container.New(widgets.NewSidesLayout(headLeft, headRight, 0), headLeft, headRight)
 
@@ -91,6 +93,7 @@ func DrawLogList(ui *shell.UI) {
 	weekStart := backend.OrDefault(ui.WeekStart, backend.WeekStartOf(shell.Today()))
 	days := shell.WeekDates(weekStart)
 	from, to := days[0], days[len(days)-1]
+	drawListLegend(ui, days)
 
 	ui.ListTitle.SetText(shell.WeekRangeLabel(weekStart))
 	if ui.ListHere != nil {
@@ -147,6 +150,48 @@ func DrawLogList(ui *shell.UI) {
 	shell.Relayout(ui.ListBody)
 }
 
+// The key covers the week's logged work and all pending work. Count from the
+// original sources, including hidden orgs, so every toggle can be undone.
+func drawListLegend(ui *shell.UI, days []string) {
+	if ui.ListLegend == nil {
+		return
+	}
+	inWeek := map[string]bool{}
+	for _, d := range days {
+		inWeek[d] = true
+	}
+	byOrg := map[string]int{}
+	for _, month := range shell.WeekMonths(days[0]) {
+		items, _ := ui.ItemsFor(shell.StatusCacheKey(month))
+		for _, it := range items {
+			if inWeek[it.Date] {
+				byOrg[shell.ItemOrg(it)]++
+			}
+		}
+	}
+	rows, _ := ui.Store.ReadRows()
+	for _, r := range rows {
+		if r["pushed_at"] == "" {
+			byOrg[shell.RowOrg(r)]++
+		}
+	}
+	for _, g := range ui.Pending.Groups {
+		if !g.Ignored {
+			byOrg[strings.ToLower(shell.OrgOf(g.Issue))] += len(g.Commits)
+		}
+	}
+	var offset fyne.Position
+	if len(ui.ListLegend.Objects) > 0 {
+		previous := ui.ListLegend.Objects[0].(*fyne.Container).Objects[0].(*container.Scroll)
+		offset = previous.Offset
+	}
+	key := widgets.NewTrailingScroll(shell.OrgLegendWith(ui.Cfg, byOrg, ui.OrgOff, strconv.Itoa, ui.ToggleOrg))
+	key.Resize(ui.ListLegend.Size())
+	key.Objects[0].(*container.Scroll).ScrollToOffset(offset)
+	ui.ListLegend.Objects = []fyne.CanvasObject{key}
+	ui.ListLegend.Refresh()
+}
+
 // listDayMinHeight is the floor for a day on this tab. Shorter than the strip's,
 // because these columns hold no cards — only the score — and a column sized for
 // cards it will never carry is a band of empty across the top of the tab.
@@ -197,16 +242,15 @@ func listDayColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local [
 	}
 	draftByOrg := map[string]int{}
 	waiting := 0
-	for _, r := range local {
+	for _, r := range ui.ShownDrafts(local) {
 		draftByOrg[shell.RowOrg(r)] += r.Minutes()
 		waiting += r.Minutes()
 	}
-	// The support shift pencilled in — same rule as the strip, same yellow: neither
-	// this nor the drafts are on the board yet, and both should count the same way
-	// against the day's score.
+	// Pencilled-in support counts toward the same score as drafts but has
+	// its own turquoise segment.
 	placeholder := shell.SupportPlaceholderFor(ui.Cfg, shell.Hooks.SupportOn(ui, ds), ds, items)
 	if placeholder > 0 {
-		draftByOrg[strings.ToLower(shell.OrgOf(ui.Cfg.WorklogOwner))] += placeholder
+		draftByOrg[shell.SupportPendingKey] += placeholder
 		waiting += placeholder
 	}
 
@@ -214,13 +258,15 @@ func listDayColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local [
 	if ds == shell.Today() {
 		name += " · Today"
 	}
-	var head fyne.CanvasObject = widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
+	dayLabel := widget.NewLabelWithStyle(name, fyne.TextAlignLeading,
 		fyne.TextStyle{Bold: ds == shell.Today()})
+	var head fyne.CanvasObject = dayLabel
 	if ds == shell.Today() {
 		// Today is outlined and titled in gold, as on Log Work and the
 		// Commit List.
 		head = container.NewThemeOverride(head, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	}
+	head = ui.DayLink(ds, dayLabel, head, nil)
 
 	// Left of the line is what the day holds and what is queued for it; right of
 	// it is what the two come to together — the same split the strip uses, so a
@@ -263,6 +309,11 @@ func listDayColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local [
 		ui.ProgressBarParts("list/"+t.Format("Mon"), ds, shell.PlannedBarParts(ui.Cfg, byOrg, draftByOrg, shell.Hooks.PlannedMinutes(ui, ds, items, local)), 8),
 		container.New(shell.SplitCaption{}, shell.WeekCaption(banked), shell.WeekCaption(projected)),
 	)
+	if placeholder > 0 {
+		support := shell.WeekCaption(fmt.Sprintf("+%dm support", placeholder))
+		support.Color = shell.WeekdaySupportColor()
+		body.Add(support)
+	}
 	return container.NewStack(floor, frame, container.NewPadded(body))
 }
 
@@ -296,9 +347,11 @@ func weekProgressPanel(ui *shell.UI, days []string, byDay map[string][]backend.W
 			if r["pushed_at"] != "" || !inWeek[r["date"]] {
 				continue
 			}
-			draftByOrg[shell.RowOrg(r)] += r.Minutes()
-			waiting += r.Minutes()
 			localByDay[r["date"]] = append(localByDay[r["date"]], r)
+			if ui.DraftsShown() {
+				draftByOrg[shell.RowOrg(r)] += r.Minutes()
+				waiting += r.Minutes()
+			}
 		}
 	}
 	// The purple on the end of the bar is the same planned time each day's own
@@ -314,7 +367,7 @@ func weekProgressPanel(ui *shell.UI, days []string, byDay map[string][]backend.W
 	for _, d := range days {
 		if m := shell.SupportPlaceholderFor(ui.Cfg, shell.Hooks.SupportOn(ui, d), d, byDay[d]); m > 0 {
 			placeholder += m
-			draftByOrg[strings.ToLower(shell.OrgOf(ui.Cfg.WorklogOwner))] += m
+			draftByOrg[shell.SupportPendingKey] += m
 		}
 	}
 	waiting += placeholder
@@ -329,12 +382,15 @@ func weekProgressPanel(ui *shell.UI, days []string, byDay map[string][]backend.W
 	}
 	// What the week would score if everything saved here went up, then if the
 	// plans were done as well. Each section counts the ones before it.
-	sections := []lineSection{{line, theme.Color(theme.ColorNameForeground)}}
-	if waiting > 0 {
-		sections = append(sections, lineSection{weekProjection("waiting", waiting, banked+waiting, goal), theme.Color(theme.ColorNameWarning)})
+	sections := []shell.TextSection{{Text: line, Ink: theme.Color(theme.ColorNameForeground)}}
+	if waiting > placeholder {
+		sections = append(sections, shell.TextSection{Text: weekProjection("waiting", waiting-placeholder, banked+waiting-placeholder, goal), Ink: theme.Color(theme.ColorNameWarning)})
+	}
+	if placeholder > 0 {
+		sections = append(sections, shell.TextSection{Text: weekProjection("support", placeholder, banked+waiting, goal), Ink: shell.WeekdaySupportColor()})
 	}
 	if planned > 0 {
-		sections = append(sections, lineSection{weekProjection("planned", planned, banked+waiting+planned, goal), shell.PlannerPlanColor})
+		sections = append(sections, shell.TextSection{Text: weekProjection("planned", planned, banked+waiting+planned, goal), Ink: shell.PlannerPlanColor})
 	}
 
 	inset := theme.InnerPadding()
@@ -361,28 +417,11 @@ func weekProjection(label string, added, projected, goal int) string {
 	return line
 }
 
-// lineSection is one coloured run of a sectionLine.
-type lineSection struct {
-	text string
-	ink  color.Color
-}
-
 // sectionLine sets sections on one line, dotted apart, moving a section that
 // does not fit to the next line whole. top and bottom stand in for a label's
 // padding, as does the inset at the sides.
-func sectionLine(style fyne.TextStyle, sections []lineSection, top, bottom float32) fyne.CanvasObject {
-	add := func(row *fyne.Container, s string, ink color.Color) {
-		t := canvas.NewText(s, ink)
-		t.TextStyle = style
-		row.Add(t)
-	}
-	row := container.New(&widgets.WrapRowLayout{})
-	for i, s := range sections {
-		if i > 0 {
-			add(row, "  ·  ", theme.Color(theme.ColorNameForeground))
-		}
-		add(row, s.text, s.ink)
-	}
+func sectionLine(style fyne.TextStyle, sections []shell.TextSection, top, bottom float32) fyne.CanvasObject {
+	row := container.New(&widgets.WrapRowLayout{}, shell.SectionTexts(style, sections)...)
 	side := theme.InnerPadding()
 	return container.New(layout.NewCustomPaddedLayout(top, bottom, side, side), row)
 }
@@ -440,7 +479,7 @@ func pendingIssuesPanel(ui *shell.UI, arrive *shell.Arrival) fyne.CanvasObject {
 	for _, p := range pend {
 		commits += p.Commits
 		mins += p.Minutes
-		card := shell.IssueSummaryCardForRows(ui.Cfg, p.Issue, p.Title, PendingAmount(p), p.Rows, func() {
+		card := shell.IssueSummaryCardForRows(ui.Cfg, p.Issue, p.Title, PendingAmount(p), p.Rows, false, func() {
 			shell.Hooks.OpenPendingIssue(ui, p.Rows, p.Groups)
 		})
 		cards = append(cards, card)
@@ -491,7 +530,7 @@ func PendingByIssue(ui *shell.UI) []PendingIssue {
 	}
 
 	if rows, err := ui.Store.ReadRows(); err == nil {
-		for _, r := range ui.ShownRows(rows) {
+		for _, r := range ui.ShownDrafts(ui.ShownRows(rows)) {
 			if r["pushed_at"] != "" {
 				continue
 			}
@@ -512,7 +551,7 @@ func PendingByIssue(ui *shell.UI) []PendingIssue {
 	}
 
 	for _, g := range ui.Pending.Groups {
-		if g.Ignored {
+		if g.Ignored || !ui.OrgShown(shell.OrgOf(g.Issue)) {
 			continue
 		}
 		issue := strings.TrimSpace(g.Issue)

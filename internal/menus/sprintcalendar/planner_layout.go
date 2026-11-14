@@ -29,12 +29,11 @@ func newPlannerFastScroll(content fyne.CanvasObject) *shell.PlannerFastScroll {
 	return s
 }
 
+// CalendarSprintLabel names a sprint in the calendar's dropdown. The running
+// sprint is marked by colour (GoldSelect.Current), not by a suffix that would
+// overflow the field.
 func CalendarSprintLabel(s backend.SprintIteration) string {
-	label := s.Title + " | " + shell.SprintDateLabel(s)
-	if s.Contains(shell.Today()) {
-		label += " - Current"
-	}
-	return label
+	return s.Title + " | " + shell.SprintDateLabel(s)
 }
 
 func calendarSprintChoices(k *shell.KanbanUI) []shell.CombinedSprint {

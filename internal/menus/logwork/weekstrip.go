@@ -98,6 +98,24 @@ func WeekWorklogs(ui *shell.UI, days []string) (map[string][]backend.WorklogItem
 
 // ---- the strip itself ----
 
+// savedReady reports whether the week's worklogs have landed: what the Saved
+// locally section's own progress bar tracks. It does not wait on the commit
+// sweep at the top of the tab, which takes longer and has its own bar.
+func savedReady(ui *shell.UI, days []string, weekState string) bool {
+	return weekState != "loading" && !ui.WeekFetching(days)
+}
+
+// savedShown reports whether the Saved locally section is drawn now. It is held
+// back until it is ready for the week on show; after that a refetch leaves it
+// on screen, so it does not arrive a second time.
+func savedShown(ui *shell.UI, days []string, weekState string) bool {
+	if savedReady(ui, days, weekState) {
+		ui.SavedShownWeek = ui.WeekStart
+		return true
+	}
+	return ui.SavedShownWeek == ui.WeekStart
+}
+
 func DrawWeekStrip(ui *shell.UI) {
 	if ui.WeekBox == nil {
 		return
@@ -192,6 +210,11 @@ func DrawWeekStrip(ui *shell.UI) {
 	})
 
 	headLeft := container.NewHBox(prev, title, next, here)
+	if ui.LogLegend != nil {
+		// The legend takes the remaining width and scrolls sideways instead of
+		// spending a separate row above the week.
+		headLeft = container.NewBorder(nil, nil, headLeft, nil, ui.LogLegend)
+	}
 	headRight := container.NewHBox(weekSupportControl(ui, rota), mail, refresh,
 		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
 	head := container.New(widgets.NewSidesLayout(headLeft, headRight, ui.WeekBox.Size().Width), headLeft, headRight)
@@ -210,9 +233,11 @@ func DrawWeekStrip(ui *shell.UI) {
 	}
 	// A week shown for the first time arrives as Kanban's cards do: each day
 	// uncovered from the top down, one after another left to right, its bar
-	// filling in as it comes. Any other redraw leaves the days be. A week still
-	// loading arrives when its data lands.
-	if state != "loading" && !ui.WeekFetching(days) {
+	// filling in as it comes. Any other redraw leaves the days be. The days are
+	// held back until the week's worklogs have landed, and arrive together with
+	// the saved list, once.
+	shown := savedShown(ui, days, state)
+	if shown {
 		dayCols = ui.Arrival("week", ui.WeekStart).Reveal(dayCols, shell.ArriveDelays(len(dayCols)), func(i int, share float32) {
 			t, _ := time.Parse("2006-01-02", days[i])
 			ui.MeterShare("strip/"+t.Format("Mon"), share)
@@ -221,10 +246,8 @@ func DrawWeekStrip(ui *shell.UI) {
 	grid := container.New(&WeekGrid{}, dayCols...)
 
 	objs := []fyne.CanvasObject{head, ui.WeekStripProgress.View, grid}
-	// While GitHub is still being read the days would show only the drafts,
-	// and then jump: the head and its loading strip stand alone until the week
-	// lands.
-	if state == "loading" {
+	// Only the heading and the progress strip while the week is held back.
+	if !shown {
 		objs = objs[:2]
 	}
 
@@ -294,8 +317,18 @@ func WeekIssuesPanel(ui *shell.UI, items []backend.WorklogItem, state string, ar
 	}
 	cards := make([]fyne.CanvasObject, 0, len(totals))
 	rows, _ := ui.Store.ReadRows()
+	days := map[string]bool{}
+	for _, it := range items {
+		days[it.Date] = true
+	}
+	var logged []backend.Row
+	for _, row := range rows {
+		if days[row["date"]] && row["pushed_at"] != "" {
+			logged = append(logged, row)
+		}
+	}
 	for _, t := range totals {
-		cards = append(cards, shell.IssueSummaryCardForRows(ui.Cfg, t.URL, t.Title, fmt.Sprintf("%dm", t.Minutes), rows))
+		cards = append(cards, shell.IssueSummaryCardForRows(ui.Cfg, t.URL, t.Title, fmt.Sprintf("%dm", t.Minutes), logged, t.CodeReview))
 	}
 	cards = arrive.Reveal(cards, shell.ArriveDelays(len(cards)), nil)
 	return shell.IssueSummaryPanel("By Issue", summary, shell.IssueSummaryGrid(cards...), copySummary)
@@ -368,18 +401,20 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 	// remains the default; creation order is useful when clearing drafts FIFO.
 	SortDraftRows(local, ui.DraftSort)
 
+	// Keep local whole for the shared totals; the draft key controls the yellow
+	// minutes independently of the purple plan.
+	drafts := ui.ShownDrafts(local)
 	draftByOrg := map[string]int{}
 	waiting := 0
-	for _, r := range local {
+	for _, r := range drafts {
 		draftByOrg[strings.ToLower(shell.OrgOf(r["issue"]))] += r.Minutes()
 		waiting += r.Minutes()
 	}
 	// The support shift pencilled in, if the placeholder is on and this day has
-	// not already got the real thing. It rides in the same yellow as the drafts,
-	// which is the right colour for it: neither is on the board.
+	// not already got the real thing. Turquoise keeps it distinct from drafts.
 	placeholder := shell.SupportPlaceholderFor(ui.Cfg, shell.Hooks.SupportOn(ui, ds), ds, items)
 	if placeholder > 0 {
-		draftByOrg[strings.ToLower(shell.OrgOf(ui.Cfg.WorklogOwner))] += placeholder
+		draftByOrg[shell.SupportPendingKey] += placeholder
 		waiting += placeholder
 	}
 	planned := shell.Hooks.PlannedMinutes(ui, ds, items, local)
@@ -396,13 +431,14 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		// Today's heading is gold, like its outline.
 		head = container.NewThemeOverride(head, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	}
+	head = ui.DayLink(ds, dayLabel, head, nil)
 	// Time planned on the Sprint Calendar, in its purple, beside the day's name
 	// as on the calendar: on the heading's line, so a day with a plan starts its
 	// cards level with one without.
 	if planned > 0 {
-		// What the day still has free once its logged, drafted and planned time
-		// are counted: said in the tooltip, not on the day.
-		free := max(0, backend.Target-mins-waiting-planned)
+		// What the day still owes from its logged and drafted time alone, the
+		// plans left out: said in the tooltip, not on the day.
+		free := max(0, backend.Target-mins-waiting)
 		plan := shell.WeekCaption(fmt.Sprintf("%dm planned", planned))
 		plan.Color = shell.PlannerPlanColor
 		// Under the pointer it lists the planned blocks; a click opens the
@@ -442,10 +478,15 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		caption,
 	}
 
+	if placeholder > 0 {
+		support := shell.WeekCaption(fmt.Sprintf("+%dm support", placeholder))
+		support.Color = shell.WeekdaySupportColor()
+		body = append(body, support)
+	}
 	// What is still waiting is the card itself, standing on the day it will be
 	// pushed with — every one of them, however long that makes the column. The
 	// list above is for the entries that belong to some other week.
-	for _, r := range local {
+	for _, r := range drafts {
 		body = append(body, newDragTile(ui, r, DayRowCard(ui, r, func() { DrawRecent(ui) })))
 	}
 
@@ -510,8 +551,17 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	where := widget.NewLabel("no issue ref")
 	if r["issue"] != "" {
 		where = widget.NewLabel(backend.OrDefault(shell.ShortIssueRef(r["issue"]), r["issue"]))
+	} else if backend.RowIsBulkCodeReview(r) {
+		where.SetText("") // keep the shared card height without a missing-ref caption
 	}
 	where.Wrapping = fyne.TextWrapBreak
+	var whereLine fyne.CanvasObject = where
+	if backend.RowIsSingleCodeReview(r) {
+		// The label's own right padding is the gap before the tag. One extra
+		// pixel keeps rounding from wrapping a reference that fits.
+		full := fyne.MeasureText(where.Text, theme.TextSize(), where.TextStyle).Width + 2*theme.InnerPadding() + 1
+		whereLine = container.New(&RefTagLayout{Full: full}, where, shell.CodeReviewTag())
+	}
 
 	push, edit, del := rowActions(ui, r, refresh)
 	actionItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
@@ -522,10 +572,16 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 		actionItems = append(actionItems, shell.SavedTag("commits remaining"))
 	}
 	actionItems = append(actionItems, container.NewHBox(widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del)))
-	body := container.NewVBox(title, mins, where, container.New(&cardActionsLayout{}, actionItems...))
+	body := container.NewVBox(title, mins, whereLine, container.New(&cardActionsLayout{}, actionItems...))
 
 	return shell.OrgBubble(accent, body)
 }
+
+// RefTagLayout stands a tag right after a reference. The objects are the
+// reference and the tag. The reference takes Full, the width of its whole text,
+// and wraps when the row has less. Given under half of that it would break into
+// a tall sliver, so the tag drops below it instead.
+type RefTagLayout = widgets.RefTagLayout
 
 // weekRowTitle names a locally saved row the same way its tile does.
 func weekRowTitle(ui *shell.UI, r backend.Row) string {

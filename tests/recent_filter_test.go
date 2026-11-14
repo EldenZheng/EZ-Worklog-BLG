@@ -12,6 +12,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
+	"worklog/internal/menus/projects"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
@@ -51,6 +52,12 @@ func labels(o fyne.CanvasObject) []string {
 		out = append(out, labels(v.Content)...)
 	case *shell.Wipe:
 		out = append(out, labels(v.Content)...)
+	case *projects.ColumnChart:
+		out = append(out, labels(v.Content)...)
+	case *projects.GanttChart:
+		out = append(out, labels(v.Content)...)
+	case *projects.HoverList:
+		out = append(out, labels(v.Rows)...)
 	case *shell.Reveal:
 		out = append(out, labels(v.Content)...)
 	case *shell.HoverTag:

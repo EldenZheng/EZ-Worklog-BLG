@@ -35,6 +35,12 @@ type Tappable struct {
 	Bubble Lightable
 	// Look, if set, replaces the pointing-hand cursor.
 	Look desktop.Cursor
+	// OnHover, if set, hears the pointer arrive and leave.
+	OnHover func(on bool)
+	// FadeOnTap crossfades this filter button when its action redraws it.
+	FadeOnTap         bool
+	filterReplacement *Tappable // receives hover/leave when a filter redraw replaces this widget
+	filterHover       *filterHover
 }
 
 func NewTappable(content fyne.CanvasObject, onTap func()) *Tappable {
@@ -51,6 +57,12 @@ func (t *Tappable) CreateRenderer() fyne.WidgetRenderer {
 }
 
 func (t *Tappable) Tapped(e *fyne.PointEvent) {
+	if t.FadeOnTap {
+		fade := beginFilterFade(t)
+		defer fade.play()
+		restoreHover := keepFilterHover(t, e)
+		defer restoreHover()
+	}
 	if t.OnTapAt != nil && e != nil {
 		t.OnTapAt(e.AbsolutePosition)
 	}
@@ -78,13 +90,26 @@ type UI struct {
 	RepMonth string
 	SelDay   string
 
+	// SlateEpic is the weekend support epic last typed into the slate form, so
+	// the popup and the Log Work tab start from it.
+	SlateEpic string
+
+	// SavedShownWeek is the week Log Work's Saved locally section has been shown
+	// for once everything behind it loaded. Until then the section is held back,
+	// so it arrives once rather than once per fetch that lands.
+	SavedShownWeek string
+
+	// IgnoredToggle is Commits' "Show N ignored" tag, kept across redraws so
+	// its hover survives the click that redraws the list.
+	IgnoredToggle *HoverTag
+
 	// containers refreshed on demand
 	PendingBox *fyne.Container
 	RecentBox  *fyne.Container
 	WeekBox    *fyne.Container // the week a saved entry can be dropped onto
 	CalBox     *fyne.Container
 	CalLegend  *fyne.Container
-	LogLegend  *fyne.Container // the same key, at the foot of the Log work tab
+	LogLegend  *fyne.Container // the same key, beside the Log work week's navigation
 	DayPanel   *fyne.Container
 	DaySide    *fyne.Container // the panel's shell: fixed width
 	DaySwap    *fyne.Container // holds either the day's detail or the prompt
@@ -115,7 +140,8 @@ type UI struct {
 	RepTitle        *widget.Label
 	ListTitle       *widget.Label
 	ListHere        *widget.Button // "This week" on Log List, greyed when already there
-	ListSupport     *widget.Check  // mirror of the Log Work support checkbox, kept in sync
+	ListLegend      *fyne.Container
+	ListSupport     *widget.Check // mirror of the Log Work support checkbox, kept in sync
 	ListSupportView *SupportView
 
 	CommitTitle *widget.Label
@@ -177,20 +203,23 @@ type UI struct {
 
 	// Pending commits, held so a bubble can be re-rendered without refetching,
 	// plus the issue titles their refs resolve to.
-	Pending            backend.PendingResult
-	PendingLoaded      bool
-	PendingLoading     bool
-	PendingAt          time.Time // when the list last landed, for staleness
-	IssueInfo          map[string]backend.IssueInfo
-	savedTitlesLoading bool
-	ShowIgnored        bool
+	Pending        backend.PendingResult
+	PendingLoaded  bool
+	PendingLoading bool
+	// PendingTitlesLoading covers the issue titles fetched after the pending
+	// commits, which the saved entries are named by too.
+	PendingTitlesLoading bool
+	PendingAt            time.Time // when the list last landed, for staleness
+	IssueInfo            map[string]backend.IssueInfo
+	savedTitlesLoading   bool
+	ShowIgnored          bool
 
 	// supportWeeks are the weeks (by Monday) the weekday support placeholder is
 	// ticked for. Saved in support-weeks.json, pruned once a week's Friday has
 	// passed or its weekdays all hold logged support. Never pushed anywhere.
 	SupportWeeks map[string]bool
 	// WeekSupport is Log Work's support checkbox, kept across redraws, and
-	// WeekSupportView what shows it: the checkbox, or a gold "Support Week" in
+	// WeekSupportView what shows it: the checkbox, or a turquoise "Support Week" in
 	// its place while the week shown is the user's support week.
 	WeekSupport     *widget.Check
 	WeekSupportView *SupportView
@@ -277,16 +306,37 @@ func (ui *UI) ToggleOrg(org string) {
 	} else {
 		ui.OrgOff[org] = true
 	}
+	// Reuse the cached work and replay each view's entrance after filtering it.
+	ui.ReplayWorkArrivals()
 	Hooks.DrawCalendar(ui)
 	Hooks.DrawReport(ui)
 	// The saved list, the week strip and the key itself all come off this.
 	Hooks.DrawRecent(ui)
 	// Only once there is a list: rendering an empty result would replace the
 	// "loading" line with "no unlogged commits", which is a different claim.
-	if ui.PendingLoaded {
+	if ui.PendingLoaded && ui.PendingBox != nil {
 		Hooks.RenderPending(ui)
 	}
 	Hooks.DrawLogLegend(ui)
+	Hooks.DrawCommitList(ui)
+	Hooks.DrawMeeting(ui)
+	if ui.WeekBox == nil {
+		Hooks.DrawLogList(ui)
+	}
+}
+
+// DraftsShown and PlansShown report whether the key has those two switched on.
+func (ui *UI) DraftsShown() bool { return ui.OrgShown(DraftsKey) }
+func (ui *UI) PlansShown() bool  { return ui.OrgShown(PlansKey) }
+
+// ShownDrafts is the unpushed rows to draw: none while the key hides drafts.
+// Separate from ShownRows because hidden drafts still count elsewhere: they
+// cover planned time, and an editor adds them up against the day's target.
+func (ui *UI) ShownDrafts(rows []backend.Row) []backend.Row {
+	if ui.DraftsShown() {
+		return rows
+	}
+	return nil
 }
 
 // ShownItems drops the worklog items belonging to a filtered-out organisation.
@@ -339,7 +389,7 @@ func (ui *UI) DraftMinutesByDay(fromDate, toDate string) map[string]int {
 	if err != nil {
 		return out
 	}
-	for _, r := range ui.ShownRows(rows) {
+	for _, r := range ui.ShownDrafts(ui.ShownRows(rows)) {
 		if r["pushed_at"] != "" {
 			continue
 		}
@@ -451,13 +501,20 @@ func (ui *UI) LoadPending(force bool) {
 			ui.PendingBox.Objects = []fyne.CanvasObject{ColorLabel(ferr.Error(), theme.ColorNameError)}
 			ui.PendingBox.Refresh()
 			Relayout(ui.LogBody)
+			Hooks.DrawRecent(ui) // Saved locally was waiting on this fetch
 			return
 		}
 		ui.PendingLoaded = true
 		ui.PendingAt = time.Now()
 		ui.Pending = res
 		Hooks.RenderPending(ui)
-		ui.loadIssueInfos(composer, titlesWeight, finish)
+		// Saved locally waits for the titles as well, then draws once.
+		ui.PendingTitlesLoading = true
+		ui.loadIssueInfos(composer, titlesWeight, func() {
+			finish()
+			ui.PendingTitlesLoading = false
+			Hooks.DrawRecent(ui)
+		})
 	})
 }
 

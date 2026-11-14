@@ -101,7 +101,7 @@ func DrawCommitList(ui *shell.UI) {
 	top := container.NewVBox(topRows...)
 
 	byDay := map[string][]backend.Commit{}
-	for _, c := range commits {
+	for _, c := range ui.ShownCommits(commits) {
 		byDay[c.Date] = append(byDay[c.Date], c)
 	}
 	// Border again: top holds the summary and any errors at their natural

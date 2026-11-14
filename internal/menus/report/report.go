@@ -134,7 +134,8 @@ func DrawReport(ui *shell.UI) {
 	}
 	plannedByDay := ui.PlannedByDay(fromDate, toDate, all)
 	plannedTotal, pendingTotal := 0, 0
-	for _, pending := range []map[string]int{draftByDay, ui.SupportPlaceholdersByDay(fromDate, toDate, all), plannedByDay} {
+	supportByDay := ui.SupportPlaceholdersByDay(fromDate, toDate, all)
+	for _, pending := range []map[string]int{draftByDay, supportByDay, plannedByDay} {
 		for d, m := range pending {
 			projectedTotals[d] += m
 			pendingTotal += m
@@ -209,7 +210,9 @@ func DrawReport(ui *shell.UI) {
 	stats := container.New(widgets.NewFlowGrid(220, 0, 126),
 		reportMetricWithAside(money(totalReceivable), "Payable", payableNote, payableBeforeSupport, convertedTag(totalReceivable)),
 		reportMetricTintedWithAside(money(projectedTotalReceivable), "Payable after pendings", projectedNote, projectedBeforeSupport, convertedTag(projectedTotalReceivable), draftSurface, draftHeader, draftBorder),
-		reportMetricDarkBlue(money(supportBonus), "Support bonus", supportDetail, convertedTag(supportBonus)),
+		reportMetricDarkBlue(money(supportBonus), "Support bonus", supportDetail, convertedTag(supportBonus),
+			// Files the week's weekend support epic and its seven days.
+			shell.QuietButton(widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() { ui.ShowWeekendSlatePopup() }))),
 	)
 	timeStats := container.New(widgets.NewFlowGrid(220, 0, 126),
 		reportMetric(fmt.Sprintf("%.1fh", float64(rep.TotalMin)/60), "Time logged",
@@ -221,7 +224,12 @@ func DrawReport(ui *shell.UI) {
 	fullCycle, fullDays := RemainingCycleProjection(ui.Cfg, projectedTotals, fromDate, toDate, shell.Today(), false)
 	weekdays, weekdayDays := RemainingCycleProjection(ui.Cfg, projectedTotals, fromDate, toDate, shell.Today(), true)
 	fullPay, weekdayPay := fullCycle.Receivable+supportBonus, weekdays.Receivable+supportBonus
+	supportTotal := 0
+	for _, m := range supportByDay {
+		supportTotal += m
+	}
 	paymentRows := []fyne.CanvasObject{
+		reportFactColored("Weekday support (+180 min on selected weekdays)", backend.HoursMins(supportTotal)+" pending · display only", shell.WeekdaySupportColor()),
 		reportFact("Worklog receivable", money(rep.Receivable)),
 		reportFact("Weekend support bonus", money(supportBonus)),
 		reportText(supportNote),
@@ -265,7 +273,7 @@ func DrawReport(ui *shell.UI) {
 		to, _ := time.Parse("2006-01-02", toDate)
 		for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
 			ds := d.Format("2006-01-02")
-			day := ChartDay{Date: ds, ByOrg: byDayOrg[ds], Draft: draftByDay[ds], Planned: plannedByDay[ds]}
+			day := ChartDay{Date: ds, ByOrg: byDayOrg[ds], Draft: draftByDay[ds], Support: supportByDay[ds], Planned: plannedByDay[ds]}
 			for _, m := range day.ByOrg {
 				day.Total += m
 			}
@@ -288,35 +296,40 @@ func DrawReport(ui *shell.UI) {
 		allMin += m
 	}
 	split := []fyne.CanvasObject{shell.Bold("By organisation — tap one to show only the others")}
-	for _, org := range shell.OrgsByShare(ui.Cfg, byOrg) {
-		org, mins := org, byOrg[org]
-		pct := 0
-		if allMin > 0 {
-			pct = int(float64(mins) / float64(allMin) * 100)
-		}
-		// A switched-off row keeps its size and its place and goes grey, dot and
-		// bar together — the same washed-out colour the key uses, so one look
-		// says which employer is currently out of every figure above.
-		var fill color.Color = shell.OrgColor(ui.Cfg, org)
+	// A switched-off row keeps its place and goes grey, dot and bar together —
+	// the same washed-out colour the key uses, so one look says what is
+	// currently out of every figure above.
+	addSplitRow := func(key, name string, fill color.Color, mins int, amount string) {
 		nameColor := theme.ColorNameForeground
-		amount := fmt.Sprintf("%s · %d%%", backend.HoursMins(mins), pct)
-		if !ui.OrgShown(org) {
+		if !ui.OrgShown(key) {
 			fill = shell.Dimmed(fill)
 			nameColor = theme.ColorNamePlaceHolder
 			amount = "hidden"
 		}
 		row := container.New(widgets.NewRatioRow(0.04, 0.22, 0.54, 0.20),
 			shell.OrgDotIn(fill),
-			container.NewCenter(shell.ColorLabel(backend.OrDefault(org, "unknown org"), nameColor)),
+			container.NewCenter(shell.ColorLabel(name, nameColor)),
 			shell.ShareBar(fill, mins, allMin, 12),
 			widget.NewLabelWithStyle(amount, fyne.TextAlignTrailing,
 				fyne.TextStyle{Monospace: true}))
 		// Same hover and press animation as the legend chips elsewhere.
-		split = append(split, shell.NewCardTappable(row, func() { ui.ToggleOrg(org) }))
+		split = append(split, shell.NewFilterTappable(row, func() { ui.ToggleOrg(key) }))
+	}
+	for _, org := range shell.OrgsByShare(ui.Cfg, byOrg) {
+		mins := byOrg[org]
+		pct := 0
+		if allMin > 0 {
+			pct = int(float64(mins) / float64(allMin) * 100)
+		}
+		addSplitRow(org, backend.OrDefault(org, "unknown org"), shell.OrgColor(ui.Cfg, org), mins,
+			fmt.Sprintf("%s · %d%%", backend.HoursMins(mins), pct))
 	}
 	if len(byOrg) == 0 {
 		split = append(split, widget.NewLabel("Nothing logged in this period."))
 	}
+	// Always last. Their bars use the same scale as the org rows above.
+	addSplitRow(shell.DraftsKey, shell.DraftLogsLabel, shell.DraftKeyFill(), draftTotal, backend.HoursMins(draftTotal))
+	addSplitRow(shell.PlansKey, shell.PlannedIssuesLabel, shell.PlannerPlanColor, plannedTotal, backend.HoursMins(plannedTotal))
 
 	var dayDetails []fyne.CanvasObject
 	if len(rep.Incomplete) > 0 {
@@ -360,7 +373,7 @@ func DrawReport(ui *shell.UI) {
 			backend.HoursMins(plannedTotal))))
 	}
 
-	top := container.NewVBox(stats, chart, container.NewVBox(split...))
+	top := container.NewVBox(stats, chart, shell.FilterGroup(layout.NewVBoxLayout(), split...))
 	bottom := container.NewVBox(timeStats, container.New(widgets.NewFlowGrid(300, 0, 0), payment, activity))
 	if len(dayDetails) > 0 {
 		bottom.Add(container.New(widgets.NewFlowGrid(300, 0, 0), dayDetails...))

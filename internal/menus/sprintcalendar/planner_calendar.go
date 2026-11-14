@@ -66,15 +66,21 @@ func UniqueCurrentItems(k *shell.KanbanUI) []backend.SprintCandidate {
 
 func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	k.BlockMarks = map[string][]shell.PlannerBlockMark{}
+	k.DayCards = map[string][]*shell.PlannerDragCard{}
 	loadCalendarWorklogs(k, false)
 	work := CalendarWorkData(k)
 	// A period shown for the first time, or the tab opened, arrives as Kanban's
 	// cards do: each day uncovered from the top down, column after column, left
-	// to right. Redraws of the same period (a drop, a resize) leave it be.
+	// to right. Redraws of the same period (a drop, a resize) leave it be;
+	// changing a project or item-type filter replays the entrance.
 	from, to := calendarRange(k)
 	var arrive *shell.Arrival
 	if work.State != "loading" && !k.Loading {
-		arrive = k.Ui.Arrival("planner", fmt.Sprint(k.CalendarMode, from, to))
+		var types []string
+		if k.Plan.CalendarTypes != nil {
+			types = *k.Plan.CalendarTypes
+		}
+		arrive = k.Ui.Arrival("planner", fmt.Sprint(k.CalendarMode, from, to, k.ProjectOff, types))
 	}
 	var arriving []*shell.Reveal
 	var delays []time.Duration
@@ -89,11 +95,16 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	}
 	groups := calendarSprintChoices(k)
 	var options, keys []string
+	currentLabel := ""
 	for _, g := range groups {
 		options = append(options, CalendarSprintLabel(g.Sprint))
 		keys = append(keys, g.Key)
+		if currentLabel == "" && g.Sprint.Contains(shell.Today()) {
+			currentLabel = options[len(options)-1]
+		}
 	}
 	sprintSelect := shell.NewGoldSelect(options, nil)
+	sprintSelect.Current = currentLabel
 	if len(options) == 0 {
 		sprintSelect.PlaceHolder = "No sprints"
 		sprintSelect.Disable()
@@ -186,6 +197,12 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		refreshSprint.Disable()
 	}
 	sprintControl = container.NewBorder(nil, nil, nil, refreshSprint, sprintControl)
+	// Wide enough for the longest sprint name and its dates, beside Refresh.
+	sprintWidth := float32(360)
+	for _, o := range options {
+		text := fyne.MeasureText(o, theme.TextSize(), fyne.TextStyle{}).Width
+		sprintWidth = fyne.Max(sprintWidth, text+theme.IconInlineSize()+theme.InnerPadding()*4+refreshSprint.MinSize().Width+theme.Padding())
+	}
 
 	today := widget.NewButton("Today", func() {
 		k.Week = backend.WeekStartOf(shell.Today())
@@ -206,14 +223,14 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	// The shown sprints and their days left, filled in below once read, sit
 	// just after Today.
 	sprintInfo := widget.NewLabel("")
-	header := container.New(&widgets.WrapRowLayout{}, container.NewHBox(container.NewThemeOverride(mode, widgets.DropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(360, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), today), sprintInfo)
+	header := container.New(&widgets.WrapRowLayout{}, container.NewHBox(container.NewThemeOverride(mode, widgets.DropdownTheme{Theme: theme.Current()}), container.NewGridWrap(fyne.NewSize(sprintWidth, 40), sprintControl), widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() { walk(-1) }), widget.NewLabelWithStyle(period, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() { walk(1) }), today), sprintInfo)
 	auto := widget.NewButton("Allocate unscheduled", func() {
 		p := k.Plan
 		var unplaced []string
 		p.Tasks, unplaced = backend.AllocateSprint(p, k.OpenCalendarItems(), shell.Today())
 		if k.Save(p) {
 			shell.Hooks.KanbanUIDraw(k)
-			k.SetMessage("Local schedule saved · weekdays 09:00–17:00; existing appointments preserved.")
+			k.SetMessage("Local schedule saved · up to 8 hours a weekday; existing blocks kept.")
 			if len(unplaced) > 0 {
 				shell.ShowInformation("Sprint capacity", fmt.Sprintf("%d issues did not fit before the sprint ends and remain unscheduled. Adjust the local estimate or add time blocks manually.\n\n%s", len(unplaced), strings.Join(unplaced, "\n")), k.Ui.Win)
 			}
@@ -230,6 +247,7 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		ConfirmClear(k, "Clear local schedule", fmt.Sprintf("Remove %d planned blocks from the selected sprint's visible projects? Local estimates and notes are kept; GitHub is unchanged.", count), func() {
 			p, _ := backend.ClearSprintSchedule(k.Plan, UniqueCurrentItems(k))
 			if k.Save(p) {
+				k.Ui.ReplayArrival("planner")
 				k.SetMessage("Selected sprint's local schedule cleared.")
 				shell.Hooks.KanbanUIDraw(k)
 			}
@@ -306,15 +324,73 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		}
 	}
 	trayItems := append([]backend.SprintCandidate{shell.PlannerMeetingCandidate()}, open...)
-	var unscheduled []fyne.CanvasObject
-	for _, c := range trayItems {
-		unscheduled = append(unscheduled, PlannerCard(k, c, -1))
+	// Finished issues (Done, closed or merged) sit folded at the foot of the
+	// tray, out of the way of the work left.
+	var done []backend.SprintCandidate
+	for _, c := range k.DoneCalendarItems() {
+		if k.VisibleCalendarType(c.Item) {
+			done = append(done, c)
+		}
 	}
+	// The open cards, which a card dragged among them is reordered against.
+	k.TrayCards = nil
+	var unscheduled []fyne.CanvasObject
+	var trayCards []*shell.PlannerDragCard
+	for _, c := range trayItems {
+		card := PlannerCard(k, c, -1)
+		drag, _ := card.(*shell.PlannerDragCard)
+		trayCards = append(trayCards, drag)
+		if drag != nil && c.Key != shell.PlannerMeetingKey {
+			k.TrayCards = append(k.TrayCards, drag)
+		}
+		unscheduled = append(unscheduled, card)
+	}
+	var doneTag *shell.HoverTag
+	var doneHead fyne.CanvasObject
+	var doneFold *shell.Fold
+	var doneCards []fyne.CanvasObject
+	if len(done) > 0 {
+		doneBox := container.NewVBox()
+		for _, c := range done {
+			card := PlannerCard(k, c, -1)
+			doneCards = append(doneCards, card)
+			doneBox.Add(card)
+		}
+		doneFold = shell.NewFold(doneBox, k.CalendarShowDone)
+		// Kanban's Show More: gold words at rest, a gold bar with dark words
+		// under the pointer, set a little apart from the cards above.
+		doneTag = shell.NewHoverTag(doneIssuesText(k.CalendarShowDone, len(done)), color.Transparent, widgets.LogoGold, widgets.LogoGold, shell.TagHoverInk, nil)
+		doneTag.Wide = true
+		doneHead = container.New(layout.NewCustomPaddedLayout(theme.Padding()*3, 0, 0, 0), doneTag)
+	}
+	// The cards arrive as the calendar's do, uncovered from the top down one
+	// after another, when the sprint or its filters change.
+	pieces := append([]fyne.CanvasObject{}, unscheduled...)
+	if doneHead != nil {
+		pieces = append(pieces, doneHead)
+	}
+	if !calendarFetching(k, work) {
+		var types []string
+		if k.Plan.CalendarTypes != nil {
+			types = *k.Plan.CalendarTypes
+		}
+		pieces = k.Ui.Arrival("plannertray", fmt.Sprint(backend.SprintKey(selectedCalendarSprint(k)), k.ProjectOff, types)).Reveal(pieces, shell.ArriveDelays(len(pieces)), nil)
+	}
+	copy(unscheduled, pieces)
 	issues := len(open)
 	grid := container.NewVBox(unscheduled...)
 	noMatch := widget.NewLabel("No issues match the search.")
 	noMatch.Wrapping = fyne.TextWrapWord
 	grid.Add(noMatch)
+	if issues == 0 {
+		empty := widget.NewLabel("No active issues in the selected sprint.")
+		empty.Wrapping = fyne.TextWrapWord
+		grid.Add(empty)
+	}
+	if doneHead != nil {
+		grid.Add(pieces[len(pieces)-1])
+		grid.Add(doneFold)
+	}
 	// The search hides the cards that do not match in place, so the field
 	// keeps its focus while typing.
 	filterTray := func(query string) {
@@ -323,18 +399,20 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		for i, c := range trayItems {
 			show := TrayMatches(c, query)
 			shell.ShowIf(unscheduled[i], show)
+			if trayCards[i] != nil {
+				// The card too: a drag reorders against the cards in view.
+				shell.ShowIf(trayCards[i], show)
+			}
 			found = found || show
 		}
 		shell.ShowIf(noMatch, !found && issues > 0)
+		for i, c := range done {
+			shell.ShowIf(doneCards[i], TrayMatches(c, query))
+		}
 		grid.Refresh()
 	}
 	search := shell.NewSearchEntry("Search issues", k.CalendarSearch, filterTray)
 	filterTray(k.CalendarSearch)
-	if issues == 0 {
-		empty := widget.NewLabel("No active issues in the selected sprint.")
-		empty.Wrapping = fyne.TextWrapWord
-		grid.Add(empty)
-	}
 	// Gold, with the count at the right in the same badge as Kanban's, then
 	// the search, with room under it before the capsule's edge.
 	trayHeading := canvas.NewText("Sprint Issues", widgets.LogoGold)
@@ -352,8 +430,23 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	inset := &shell.ColumnInset{}
 	// The tray keeps its own width whatever its cards hold: they wrap and
 	// shorten to it rather than pushing the calendar to the right.
-	trayScroll := container.NewVScroll(container.New(inset, container.New(trayWidthLayout{}, container.New(layout.NewCustomPaddedLayout(0, theme.InnerPadding(), theme.InnerPadding(), theme.InnerPadding()), grid))))
+	trayPad := container.New(layout.NewCustomPaddedLayout(0, theme.InnerPadding(), theme.InnerPadding(), theme.InnerPadding()), grid)
+	trayFit := container.New(trayWidthLayout{}, trayPad)
+	trayInset := container.New(inset, trayFit)
+	trayScroll := container.NewVScroll(trayInset)
 	trayScroll.SetMinSize(fyne.NewSize(trayWidth, 0))
+	if doneTag != nil {
+		// The Done section slides open and shut, the tray following it on
+		// every frame.
+		doneTag.OnTapped = func() {
+			k.CalendarShowDone = !doneFold.Open()
+			doneTag.Text = doneIssuesText(k.CalendarShowDone, len(done))
+			doneTag.Refresh()
+			doneFold.Slide(k.CalendarShowDone, func(final bool) {
+				shell.Reflow(final, trayScroll, trayInset, trayFit, trayPad, grid)
+			})
+		}
+	}
 	k.CalendarIssueClip = trayScroll
 	tray := container.New(&shell.FloatingHeaderLayout{Inset: inset, Gap: theme.InnerPadding() + 2}, shell.NoScrollShadow(trayScroll), heading)
 	// The issue tray is its own menu, so it sits in a rounded panel like
@@ -421,7 +514,24 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	noteRow := container.NewBorder(nil, nil, nil, container.NewHBox(types, shell.SupportChoice(support, rota).View), k.ProjectLegend(true))
 	shell.ShowIf(periodNote, periodNote.Text != "")
 	legend := container.NewBorder(nil, nil, nil, shell.WeekCaption("Projects: GitHub · Gold: drafts/support · Purple: plans"), nil)
+	// Nothing is drawn under the controls while GitHub is still fetching: the
+	// days and the tray arrive once the boards and worklogs have landed, rather
+	// than showing half-filled and then redrawing.
+	if calendarFetching(k, work) {
+		wait := "Loading GitHub worklogs…"
+		if k.Loading {
+			wait = "Loading project boards…"
+		}
+		periodNote.Hide()
+		return container.NewBorder(toolbar, nil, nil, nil, container.NewCenter(widget.NewLabel(wait)))
+	}
 	return container.NewBorder(container.NewVBox(toolbar, periodNote, noteRow), legend, sidebar, nil, dates)
+}
+
+// calendarFetching reports whether the boards or the period's worklogs are
+// still on their way from GitHub.
+func calendarFetching(k *shell.KanbanUI, work plannerWorkData) bool {
+	return k.Loading || work.State == "loading"
 }
 
 func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate, scale *plannerScale, work PlannerDayWork) fyne.CanvasObject {
@@ -432,18 +542,19 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 	hover.Clear = newPlannerDayClear(k, date, hover)
 	hover.HoverHeight = plannerDayBarBottom
 	type appointment struct {
-		c            backend.SprintCandidate
-		index, start int
+		c     backend.SprintCandidate
+		index int
+		block backend.PlanBlock
 	}
 	var appointments []appointment
 	for _, c := range items {
 		for index, b := range k.Plan.Tasks[c.Key].Blocks {
 			if b.Date == date {
-				appointments = append(appointments, appointment{c, index, b.Start})
+				appointments = append(appointments, appointment{c, index, b})
 			}
 		}
 	}
-	sort.SliceStable(appointments, func(i, j int) bool { return appointments[i].start < appointments[j].start })
+	sort.SliceStable(appointments, func(i, j int) bool { return backend.PlanBlockBefore(appointments[i].block, appointments[j].block) })
 	numbers := map[string]map[int][2]int{}
 	for _, a := range appointments {
 		if numbers[a.c.Key] == nil {
@@ -455,6 +566,7 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 		face := card.Content.(*fyne.Container).Objects[0].(*PlannerTimedFace)
 		face.day = hover
 		k.BlockMarks[a.c.Key] = append(k.BlockMarks[a.c.Key], face)
+		k.DayCards[date] = append(k.DayCards[date], card)
 		list.Add(card)
 	}
 	hover.CanClear = len(appointments) > 0
@@ -470,17 +582,21 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 		dateCaption = container.NewThemeOverride(caption, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	}
 	progress := k.Ui.ProgressBarParts("planner/"+fmt.Sprint(day.Day()), date, totals.parts(k.ColorConfig()), 6)
-	draftLabel := fmt.Sprintf("%dm draft", totals.Draft)
+	draftCaption := shell.WeekCaption(fmt.Sprintf("%dm draft", totals.Draft))
+	draftCaption.Color = theme.Color(theme.ColorNameWarning)
+	pending := container.NewHBox(draftCaption)
 	if totals.support > 0 {
-		draftLabel = fmt.Sprintf("%dm draft/support", totals.Draft+totals.support)
+		support := shell.WeekCaption(fmt.Sprintf("%dm support", totals.support))
+		support.Color = shell.WeekdaySupportColor()
+		pending.Add(support)
 	}
-	reading := container.New(shell.SplitCaption{}, shell.WeekCaption(fmt.Sprintf("%dm GitHub", totals.Logged)), shell.WeekCaption(draftLabel))
+	reading := container.New(shell.SplitCaption{}, shell.WeekCaption(fmt.Sprintf("%dm GitHub", totals.Logged)), pending)
 	planCaption := shell.WeekCaption(fmt.Sprintf("%dm planned", totals.Planned))
 	planCaption.Color = shell.PlannerPlanColor
 	// What the day still has room for once GitHub, the drafts and the plans
 	// are counted, on the planned line.
 	left := container.New(shell.SplitCaption{}, planCaption, shell.WeekCaption(fmt.Sprintf("%dm left", max(0, backend.Target-projected))))
-	heading := container.New(plannerDayHeaderLayout{}, dateCaption, shell.WeekCaption(PlannerDayPercentage(projected)), progress, hover.ClearView, reading, left)
+	heading := container.New(plannerDayHeaderLayout{}, k.Ui.DayLink(date, caption, dateCaption, hover.DateHover), shell.WeekCaption(PlannerDayPercentage(projected)), progress, hover.ClearView, reading, left)
 	hover.Header = heading
 	base := shell.DayFill(totals.Logged, totals.Draft+totals.support+totals.Planned)
 	bg := canvas.NewRectangle(base)
@@ -560,11 +676,9 @@ func plannerCardTitled(k *shell.KanbanUI, c backend.SprintCandidate, index int, 
 		face.finished = finished
 		face.onDelete = func() { confirmDeleteBlock(k, c, index) }
 		card.Content = container.New(size, face)
-		if !finished {
-			grip := &PlannerResizeGrip{k: k, Key: c.Key, Index: index, Layout: size, card: card, Face: face}
-			grip.ExtendBaseWidget(grip)
-			card.Content.(*fyne.Container).Add(grip)
-		}
+		grip := &PlannerResizeGrip{k: k, Key: c.Key, Index: index, Layout: size, card: card, Face: face}
+		grip.ExtendBaseWidget(grip)
+		card.Content.(*fyne.Container).Add(grip)
 	}
 	card.ExtendBaseWidget(card)
 	return card
@@ -607,6 +721,13 @@ const trayWidth = float32(260)
 
 // trayWidthLayout asks for no width of its own, so the tray's width is fixed
 // and its one child is laid out to it.
+func doneIssuesText(open bool, n int) string {
+	if open {
+		return fmt.Sprintf("Hide Done Issues (%d)", n)
+	}
+	return fmt.Sprintf("Show Done Issues (%d)", n)
+}
+
 type trayWidthLayout struct{}
 
 func (trayWidthLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {

@@ -15,18 +15,18 @@ const normalWeekMinutes = 40 * 60
 
 // normalWeekProgress scores the week against 40 hours, in sections: what is on
 // the board, then with drafts and support, then with plans as well.
-func normalWeekProgress(logged, waiting, planned int) []lineSection {
+func normalWeekProgress(logged, waiting, planned int) []shell.TextSection {
 	left := max(normalWeekMinutes-logged, 0)
-	sections := []lineSection{{fmt.Sprintf("Normal work week (40h): %d%% logged · %d%% remaining (%s)",
+	sections := []shell.TextSection{{Text: fmt.Sprintf("Normal work week (40h): %d%% logged · %d%% remaining (%s)",
 		logged*100/normalWeekMinutes, (left*100+normalWeekMinutes-1)/normalWeekMinutes, backend.HoursMins(left)),
-		theme.Color(theme.ColorNameForeground)}}
+		Ink: theme.Color(theme.ColorNameForeground)}}
 	if waiting > 0 {
-		sections = append(sections, lineSection{weekProjection("waiting", waiting, logged+waiting, normalWeekMinutes),
-			theme.Color(theme.ColorNameWarning)})
+		sections = append(sections, shell.TextSection{Text: weekProjection("waiting", waiting, logged+waiting, normalWeekMinutes),
+			Ink: theme.Color(theme.ColorNameWarning)})
 	}
 	if planned > 0 {
-		sections = append(sections, lineSection{weekProjection("planned", planned, logged+waiting+planned, normalWeekMinutes),
-			shell.PlannerPlanColor})
+		sections = append(sections, shell.TextSection{Text: weekProjection("planned", planned, logged+waiting+planned, normalWeekMinutes),
+			Ink: shell.PlannerPlanColor})
 	}
 	return sections
 }

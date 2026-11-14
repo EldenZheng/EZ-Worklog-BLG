@@ -14,6 +14,7 @@ var Hooks struct {
 	DrawDayPanel                      func(*UI)
 	DrawLogLegend                     func(*UI)
 	DrawLogList                       func(*UI)
+	DrawMeeting                       func(*UI)
 	DrawRecent                        func(*UI)
 	DrawReport                        func(*UI)
 	DrawWeekStrip                     func(*UI)

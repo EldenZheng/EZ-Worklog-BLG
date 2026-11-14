@@ -14,10 +14,10 @@ import (
 	"worklog/internal/shared/widgets"
 )
 
-const foldDuration = 260 * time.Millisecond
-
-// foldDrop is how far a fold's content sinks into place as it opens.
-const foldDrop = 28
+// foldSlideTime is how long a fold takes to open or shut: the time one piece of
+// an arrival takes to uncover, so a section folding open moves as the Status
+// day panel's pieces do.
+const foldSlideTime = arriveEach
 
 // Fold shows the top share of its content, cut off below, so a section can
 // slide open and shut. It is a Scrollable only because Fyne clips nothing
@@ -28,6 +28,9 @@ type Fold struct {
 	share   float32 // 0 shut, 1 fully open
 	open    bool
 	slide   *fyne.Animation
+	// Duration and Curve, when set, replace the default slide's.
+	Duration time.Duration
+	Curve    fyne.AnimationCurve
 }
 
 // NewFold wraps content, starting open or shut.
@@ -58,8 +61,18 @@ func (f *Fold) Slide(open bool, relayout func(final bool)) {
 		to = 1
 		f.Show()
 	}
+	// Eased at both ends: a card that starts growing at full speed lands its
+	// biggest step on the first frame, the one that also draws the newly
+	// uncovered content, and reads as a jump.
+	duration, curve := foldSlideTime, fyne.AnimationCurve(EaseInOutCubic)
+	if f.Duration > 0 {
+		duration = f.Duration
+	}
+	if f.Curve != nil {
+		curve = f.Curve
+	}
 	var slide *fyne.Animation
-	slide = fyne.NewAnimation(foldDuration, func(done float32) {
+	slide = fyne.NewAnimation(duration, func(done float32) {
 		if f.slide != slide {
 			return
 		}
@@ -68,19 +81,15 @@ func (f *Fold) Slide(open bool, relayout func(final bool)) {
 		if final && !open {
 			f.Hide()
 		}
-		// Between frames only the geometry moves; refreshing every widget in
-		// the section on each frame is what made the slide stutter.
-		if final {
-			f.Refresh()
-		} else {
-			f.layoutContent(f.Size())
-			canvas.Refresh(f)
-		}
+		// Only the geometry moves, the last frame included: refreshing the
+		// section's widgets, on any frame, is what made the slide stutter.
+		f.layoutContent(f.Size())
+		Repaint(f)
 		if relayout != nil {
 			relayout(final)
 		}
 	})
-	slide.Curve = easeOutQuart
+	slide.Curve = curve
 	f.slide = slide
 	slide.Start()
 }
@@ -96,17 +105,25 @@ type foldRenderer struct{ f *Fold }
 
 func (f *Fold) layoutContent(size fyne.Size) {
 	full := f.Content.MinSize().Height
-	// The content drops in from a little above as the fold opens, and rises
-	// back as it shuts, rather than only being uncovered.
-	f.Content.Move(fyne.NewPos(0, -foldDrop*(1-f.share)))
-	f.Content.Resize(fyne.NewSize(size.Width, max(full, size.Height)))
+	// The content stands still and is uncovered from the top down, as the
+	// Status day panel's pieces are: moving it as well read as a judder.
+	if f.Content.Position() != (fyne.Position{}) {
+		f.Content.Move(fyne.Position{})
+	}
+	if want := fyne.NewSize(size.Width, max(full, size.Height)); f.Content.Size() != want {
+		f.Content.Resize(want)
+	}
 }
 
 func (r *foldRenderer) Layout(size fyne.Size) { r.f.layoutContent(size) }
 
 func (r *foldRenderer) MinSize() fyne.Size {
 	m := r.f.Content.MinSize()
-	return fyne.NewSize(m.Width, m.Height*r.f.share)
+	if r.f.share >= 1 {
+		return m
+	}
+	// Whole pixels while moving, so text does not shimmer between them.
+	return fyne.NewSize(m.Width, float32(math.Round(float64(m.Height*r.f.share))))
 }
 
 func (r *foldRenderer) Refresh() {
@@ -123,13 +140,33 @@ func (r *foldRenderer) Destroy()                     {}
 // the slide, for the page around it to follow (see Reflow); onToggle runs once
 // per tap with the new state, to remember it.
 func CollapseToggle(label, body fyne.CanvasObject, open bool, onToggle func(open bool), relayout func(final bool)) (head, area fyne.CanvasObject) {
+	name, fold, toggle := collapseParts(label, body, open, onToggle, relayout)
+	return container.NewHBox(NewTappable(name, toggle)), fold
+}
+
+// CollapseLine is CollapseToggle across a whole line: the label and its
+// arrow at the left, end (when set) at the right, and a click anywhere along
+// the line slides body open or shut, over slide when it is above zero.
+func CollapseLine(label, end, body fyne.CanvasObject, open bool, slide time.Duration, onToggle func(open bool), relayout func(final bool)) (head, area fyne.CanvasObject) {
+	name, fold, toggle := collapseParts(label, body, open, onToggle, relayout)
+	fold.Duration = slide
+	var right fyne.CanvasObject
+	if end != nil {
+		right = container.NewCenter(end)
+	}
+	return NewTappable(container.NewBorder(nil, nil, name, right), toggle), fold
+}
+
+// collapseParts is a collapsible heading's label with its gold arrow, the
+// fold for body, and the toggle that slides it.
+func collapseParts(label, body fyne.CanvasObject, open bool, onToggle func(open bool), relayout func(final bool)) (fyne.CanvasObject, *Fold, func()) {
 	arrow := widget.NewIcon(theme.MenuExpandIcon())
 	if open {
 		arrow.SetResource(theme.MenuDropDownIcon())
 	}
 	goldArrow := container.NewThemeOverride(arrow, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	fold := NewFold(body, open)
-	tap := NewTappable(container.NewHBox(label, goldArrow), func() {
+	toggle := func() {
 		open := !fold.Open()
 		if open {
 			arrow.SetResource(theme.MenuDropDownIcon())
@@ -140,8 +177,8 @@ func CollapseToggle(label, body fyne.CanvasObject, open bool, onToggle func(open
 		if onToggle != nil {
 			onToggle(open)
 		}
-	})
-	return container.NewHBox(tap), fold
+	}
+	return container.NewHBox(label, goldArrow), fold, toggle
 }
 
 // CollapsibleTitle is a SectionTitle's gold heading as a CollapseToggle.
@@ -175,9 +212,44 @@ func Reflow(final bool, chain ...fyne.CanvasObject) {
 		return
 	}
 	if final {
-		chain[0].Refresh()
+		settleFrame(chain[0])
 	} else {
-		canvas.Refresh(chain[0])
+		Repaint(chain[0])
+	}
+}
+
+// settleFrame ends a move: a page scroll's bars catch up with the page's new
+// length. Refreshing the scroll would do it too, and redraw everything on the
+// page with it, which was a stutter at the end of every slide.
+func settleFrame(o fyne.CanvasObject) {
+	s, ok := o.(*container.Scroll)
+	if !ok {
+		o.Refresh()
+		return
+	}
+	// ScrollToOffset re-measures the bars, but does nothing for the offset the
+	// scroll already has: step off it and back.
+	at := s.Offset
+	s.Offset.Y++
+	s.ScrollToOffset(at)
+	Repaint(s)
+}
+
+// Repaint asks for the next frame to be drawn, keeping everything already
+// drawn. canvas.Refresh throws away the GPU's copy of every letter and shape
+// under the object it is given, so calling it on a page on every frame of an
+// animation drew the whole page again from scratch sixty times a second: the
+// card juddered as it grew while the Status day panel, which refreshes only
+// the piece arriving, stayed smooth. Between frames of a move only positions
+// and sizes change, and none of that needs anything redrawn. Refresh in full
+// on the last frame.
+func Repaint(o fyne.CanvasObject) {
+	app := fyne.CurrentApp()
+	if app == nil || app.Driver() == nil {
+		return
+	}
+	if c, ok := app.Driver().CanvasForObject(o).(interface{ SetDirty() }); ok {
+		c.SetDirty()
 	}
 }
 
@@ -198,9 +270,11 @@ func reflowScroll(s *container.Scroll) {
 type Morph struct {
 	widget.BaseWidget
 	Content fyne.CanvasObject
-	height  float32 // shown height while moving; below zero, the content's own
-	shift   float32 // sideways offset while sliding in
-	move    *fyne.Animation
+	// Duration overrides the default when a view needs a longer slide.
+	Duration time.Duration
+	height   float32 // shown height while moving; below zero, the content's own
+	shift    float32 // sideways offset while sliding in
+	move     *fyne.Animation
 	// old is a picture of what it showed before the change, sliding out by
 	// oldShift; nil when there is none.
 	old      *canvas.Image
@@ -217,6 +291,11 @@ const MorphTime = 440 * time.Millisecond
 // Snapshot keeps a picture of what the Morph shows now, to slide out of the way
 // at the next Change. Call it just before changing the content.
 func (m *Morph) Snapshot() {
+	// Hold the current height before fields are shown or hidden. Their refresh
+	// can otherwise resize the parent before Change has captured the old size.
+	if m.height < 0 {
+		m.height = m.Size().Height
+	}
 	m.old = nil
 	c := fyne.CurrentApp().Driver().CanvasForObject(m)
 	if c == nil || !animationsOn() || !m.Visible() {
@@ -270,7 +349,11 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 	m.height, m.shift, m.oldShift = from, start, 0
 	m.layoutContent(m.Size())
 	var move *fyne.Animation
-	move = fyne.NewAnimation(MorphTime, func(done float32) {
+	duration := MorphTime
+	if m.Duration > 0 {
+		duration = m.Duration
+	}
+	move = fyne.NewAnimation(duration, func(done float32) {
 		if m.move != move {
 			return
 		}
@@ -288,7 +371,11 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 			m.oldShift = float32(math.Round(float64(-start * done)))
 		}
 		m.layoutContent(m.Size())
-		canvas.Refresh(m)
+		if final {
+			canvas.Refresh(m)
+		} else {
+			Repaint(m)
+		}
 		if relayout != nil {
 			relayout(final)
 		}
@@ -339,15 +426,26 @@ func (r *morphRenderer) Objects() []fyne.CanvasObject {
 }
 func (r *morphRenderer) Destroy() {}
 
-// pageScroll is a tab's page scroll that rides the view up when the page gets
-// shorter under it. A transparent floor at the foot of the page holds the old
-// height for a moment and then eases away, the view following it up.
+// pageScroll is a tab's page scroll that pans the view up when the page gets
+// shorter under it, rather than jumping. A transparent floor at the foot of
+// the page holds the old height, then eases away over pageSettle with the view
+// following it up, as a camera would pan. It watches the page's height itself,
+// so whatever shortens the page (a list emptied, a form swapped for a shorter
+// one, a section folded) is caught, not only a Relayout.
 type pageScroll struct {
 	scroll *container.Scroll
+	root   fyne.CanvasObject
 	floor  *canvas.Rectangle
 	chain  []fyne.CanvasObject
 	ease   *fyne.Animation
+	// inner is the page's height without the floor, as last measured; busy
+	// stops a measure taken while one is being made from starting another.
+	inner float32
+	busy  bool
 }
+
+// pageSettle is how long the view takes to pan up to a page's new foot.
+const pageSettle = 600 * time.Millisecond
 
 var pageScrolls = map[*fyne.Container]*pageScroll{}
 
@@ -358,35 +456,82 @@ func NewPageScroll(root fyne.CanvasObject, page, column *fyne.Container) *contai
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.Hide()
 	page.Add(floor)
-	s := container.NewVScroll(root)
-	chain := []fyne.CanvasObject{s, root}
+	p := &pageScroll{root: root, floor: floor}
+	watched := container.New(&pageWatch{p: p}, root)
+	s := container.NewVScroll(watched)
+	p.scroll = s
+	p.chain = []fyne.CanvasObject{s, watched, root}
 	if page != root {
-		chain = append(chain, page)
+		p.chain = append(p.chain, page)
 	}
-	pageScrolls[column] = &pageScroll{scroll: s, floor: floor, chain: chain}
+	pageScrolls[column] = p
 	return s
 }
 
-func (p *pageScroll) settle() {
-	s := p.scroll
-	view := s.Size().Height
-	shown := s.Content.Size().Height // still the old height: the page relays later
-	floor := float32(0)
-	if p.floor.Visible() {
-		floor = p.floor.MinSize().Height + theme.Padding()
+// pageWatch lays the page out at the scroll's size and, each time the
+// scroll measures it, checks whether it got shorter.
+type pageWatch struct{ p *pageScroll }
+
+func (w *pageWatch) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	w.p.watch()
+	return objects[0].MinSize()
+}
+
+func (w *pageWatch) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	objects[0].Move(fyne.NewPos(0, 0))
+	objects[0].Resize(size)
+}
+
+// floorHeight is how much height the floor adds to the page now.
+func (p *pageScroll) floorHeight() float32 {
+	if !p.floor.Visible() {
+		return 0
 	}
-	needed := max(s.Content.MinSize().Height-floor, view)
-	if view <= 0 || s.Offset.Y <= needed-view || shown <= needed {
+	return p.floor.MinSize().Height + theme.Padding()
+}
+
+// settle checks the page's height now, for a column that has just changed.
+func (p *pageScroll) settle() {
+	p.watch()
+}
+
+// watch notices the page getting shorter while the view stands past its new
+// foot, and holds the old height with the floor while the view pans up.
+func (p *pageScroll) watch() {
+	if p.busy {
 		return
 	}
+	p.busy = true
+	defer func() { p.busy = false }()
+	held := p.floorHeight()
+	inner := p.root.MinSize().Height - held
+	before := p.inner
+	p.inner = inner
+	view := p.scroll.Size().Height
+	if view <= 0 || before <= 0 || inner >= before-0.5 {
+		return
+	}
+	// Still in view at the new height: nothing to pan.
+	if p.scroll.Offset.Y <= max(inner-view, 0)+0.5 {
+		return
+	}
+	p.panFrom(before + held - inner)
+}
+
+// panFrom holds extra height at the foot of the page and eases it away, the
+// view riding up with it.
+func (p *pageScroll) panFrom(extra float32) {
 	if p.ease != nil {
 		p.ease.Stop()
 	}
-	from := shown - needed - theme.Padding()
-	p.floor.SetMinSize(fyne.NewSize(0, max(from, 0)))
+	from := max(extra-theme.Padding(), 0)
+	p.floor.SetMinSize(fyne.NewSize(0, from))
 	p.floor.Show()
+	if !fyne.CurrentApp().Settings().ShowAnimations() {
+		from = 0
+	}
 	var ease *fyne.Animation
-	ease = fyne.NewAnimation(foldDuration, func(done float32) {
+	ease = fyne.NewAnimation(pageSettle, func(done float32) {
 		if p.ease != ease {
 			return
 		}
@@ -399,7 +544,7 @@ func (p *pageScroll) settle() {
 		}
 		Reflow(final, p.chain...)
 	})
-	ease.Curve = easeOutQuart
+	ease.Curve = EaseInOutCubic
 	p.ease = ease
 	ease.Start()
 }

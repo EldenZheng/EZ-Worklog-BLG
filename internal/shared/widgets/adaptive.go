@@ -2,6 +2,7 @@ package widgets
 
 import (
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 )
@@ -134,6 +135,25 @@ func (l *SidesLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 		return fyne.NewSize(max(lm.Width, rm.Width), lm.Height+theme.Padding()+rm.Height)
 	}
 	return fyne.NewSize(max(lm.Width, rm.Width), max(lm.Height, rm.Height))
+}
+
+// trailingScrollLayout holds a sideways scroll against the row's right edge, as
+// wide as its content, or the whole row once the content no longer fits.
+type trailingScrollLayout struct{ content fyne.CanvasObject }
+
+func (l *trailingScrollLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	width := min(l.content.MinSize().Width, size.Width)
+	objects[0].Move(fyne.NewPos(size.Width-width, 0))
+	objects[0].Resize(fyne.NewSize(width, size.Height))
+}
+
+func (l *trailingScrollLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return objects[0].MinSize()
+}
+
+// NewTrailingScroll right-aligns content, scrolling it sideways when too wide.
+func NewTrailingScroll(content fyne.CanvasObject) *fyne.Container {
+	return container.New(&trailingScrollLayout{content: content}, container.NewHScroll(content))
 }
 
 // WrapRowLayout runs its children left to right like an HBox, and starts a new

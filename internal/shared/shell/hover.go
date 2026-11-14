@@ -75,7 +75,8 @@ var (
 // of colours while the pointer is over it. Wide tags fill the width they are
 // given, text centred; the others hug their text, cut short with an ellipsis
 // when the width given is less (place them with HugTag). A tag with OnTapped
-// set is clickable and shows the pointer cursor.
+// set is clickable and shows the pointer cursor. Large tags set their text at
+// body size with more room around it, for a tag that stands alone as a button.
 type HoverTag struct {
 	widget.BaseWidget
 	Text                string
@@ -83,6 +84,7 @@ type HoverTag struct {
 	RestFill, HoverFill color.Color
 	RestInk, HoverInk   color.Color
 	Wide                bool
+	Large               bool
 	bg                  *canvas.Rectangle
 	label               *canvas.Text
 	hover               Glow
@@ -111,9 +113,27 @@ func NewHoverTag(text string, restFill, hoverFill, restInk, hoverInk color.Color
 	return t
 }
 
+// inset is the room either side of the text.
+func (t *HoverTag) inset() float32 {
+	if t.Large {
+		return 2 * tagInset
+	}
+	return tagInset
+}
+
+// fitText sets the text at the size the tag asks for.
+func (t *HoverTag) fitText() {
+	size := theme.CaptionTextSize()
+	if t.Large {
+		size = theme.TextSize()
+	}
+	t.label.TextSize = size
+}
+
 // NaturalWidth is the width the tag takes with its whole text showing.
 func (t *HoverTag) NaturalWidth() float32 {
-	return fyne.MeasureText(t.Text, t.label.TextSize, t.label.TextStyle).Width + 2*tagInset
+	t.fitText()
+	return fyne.MeasureText(t.Text, t.label.TextSize, t.label.TextStyle).Width + 2*t.inset()
 }
 
 // Shown is the text the tag shows now, after any ellipsis.
@@ -161,18 +181,19 @@ type hoverTagRenderer struct{ t *HoverTag }
 
 func (r *hoverTagRenderer) Layout(size fyne.Size) {
 	t := r.t
+	t.fitText()
 	t.bg.Move(fyne.NewPos(0, 0))
 	t.bg.Resize(size)
 	text := t.Text
 	if !t.Wide && size.Width > 0 {
-		text = elideToWidth(t.Text, size.Width-2*tagInset, t.label.TextSize, t.label.TextStyle)
+		text = elideToWidth(t.Text, size.Width-2*t.inset(), t.label.TextSize, t.label.TextStyle)
 	}
 	if text != t.label.Text {
 		t.label.Text = text
 		t.label.Refresh()
 	}
 	m := t.label.MinSize()
-	x := float32(tagInset)
+	x := t.inset()
 	if t.Wide {
 		x = (size.Width - m.Width) / 2
 	}
@@ -182,7 +203,11 @@ func (r *hoverTagRenderer) Layout(size fyne.Size) {
 
 func (r *hoverTagRenderer) MinSize() fyne.Size {
 	t := r.t
+	t.fitText()
 	text := fyne.MeasureText(t.Text, t.label.TextSize, t.label.TextStyle)
+	if t.Large {
+		return fyne.NewSize(text.Width+2*t.inset(), text.Height+2*theme.InnerPadding())
+	}
 	if t.Wide {
 		return fyne.NewSize(text.Width+2*tagInset, text.Height+2*theme.Padding()+4)
 	}

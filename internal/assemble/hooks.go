@@ -5,6 +5,7 @@ import (
 	"worklog/internal/menus/kanban"
 	"worklog/internal/menus/loglist"
 	"worklog/internal/menus/logwork"
+	"worklog/internal/menus/meeting"
 	"worklog/internal/menus/report"
 	"worklog/internal/menus/sprintcalendar"
 	"worklog/internal/menus/status"
@@ -19,6 +20,7 @@ func WireHooks() {
 	shell.Hooks.DrawDayPanel = status.DrawDayPanel
 	shell.Hooks.DrawLogLegend = logwork.DrawLogLegend
 	shell.Hooks.DrawLogList = loglist.DrawLogList
+	shell.Hooks.DrawMeeting = meeting.DrawMeeting
 	shell.Hooks.DrawRecent = logwork.DrawRecent
 	shell.Hooks.DrawReport = report.DrawReport
 	shell.Hooks.DrawWeekStrip = logwork.DrawWeekStrip

@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // A canvas overlay leaves the page interactive; it is not a modal dialog.
@@ -28,11 +29,15 @@ func newSettingsToast() *settingsToast {
 func (t *settingsToast) show(text string) {
 	t.version++
 	version := t.version
-	bg := canvas.NewRectangle(theme.Color(theme.ColorNameOverlayBackground))
+	// Green, the colour of a change that went through, and at the top where the
+	// eye already is after pressing Save.
+	bg := canvas.NewRectangle(shell.GitHubGreen)
 	bg.CornerRadius = 8
-	bg.StrokeWidth = 1
-	bg.StrokeColor = theme.Color(theme.ColorNameInputBorder)
-	t.layer.Objects = []fyne.CanvasObject{container.NewStack(bg, container.NewPadded(container.NewHBox(widget.NewIcon(theme.ConfirmIcon()), widget.NewLabel(text))))}
+	ink := widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: color.White}
+	body := container.NewHBox(widget.NewIcon(theme.ConfirmIcon()),
+		widget.NewLabelWithStyle(text, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+	t.layer.Objects = []fyne.CanvasObject{container.NewStack(bg,
+		container.NewPadded(container.NewThemeOverride(body, ink)))}
 	t.layer.Refresh()
 	app := fyne.CurrentApp()
 	time.AfterFunc(3*time.Second, func() {
@@ -56,7 +61,7 @@ func (toastCornerLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	for _, o := range objects {
 		s := o.MinSize()
 		o.Resize(s)
-		o.Move(fyne.NewPos(12, fyne.Max(0, size.Height-s.Height-12)))
+		o.Move(fyne.NewPos(fyne.Max(0, (size.Width-s.Width)/2), 12))
 	}
 }
 

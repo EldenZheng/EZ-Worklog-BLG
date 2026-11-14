@@ -123,7 +123,8 @@ func TestSprintProgressReadsGitHubDraftsAndRemainingPlans(t *testing.T) {
 				doneShare += part.Weight
 			}
 		}
-		if doneShare != float32(done)/480 || draftShare != float32(draft)/480 || plannedShare != float32(plan)/480 {
+		denominator := float32(max(backend.Target, done+draft+plan))
+		if doneShare != float32(done)/denominator || draftShare != float32(draft)/denominator || plannedShare != float32(plan)/denominator {
 			t.Fatal("GitHub/draft/planned progress split is wrong", bar.Target)
 		}
 		for _, d := range k.Dates {
@@ -151,7 +152,7 @@ func TestSprintProgressReadsGitHubDraftsAndRemainingPlans(t *testing.T) {
 			}
 		}
 	}
-	assertReading(240, 60, 180)
+	assertReading(240, 60, 480)
 	if dir := os.Getenv("WORKLOG_PLANNER_SCREENSHOTS"); dir != "" {
 		captureSprintPNG(t, w, filepath.Join(dir, "planner-progress-mixed.png"))
 	}
@@ -172,7 +173,7 @@ func TestSprintProgressReadsGitHubDraftsAndRemainingPlans(t *testing.T) {
 	}
 	complete.SetChecked(true)
 	test.Tap(save)
-	assertReading(240, 60, 0)
+	assertReading(240, 60, 480)
 	p, err := ui.Store.LoadSprintPlan()
 	if err != nil || !p.Tasks[planned.Key(b.ID)].Done || len(p.Tasks[planned.Key(b.ID)].Blocks) != 1 || k.Plan.Boards[0].Items[1].Status != "Done" || k.Busy {
 		t.Fatal("completion lost schedule data or changed GitHub state", err)
@@ -185,7 +186,7 @@ func TestSprintProgressReadsGitHubDraftsAndRemainingPlans(t *testing.T) {
 	}
 	k.CalendarActive = true
 	logwork.DrawRecent(ui)
-	assertReading(480, 0, 0)
+	assertReading(480, 0, 480)
 	if dir := os.Getenv("WORKLOG_PLANNER_SCREENSHOTS"); dir != "" {
 		captureSprintPNG(t, w, filepath.Join(dir, "planner-progress-done.png"))
 	}

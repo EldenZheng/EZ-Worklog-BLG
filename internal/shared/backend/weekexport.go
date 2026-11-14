@@ -68,10 +68,11 @@ func BoardLinkLabel(rawURL string) string {
 
 // issueTotal is one issue's week: every worklog filed under it, added up.
 type issueTotal struct {
-	Title   string
-	URL     string
-	Minutes int
-	Entries int
+	Title      string
+	URL        string
+	Minutes    int
+	Entries    int
+	CodeReview bool // includes at least one single-review worklog
 }
 
 // WeekByIssue is the summary the mail is actually written from: what was worked
@@ -104,6 +105,9 @@ func WeekByIssue(items []WorklogItem) []issueTotal {
 		}
 		byKey[key].Minutes += it.Minutes
 		byKey[key].Entries++
+		if RowIsSingleCodeReview(Row{"description": it.Title, "remarks": it.Remarks}) {
+			byKey[key].CodeReview = true
+		}
 	}
 
 	out := make([]issueTotal, 0, len(order))

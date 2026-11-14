@@ -7,8 +7,8 @@ import (
 )
 
 // PlannedByDay is the Sprint Calendar's purple figure for each day from..to.
-// items are the board worklogs for those days; what they and the unpushed
-// drafts already cover is not counted as still planned.
+// items are the board worklogs for those days; only those logged minutes cover
+// planned time. Unpushed drafts remain separate from the plan.
 func (ui *UI) PlannedByDay(from, to string, items []backend.WorklogItem) map[string]int {
 	out := map[string]int{}
 	if Hooks.PlannedMinutes == nil {
@@ -64,7 +64,7 @@ func (ui *UI) DayTotalFill(ds string, items []backend.WorklogItem, local []backe
 		mins += v
 	}
 	waiting := 0
-	for _, r := range local {
+	for _, r := range ui.ShownDrafts(local) {
 		waiting += r.Minutes()
 	}
 	on := Hooks.SupportOn != nil && Hooks.SupportOn(ui, ds)

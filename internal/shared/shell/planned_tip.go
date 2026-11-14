@@ -53,8 +53,7 @@ func PlannedTipBody(lines []PlannedLine) fyne.CanvasObject {
 }
 
 // PlannedTipWithFree is PlannedTipBody over a centred purple line saying what
-// the day still has free once its plans are counted. A full day has nothing to
-// say.
+// the day still owes with its plans left out. A full day has nothing to say.
 func PlannedTipWithFree(free int, lines []PlannedLine) fyne.CanvasObject {
 	body := PlannedTipBody(lines)
 	if free <= 0 {

@@ -1,12 +1,14 @@
 package shell
 
 import (
+	"fmt"
 	"image/color"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
@@ -80,7 +82,7 @@ func (c *PlannerDragCard) Tapped(*fyne.PointEvent) {
 
 func (c *PlannerDragCard) Dragged(e *fyne.DragEvent) {
 	k := c.K
-	if backend.PlannerIssueFinished(c.Candidate.Item, k.Plan.Tasks[c.Candidate.Key]) || k.CalendarResizing {
+	if c.Index < 0 && backend.PlannerIssueFinished(c.Candidate.Item, k.Plan.Tasks[c.Candidate.Key]) || k.CalendarResizing {
 		return
 	}
 	if !c.lifted {
@@ -89,7 +91,9 @@ func (c *PlannerDragCard) Dragged(e *fyne.DragEvent) {
 		b, it, _ := k.BoardItem(c.Candidate)
 		ghost := DragGhost(c.Candidate.Item.Title, backend.SprintEstimate(it, k.Plan.Tasks[c.Candidate.Key]), k.Accent(b, it))
 		HoldBubble(c.Content)
-		k.CalendarGhost.Objects = []fyne.CanvasObject{ghost}
+		k.TraySlot, k.DaySlot = KanbanSlot{}, KanbanSlot{}
+		k.TrayDropLine = newDropLine()
+		k.CalendarGhost.Objects = []fyne.CanvasObject{ghost, k.TrayDropLine}
 	}
 	if len(k.CalendarGhost.Objects) > 0 {
 		k.CalendarGhost.Objects[0].Move(e.AbsolutePosition.Subtract(fyne.CurrentApp().Driver().AbsolutePositionForObject(k.CalendarGhost)).Add(fyne.NewPos(12, 12)))
@@ -107,6 +111,114 @@ func (c *PlannerDragCard) Dragged(e *fyne.DragEvent) {
 		scroll.ScrollToOffset(offset)
 	}
 	c.HighlightDates(&e.AbsolutePosition)
+	c.showDaySlot(e.AbsolutePosition)
+	if c.Index < 0 && c.Hover == nil {
+		c.showTraySlot(e.AbsolutePosition)
+	}
+}
+
+// blockRef is the card's block as the day lists name it.
+func (c *PlannerDragCard) blockRef() string {
+	return fmt.Sprint(c.Candidate.Key, "#", c.Index)
+}
+
+// showDaySlot works out the gap under the pointer among the blocks of the day
+// it is over, and draws the gold line there. Dropped there, the block takes
+// that place in the day and the day's blocks close up around it.
+func (c *PlannerDragCard) showDaySlot(at fyne.Position) {
+	k := c.K
+	k.DaySlot = KanbanSlot{}
+	line := k.TrayDropLine
+	if line == nil || c.Hover == nil {
+		if line != nil {
+			line.Hide()
+		}
+		return
+	}
+	driver := fyne.CurrentApp().Driver()
+	var cards []SlotCard
+	var left, width float32
+	for _, d := range k.DayCards[c.Hover.Date] {
+		pos := driver.AbsolutePositionForObject(d)
+		cards = append(cards, SlotCard{ItemID: d.blockRef(), Top: pos.Y, Bottom: pos.Y + d.Size().Height})
+		left, width = pos.X, d.Size().Width
+	}
+	k.DaySlot = DropSlotFor(cards, "", c.blockRef(), at.Y, 0)
+	if !k.DaySlot.Ok || k.DaySlot.Unchanged() {
+		line.Hide()
+		return
+	}
+	origin := driver.AbsolutePositionForObject(k.CalendarGhost)
+	line.Move(fyne.NewPos(left-origin.X, k.DaySlot.LineY-origin.Y-1.5))
+	line.Resize(fyne.NewSize(width, 3))
+	line.Show()
+	line.Refresh()
+}
+
+// arrangeDay places the card's block in date's blocks just after the block
+// named afterRef ("" for the top).
+func (c *PlannerDragCard) arrangeDay(date, afterRef string) (backend.SprintPlan, error) {
+	k := c.K
+	moved := backend.PlanBlockRef{Key: c.Candidate.Key, Index: c.Index}
+	var order []backend.PlanBlockRef
+	if afterRef == "" {
+		order = append(order, moved)
+	}
+	for _, d := range k.DayCards[date] {
+		if d.blockRef() == c.blockRef() {
+			continue
+		}
+		order = append(order, backend.PlanBlockRef{Key: d.Candidate.Key, Index: d.Index})
+		if d.blockRef() == afterRef {
+			order = append(order, moved)
+		}
+	}
+	minutes := 0
+	if c.Index < 0 {
+		block, ok := backend.PlannerSlot(k.Plan, c.Candidate, c.Index, date)
+		if !ok {
+			return k.Plan, fmt.Errorf("choose a highlighted date inside the issue's sprint with enough free time")
+		}
+		minutes = block.Minutes
+	}
+	return backend.ArrangePlannerDay(k.Plan, date, order, minutes)
+}
+
+// showTraySlot works out the gap under the pointer among the tray's cards and
+// draws the gold line there. Dropped there, the issue takes that place in the
+// tray; the order is kept locally.
+func (c *PlannerDragCard) showTraySlot(at fyne.Position) {
+	k := c.K
+	k.TraySlot = KanbanSlot{}
+	line := k.TrayDropLine
+	if line == nil {
+		return
+	}
+	if c.Candidate.Key == PlannerMeetingKey || k.CalendarIssueClip == nil || !pointIn(k.CalendarIssueClip, at) {
+		line.Hide()
+		return
+	}
+	driver := fyne.CurrentApp().Driver()
+	var cards []SlotCard
+	var left, width float32
+	for _, d := range k.TrayCards {
+		if !d.Visible() {
+			continue
+		}
+		pos := driver.AbsolutePositionForObject(d)
+		cards = append(cards, SlotCard{ItemID: d.Candidate.Key, Top: pos.Y, Bottom: pos.Y + d.Size().Height})
+		left, width = pos.X, d.Size().Width
+	}
+	k.TraySlot = DropSlotFor(cards, "", c.Candidate.Key, at.Y, theme.Padding())
+	if !k.TraySlot.Ok || k.TraySlot.Unchanged() {
+		line.Hide()
+		return
+	}
+	origin := driver.AbsolutePositionForObject(k.CalendarGhost)
+	line.Move(fyne.NewPos(left-origin.X, k.TraySlot.LineY-origin.Y-1.5))
+	line.Resize(fyne.NewSize(width, 3))
+	line.Show()
+	line.Refresh()
 }
 
 func (c *PlannerDragCard) HighlightDates(at *fyne.Position) {
@@ -205,6 +317,9 @@ func (c *PlannerDragCard) DragEnd() {
 	}()
 	k.CalendarGhost.Objects = nil
 	k.CalendarGhost.Refresh()
+	k.TrayDropLine = nil
+	slot, daySlot := k.TraySlot, k.DaySlot
+	k.TraySlot, k.DaySlot = KanbanSlot{}, KanbanSlot{}
 	for _, t := range k.Dates {
 		t.Frame.FillColor = t.Base
 		t.Frame.StrokeWidth = t.StrokeWidth
@@ -214,9 +329,31 @@ func (c *PlannerDragCard) DragEnd() {
 	target := c.Hover
 	c.Hover = nil
 	if target == nil {
+		// Dropped among the tray's cards: the issue takes that place there.
+		if c.Index < 0 && slot.Ok && !slot.Unchanged() {
+			var shown []string
+			for _, o := range k.OpenCalendarItems() {
+				shown = append(shown, o.Key)
+			}
+			p := k.Plan
+			p.TrayOrder = backend.MoveTrayIssue(p.TrayOrder, shown, c.Candidate.Key, slot.AfterID)
+			if k.Save(p) {
+				Hooks.KanbanUIDrawKeepingCalendarScroll(k)
+			}
+		}
 		return
 	}
-	p, err := backend.MovePlannerIssue(k.Plan, c.Candidate, c.Index, target.Date)
+	var p backend.SprintPlan
+	var err error
+	switch {
+	case daySlot.Ok && daySlot.Unchanged():
+		return // dropped back where it was
+	case daySlot.Ok:
+		// Among the day's other blocks: it takes that place in the order.
+		p, err = c.arrangeDay(target.Date, daySlot.AfterID)
+	default:
+		p, err = backend.MovePlannerIssue(k.Plan, c.Candidate, c.Index, target.Date)
+	}
 	if err != nil {
 		k.Ui.Errf(err)
 		return
@@ -265,6 +402,19 @@ func (h *PlannerDayHover) Leave(owner fyne.CanvasObject) {
 	if h.owner == owner {
 		h.owner = nil
 		h.showClear(false)
+	}
+}
+
+// DateHover keeps the day's Delete in while the pointer is on the date, which
+// takes the hover from the day because a click there opens Status.
+func (h *PlannerDayHover) DateHover(owner fyne.CanvasObject, on bool) {
+	if !on {
+		h.Leave(owner)
+		return
+	}
+	h.owner = owner
+	if h.CanClear {
+		h.showClear(true)
 	}
 }
 

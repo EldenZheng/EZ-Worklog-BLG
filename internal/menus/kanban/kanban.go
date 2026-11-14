@@ -177,6 +177,10 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 	sidePanel := container.NewPadded(shell.PanelFrame(sideScroll))
 	statuses, extra := StatusColumns(k)
 	columns := container.New(KanbanColumnsLayout{})
+	// Each column's heading can be dragged along the row to reorder them.
+	var grips []*columnGrip
+	drawn := map[string]fyne.CanvasObject{}
+	boardColumns[k] = drawn
 	// A new selection (sprint, filter, search) brings each column's cards in
 	// from the top down, one after another; any other redraw leaves them be.
 	shown := fmt.Sprint(k.Filter, "|", k.Sprint, "|", k.Search, "|", k.ProjectOff, "|", k.Plan.KanbanTypes)
@@ -214,7 +218,8 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 		capsule.CornerRadius = 8
 		titleRow := container.NewPadded(container.NewBorder(nil, nil, nil, container.NewCenter(shell.CountBadge(count)), container.NewThemeOverride(header, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: statusHeaderInk(status)})))
 		pad := theme.Padding()
-		heading := container.New(layout.NewCustomPaddedLayout(pad, 0, pad, pad), container.NewStack(capsule, titleRow))
+		heading := container.New(layout.NewCustomPaddedLayout(pad, 0, pad, pad), newColumnGrip(k, status, &grips,
+			container.NewStack(capsule, titleRow)))
 		// The cards scroll the column's full height and pass behind the
 		// capsule, which floats over their top; at rest they start a gap
 		// below it.
@@ -237,7 +242,9 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 				capsule.Refresh()
 			})
 		})
-		columns.Add(container.New(kanbanColumnLayout{}, region))
+		column := container.New(kanbanColumnLayout{}, region)
+		drawn[status] = column
+		columns.Add(column)
 	}
 	boardScroll := container.NewHScroll(columns)
 	k.BoardClip = boardScroll

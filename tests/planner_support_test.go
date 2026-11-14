@@ -115,8 +115,8 @@ func TestSprintWeekdaySupportIsDisplayOnlyAndSkipsRealSupport(t *testing.T) {
 	if support == nil || support.Checked {
 		t.Fatal("display-only support checkbox missing or unexpectedly enabled")
 	}
-	if support.Theme().Color(theme.ColorNamePrimary, theme.VariantDark) != widgets.LogoGold {
-		t.Fatal("support checkbox should use gold styling")
+	if support.Theme().Color(theme.ColorNamePrimary, theme.VariantDark) != shell.WeekdaySupportColor() {
+		t.Fatal("support checkbox should use turquoise styling")
 	}
 	support.SetChecked(true)
 	for _, date := range k.Dates {
@@ -130,7 +130,7 @@ func TestSprintWeekdaySupportIsDisplayOnlyAndSkipsRealSupport(t *testing.T) {
 	bar := ui.Meters["planner/"+dayNumber(k.Week)]
 	found := false
 	for _, part := range bar.Target {
-		if part.Key == "@draft" && part.Weight == float32(180)/480 {
+		if part.Key == shell.SupportPendingKey && part.Weight == float32(180)/480 {
 			found = true
 		}
 	}

@@ -5,10 +5,44 @@ import (
 	"reflect"
 	"testing"
 
+	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/sprintcalendar"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 )
+
+func TestOneHourDraftAndOneHourPlanRemainSeparate(t *testing.T) {
+	ui, _, c := plannerFixture(t)
+	k := ui.Kanban
+	c.Item.URL = "https://github.com/bigledger/example/issues/42"
+	c.Key = c.Item.Key(k.Plan.Boards[0].ID)
+	k.Plan.Boards[0].Items[0] = c.Item
+	date := k.Week
+	k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: date, Start: 540, Minutes: 60}}}
+	draft := backend.Row{"date": date, "minutes": "60", "issue": "BigLedger/example#42", "description": "Waiting work"}
+	if _, err := ui.Store.AppendRows([]backend.Row{draft}); err != nil {
+		t.Fatal(err)
+	}
+	drafts := []backend.Row{draft}
+	totals := sprintcalendar.DayTotals(k, date, []backend.SprintCandidate{c}, sprintcalendar.PlannerDayWork{Drafts: drafts})
+	if totals.Draft != 60 || totals.Planned != 60 || totals.Logged != 0 {
+		t.Fatalf("an hour saved and an hour planned must both count: %+v", totals)
+	}
+	col := logwork.WeekColumn(ui, date, nil, drafts)
+	if col.Waiting != 60 || col.Planned != 60 || !contains(labels(col), "+120 min") {
+		t.Fatalf("Log Work must retain both hours: drafts=%d planned=%d labels=%v", col.Waiting, col.Planned, labels(col))
+	}
+	if got := ui.PlannedByDay(date, date, nil)[date]; got != 60 {
+		t.Fatalf("the shared Status and Report totals must retain the plan: %d", got)
+	}
+	if lines := sprintcalendar.PlannedLines(ui, date, nil, drafts); len(lines) != 1 || lines[0].Minutes != 60 {
+		t.Fatalf("the plan must remain in the tooltip: %+v", lines)
+	}
+	ui.OrgOff = map[string]bool{shell.DraftsKey: true}
+	if got := sprintcalendar.PlannedMinutes(ui, date, nil, drafts); got != 60 {
+		t.Fatalf("hiding drafts must not affect the independent plan: %d", got)
+	}
+}
 
 func TestSprintWorklogsUseBothMonthCachesAndCalendarFilters(t *testing.T) {
 	ui, _, _ := plannerFixture(t)
@@ -51,7 +85,7 @@ func TestSprintWorklogsUseBothMonthCachesAndCalendarFilters(t *testing.T) {
 	}
 }
 
-func TestSprintRemainingPlansCreditLoggedAndDraftMinutesOnce(t *testing.T) {
+func TestSprintPlansAreNotReducedByLoggedMinutes(t *testing.T) {
 	ui, _, c := plannerFixture(t)
 	k := ui.Kanban
 	c.Item.URL = "https://github.com/bigledger/example/issues/42"
@@ -63,8 +97,10 @@ func TestSprintRemainingPlansCreditLoggedAndDraftMinutesOnce(t *testing.T) {
 		Drafts: []backend.Row{{"date": date, "minutes": "20", "issue": "BigLedger/example#42"}},
 	}
 	totals := sprintcalendar.DayTotals(k, date, []backend.SprintCandidate{c, c}, work)
-	if totals.Logged != 40 || totals.Draft != 20 || totals.Planned != 120 {
-		t.Fatal("logged/draft credit or duplicate project issue was counted twice", totals)
+	// Logged and draft time on the same issue leave the plan whole, and a
+	// duplicate project issue counts once.
+	if totals.Logged != 40 || totals.Draft != 20 || totals.Planned != 180 {
+		t.Fatal("logged or draft time reduced the plan, or a duplicate issue counted twice", totals)
 	}
 	if got := sprintcalendar.PlannerIssueRef(c.Item.URL + "?from=project#comment"); got != "bigledger/example#42" {
 		t.Fatal("issue normalization did not match URL to reference", got)
@@ -74,7 +110,7 @@ func TestSprintRemainingPlansCreditLoggedAndDraftMinutesOnce(t *testing.T) {
 	task.Done = true
 	k.Plan.Tasks[c.Key] = task
 	totals = sprintcalendar.DayTotals(k, date, []backend.SprintCandidate{c}, work)
-	if totals.Logged != 40 || totals.Draft != 20 || totals.Planned != 0 {
-		t.Fatal("local Done fabricated logged time", totals)
+	if totals.Logged != 40 || totals.Draft != 20 || totals.Planned != 180 {
+		t.Fatal("local Done changed logged, draft or planned time", totals)
 	}
 }

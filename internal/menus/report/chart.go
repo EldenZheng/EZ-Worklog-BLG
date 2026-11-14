@@ -14,6 +14,7 @@ import (
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // DayChart is the report's bar graph, drawn as shapes rather than as a picture.
@@ -29,6 +30,7 @@ type DayChart struct {
 	cfg      backend.Config
 	Days     []ChartDay
 	goal     int // the daily target, drawn as a guide line
+	pill     *widgets.HoverPill
 	Hovered  int // index of the bar under the pointer, -1 for none
 	OnHover  func(date string)
 	OnSelect func(date string)
@@ -78,10 +80,11 @@ type ChartDay struct {
 	Total   int
 	Draft   int
 	Planned int
+	Support int // weekday +180m placeholder, separate from saved drafts
 }
 
 func NewDayChart(cfg backend.Config, days []ChartDay, goal int) *DayChart {
-	c := &DayChart{cfg: cfg, Days: days, goal: goal, Hovered: -1}
+	c := &DayChart{cfg: cfg, Days: days, goal: goal, Hovered: -1, pill: widgets.NewHoverPill()}
 	c.ExtendBaseWidget(c)
 	return c
 }
@@ -107,7 +110,7 @@ func (c *DayChart) MaxValue() int {
 	for _, d := range c.Days {
 		// The draft rides on top of the bar, so the scale has to hold both or a
 		// day with work waiting would draw off the top of the plot.
-		if t := d.Total + d.Draft + d.Planned; t > maxVal {
+		if t := d.Total + d.Draft + d.Support + d.Planned; t > maxVal {
 			maxVal = t
 		}
 	}
@@ -141,6 +144,7 @@ func (c *DayChart) MouseMoved(e *desktop.MouseEvent) {
 		return
 	}
 	c.Hovered = i
+	c.moveHover()
 	if c.OnHover != nil {
 		if i < 0 {
 			c.OnHover("")
@@ -153,10 +157,22 @@ func (c *DayChart) MouseMoved(e *desktop.MouseEvent) {
 
 func (c *DayChart) MouseOut() {
 	c.Hovered = -1
+	c.moveHover()
 	if c.OnHover != nil {
 		c.OnHover("")
 	}
 	c.Refresh()
+}
+
+func (c *DayChart) hoverFrame() (fyne.Position, fyne.Size) {
+	slot := (c.Size().Width - ChartSideMargin*2) / float32(max(len(c.Days), 1))
+	return fyne.NewPos(ChartSideMargin+slot*float32(c.Hovered), ChartTopMargin),
+		fyne.NewSize(max(slot, 0), max(c.Size().Height-ChartAxisHeight-ChartTopMargin, 0))
+}
+
+func (c *DayChart) moveHover() {
+	pos, size := c.hoverFrame()
+	c.pill.MoveTo(pos, size, c.Hovered >= 0)
 }
 
 func (c *DayChart) Tapped(e *fyne.PointEvent) {
@@ -190,6 +206,7 @@ type chartSlot struct {
 	orgs      []string // the segments' orgs, bottom-up
 	Segments  []*canvas.Rectangle
 	Draft     *canvas.Rectangle // unpushed minutes, capping the stack; nil if none
+	Support   *canvas.Rectangle
 	Plan      *canvas.Rectangle // planned minutes, above the draft; nil if none
 	label     *canvas.Text
 }
@@ -199,6 +216,7 @@ type chartSlot struct {
 func (r *DayChartRenderer) build() {
 	c := r.chart
 	r.objects = nil
+	var highlights []fyne.CanvasObject
 
 	r.baseline = canvas.NewRectangle(theme.Color(theme.ColorNameInputBorder))
 	r.objects = append(r.objects, r.baseline)
@@ -208,7 +226,7 @@ func (r *DayChartRenderer) build() {
 		s := &chartSlot{orgs: shell.OrgsByShare(c.cfg, day.ByOrg)}
 		s.Highlight = canvas.NewRectangle(color.Transparent)
 		s.Highlight.CornerRadius = 6
-		r.objects = append(r.objects, s.Highlight)
+		highlights = append(highlights, s.Highlight)
 
 		for _, org := range s.orgs {
 			seg := canvas.NewRectangle(shell.OrgColor(c.cfg, org))
@@ -223,6 +241,11 @@ func (r *DayChartRenderer) build() {
 			s.Draft = canvas.NewRectangle(shell.DraftYellow(shell.DraftSolidTint))
 			s.Draft.CornerRadius = ChartBarRadius
 			r.objects = append(r.objects, s.Draft)
+		}
+		if day.Support > 0 {
+			s.Support = canvas.NewRectangle(shell.SupportFill(shell.DraftSolidTint))
+			s.Support.CornerRadius = ChartBarRadius
+			r.objects = append(r.objects, s.Support)
 		}
 		if day.Planned > 0 {
 			s.Plan = canvas.NewRectangle(shell.PlannerPlanColor)
@@ -246,6 +269,7 @@ func (r *DayChartRenderer) build() {
 	r.guideTag = canvas.NewText(backend.HoursMins(c.goal)+" target", warn)
 	r.guideTag.TextSize = theme.CaptionTextSize()
 	r.objects = append(r.objects, r.guideTag)
+	r.objects = append(append(highlights, c.pill.Rect), r.objects...)
 }
 
 // chartDayLabel is the tick under a bar. Only Mondays are named: thirty-one
@@ -266,6 +290,8 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 	if plotH < 1 || len(c.Days) == 0 {
 		return
 	}
+	pos, frame := c.hoverFrame()
+	c.pill.Fit(pos, frame)
 	maxVal := float32(c.MaxValue())
 
 	r.baseline.Move(fyne.NewPos(0, plotBottom))
@@ -297,23 +323,14 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 		// A day with nothing logged is not short, it is untouched, and stays
 		// unpainted — otherwise a month not yet worked reads as a failed one.
 		//
-		// The hovered column lights up over whatever it was already showing, so
+		// The shared gold hover pill lights up behind the column, so
 		// a day with nothing logged still shows what the pointer is on.
 		// A day the drafts carry over the line is checked before a short one:
 		// both are true of it, and the green is the more useful of the two —
 		// nothing is owed on that day but a push.
 		short := shell.IsShortDay(day.Total)
-		done := shell.IsDraftComplete(day.Total, day.Draft+day.Planned)
+		done := shell.IsDraftComplete(day.Total, day.Draft+day.Support+day.Planned)
 		switch {
-		case i == c.Hovered && done:
-			s.Highlight.FillColor = shell.BlendColor(shell.DraftDoneFill(),
-				theme.Color(theme.ColorNameForeground), 0.10)
-		case i == c.Hovered && short:
-			s.Highlight.FillColor = shell.BlendColor(shell.ShortFill(),
-				theme.Color(theme.ColorNameForeground), 0.10)
-		case i == c.Hovered:
-			s.Highlight.FillColor = shell.BlendColor(theme.Color(theme.ColorNameInputBackground),
-				theme.Color(theme.ColorNameForeground), 0.10)
 		case done:
 			s.Highlight.FillColor = shell.DraftDoneFill()
 		case short:
@@ -366,8 +383,11 @@ func (r *DayChartRenderer) Layout(size fyne.Size) {
 		if s.Draft != nil {
 			stack(s.Draft, day.Draft, len(s.Segments) > 0)
 		}
+		if s.Support != nil {
+			stack(s.Support, day.Support, len(s.Segments) > 0 || s.Draft != nil)
+		}
 		if s.Plan != nil {
-			stack(s.Plan, day.Planned, len(s.Segments) > 0 || s.Draft != nil)
+			stack(s.Plan, day.Planned, len(s.Segments) > 0 || s.Draft != nil || s.Support != nil)
 		}
 
 		lblSize := s.label.MinSize()
@@ -385,7 +405,7 @@ func (r *DayChartRenderer) Refresh() {
 
 func (r *DayChartRenderer) Objects() []fyne.CanvasObject { return r.objects }
 
-func (r *DayChartRenderer) Destroy() {}
+func (r *DayChartRenderer) Destroy() { r.chart.pill.Stop() }
 
 // ChartWithReadout pairs the chart with the line that names whatever is under
 // the pointer, since a bar cannot label itself without crowding its neighbours.
@@ -417,6 +437,12 @@ func chartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) (f
 			break
 		}
 	}
+	for _, d := range days {
+		if d.Support > 0 {
+			idle += " Turquoise is weekday support (+180 min, display only)."
+			break
+		}
+	}
 	readout := widget.NewLabelWithStyle(idle, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 	readout.Wrapping = fyne.TextWrapWord
 	chart.OnHover = func(date string) {
@@ -426,13 +452,16 @@ func chartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) (f
 		}
 		d := byDate[date]
 		when, _ := time.Parse("2006-01-02", date)
-		if d.Total == 0 && d.Draft == 0 && d.Planned == 0 {
+		if d.Total == 0 && d.Draft == 0 && d.Support == 0 && d.Planned == 0 {
 			readout.SetText(when.Format("Mon 2 Jan") + " — nothing logged")
 			return
 		}
 		planned := ""
+		if d.Support > 0 {
+			planned += fmt.Sprintf("   ·   +%d min weekday support (display only)", d.Support)
+		}
 		if d.Planned > 0 {
-			planned = fmt.Sprintf("   ·   +%s planned", backend.HoursMins(d.Planned))
+			planned += fmt.Sprintf("   ·   +%s planned", backend.HoursMins(d.Planned))
 		}
 		if d.Total == 0 {
 			line := when.Format("Mon 2 Jan") + " — nothing pushed"
@@ -452,24 +481,6 @@ func chartWithReadout(ui *shell.UI, days []ChartDay, fromDate, toDate string) (f
 		}
 		readout.SetText(line + planned)
 	}
-	chart.OnSelect = func(date string) { OpenDayOnCalendar(ui, date) }
+	chart.OnSelect = ui.OpenDayOnStatus
 	return container.NewVBox(chart, readout), chart
-}
-
-// OpenDayOnCalendar jumps from a bar in the report to that day on the Status
-// tab, loading its month if the report was looking at a different one.
-func OpenDayOnCalendar(ui *shell.UI, date string) {
-	if len(date) < 7 {
-		return
-	}
-	if month := date[:7]; ui.CalMonth != month {
-		ui.CalMonth = month
-		ui.LoadStatus(false)
-	}
-	ui.SelDay = date
-	shell.Hooks.DrawCalendar(ui)
-	shell.Hooks.DrawDayPanel(ui)
-	if ui.Tabs != nil {
-		ui.Tabs.SelectIndex(shell.StatusTabIndex)
-	}
 }

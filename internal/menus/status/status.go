@@ -38,19 +38,20 @@ func BuildStatusTab(ui *shell.UI) fyne.CanvasObject {
 	})
 	ui.CalTitle = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
 	ui.CalSummary = widget.NewLabel("")
+	ui.CalSummary.Wrapping = fyne.TextWrapWord
 	refresh := widget.NewButtonWithIcon("Refresh from GitHub", theme.ViewRefreshIcon(), func() {
 		ui.EnsureProjectCache()
 		delete(ui.ProjLoaded, shell.StatusCacheKey(ui.CalMonth))
 		DrawCalendar(ui)
 		ui.LoadStatus(true)
 	})
-	head := container.NewHBox(prev, ui.CalTitle, next, layout.NewSpacer(), ui.CalSummary, refresh)
+	ui.CalLegend = container.NewVBox()
+	head := container.NewBorder(nil, nil, container.NewHBox(prev, ui.CalTitle, next), refresh, ui.CalLegend)
 
 	// Stack, not VBox: a VBox gives the grid its minimum height and parks the
 	// rest of the tab empty. The grid has to take everything going, since a
 	// month of cells is the whole point of this tab.
 	ui.CalBox = container.NewStack()
-	ui.CalLegend = container.NewVBox()
 	ui.DayPanel = container.NewVBox()
 	// A Stack, so the prompt can be centred against the panel's full height.
 	// Inside a scroll it would sit at the top, because a scroll gives its
@@ -66,9 +67,10 @@ func BuildStatusTab(ui *shell.UI) fyne.CanvasObject {
 
 	// No scroll around the calendar: a scroll sizes its content to the content's
 	// minimum, which is what kept the month to half the window. Border hands the
-	// grid every pixel the header and legend do not use.
+	// grid every pixel the header does not use. The scrollable key shares the
+	// month navigation's row; the summary wraps underneath on narrow screens.
 	ui.StatusProgress = shell.NewLoadingIndicator()
-	ui.CalBody = container.NewBorder(container.NewVBox(head, ui.StatusProgress.View), ui.CalLegend, nil, nil, ui.CalBox)
+	ui.CalBody = container.NewBorder(container.NewVBox(head, ui.CalSummary, ui.StatusProgress.View), nil, nil, nil, ui.CalBox)
 	// The day detail is its own menu, so it sits in a rounded panel like
 	// Settings; its scroll runs inside the panel, which stays put.
 	return container.NewBorder(nil, nil, nil, container.NewPadded(shell.PanelFrame(ui.DaySide)),
@@ -139,6 +141,12 @@ func DrawCalendar(ui *shell.UI) {
 	for _, m := range draftByDay {
 		monthDraft += m
 	}
+	// Keep pencilled-in support turquoise and separate from saved drafts.
+	monthSupport := 0
+	supportByDay := ui.SupportPlaceholdersByDay(monthFrom, monthTo, items)
+	for _, m := range supportByDay {
+		monthSupport += m
+	}
 	plannedByDay := ui.PlannedByDay(monthFrom, monthTo, items)
 	monthPlanned := 0
 	for _, m := range plannedByDay {
@@ -155,7 +163,7 @@ func DrawCalendar(ui *shell.UI) {
 	var cells []fyne.CanvasObject
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", ui.CalMonth, shell.Pad2(day))
-		cells = append(cells, dayCell(ui, ds, day, byDayOrg[ds], draftByDay[ds], plannedByDay[ds]))
+		cells = append(cells, dayCell(ui, ds, day, byDayOrg[ds], draftByDay[ds], plannedByDay[ds], supportByDay[ds]))
 	}
 	// A month opened, or its tab opened, arrives as Kanban's cards do: each day
 	// uncovered from the top down, column after column, left to right.
@@ -169,10 +177,14 @@ func DrawCalendar(ui *shell.UI) {
 	ui.CalBox.Objects = []fyne.CanvasObject{grid}
 	ui.CalBox.Refresh()
 	shell.Relayout(ui.CalBody)
-	ui.CalLegend.Objects = nil
-	if key := shell.OrgLegend(ui.Cfg, monthByOrg, ui.OrgOff, ui.ToggleOrg); key != nil {
-		ui.CalLegend.Objects = []fyne.CanvasObject{key}
+	var offset fyne.Position
+	if len(ui.CalLegend.Objects) > 0 {
+		offset = ui.CalLegend.Objects[0].(*container.Scroll).Offset
 	}
+	keyScroll := shell.OrgLegend(ui.Cfg, monthByOrg, ui.OrgOff, ui.ToggleOrg).(*container.Scroll)
+	keyScroll.Resize(ui.CalLegend.Size())
+	keyScroll.ScrollToOffset(offset)
+	ui.CalLegend.Objects = []fyne.CanvasObject{keyScroll}
 	ui.CalLegend.Refresh()
 	shell.Relayout(ui.CalBody)
 	summary := fmt.Sprintf("%d min logged this month", monthTotal)
@@ -182,6 +194,9 @@ func DrawCalendar(ui *shell.UI) {
 		// not been sent.
 		summary += fmt.Sprintf(" · %d min saved here, waiting to push", monthDraft)
 	}
+	if monthSupport > 0 {
+		summary += fmt.Sprintf(" · %d min weekday support (display only)", monthSupport)
+	}
 	if monthPlanned > 0 {
 		summary += fmt.Sprintf(" · %d min planned", monthPlanned)
 	}
@@ -190,7 +205,11 @@ func DrawCalendar(ui *shell.UI) {
 	DrawDayPanel(ui)
 }
 
-func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft, planned int) fyne.CanvasObject {
+func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft, planned int, supportMinutes ...int) fyne.CanvasObject {
+	support := 0
+	if len(supportMinutes) > 0 {
+		support = supportMinutes[0]
+	}
 	m := 0
 	for _, v := range byOrg {
 		m += v
@@ -210,12 +229,12 @@ func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft, plan
 	}
 
 	// Planned time counts toward the day as it does on Log Work's week.
-	state := shell.DayState(m, draft+planned)
+	state := shell.DayState(m, draft+support+planned)
 	// The score under the number, the way the report reads it: what the day has
 	// against what it owes, so a glance down the month compares like with like
 	// instead of asking which percentage belonged to which target.
 	var lines []fyne.CanvasObject
-	if m > 0 || draft > 0 || planned > 0 {
+	if m > 0 || draft > 0 || support > 0 || planned > 0 {
 		lines = append(lines, coloured(fmt.Sprintf("%d/%d", m, backend.Target), state.TextColor))
 		switch {
 		case draft > 0:
@@ -224,8 +243,13 @@ func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft, plan
 		default:
 			lines = append(lines, coloured(fmt.Sprintf("%d%%", pc), state.TextColor))
 		}
+		if support > 0 {
+			note := coloured(fmt.Sprintf("+%dm support", support), state.TextColor)
+			note.Color = shell.WeekdaySupportColor()
+			lines = append(lines, note)
+		}
 		if planned > 0 {
-			plan := coloured(fmt.Sprintf("+%dm · %d%%", planned, shell.PercentOf(m+draft+planned)), state.TextColor)
+			plan := coloured(fmt.Sprintf("+%dm · %d%%", planned, shell.PercentOf(m+draft+support+planned)), state.TextColor)
 			plan.Color = shell.PlannerPlanColor
 			lines = append(lines, plan)
 		}
@@ -255,7 +279,7 @@ func dayCell(ui *shell.UI, ds string, day int, byOrg map[string]int, draft, plan
 	wash := canvas.NewRectangle(state.Fill)
 	wash.CornerRadius = shell.CellCornerRadius
 	stack := container.NewStack(floor, wash,
-		shell.VMeterFillPlanned(ui.Cfg, byOrg, draft, planned, backend.Target, shell.CellCornerRadius), border,
+		shell.VMeterFillPlanned(ui.Cfg, byOrg, draft, planned, backend.Target, shell.CellCornerRadius, support), border,
 		container.NewPadded(body))
 	return shell.NewTappable(stack, func() {
 		ui.SelDay = ds
@@ -312,17 +336,11 @@ func DrawDayPanel(ui *shell.UI) {
 
 	// Same meter as the calendar cell, at a size worth reading: the day against
 	// the target, split by org, with the split spelled out underneath.
-	planned := ui.PlannedByDay(ui.SelDay, ui.SelDay, monthItems)[ui.SelDay]
 	body := []fyne.CanvasObject{
 		head,
 		widget.NewLabelWithStyle(fmt.Sprintf("%d/%d min (%d%%)", total, backend.Target, pc),
 			fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
-		ui.ProgressBarParts("detail", ui.SelDay, shell.PlannedBarParts(ui.Cfg, byOrg, nil, planned), 12),
-	}
-	if planned > 0 {
-		plan := shell.WeekCaption(fmt.Sprintf("+%dm planned", planned))
-		plan.Color = shell.PlannerPlanColor
-		body = append(body, plan)
+		ui.ProgressBar("detail", ui.SelDay, byOrg, nil, backend.Target, 12),
 	}
 	for _, org := range shell.OrgsByShare(ui.Cfg, byOrg) {
 		// Border, not a ratio row: a ratio row's minimum grows with its widest

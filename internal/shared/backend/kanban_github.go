@@ -45,6 +45,9 @@ type SprintItem struct {
 	// The issue this one is a sub-issue of, when it has one.
 	ParentTitle string `json:",omitempty"`
 	ParentURL   string `json:",omitempty"`
+	// Closed is a closed issue or a closed or merged pull request, whatever
+	// its Status says.
+	Closed bool `json:",omitempty"`
 }
 
 func (it SprintItem) Key(projectID string) string {
@@ -155,7 +158,7 @@ const SprintMetadataQuery = `query($login:String!,$number:Int!){
 
 const sprintItemsQuery = `query($id:ID!,$filter:String!,$after:String){node(id:$id){... on ProjectV2{
  items(first:100,after:$after,query:$filter){nodes{id
- content{__typename ... on Issue{title url parent{title url}} ... on PullRequest{title url} ... on DraftIssue{title}}
+ content{__typename ... on Issue{title url state parent{title url}} ... on PullRequest{title url state} ... on DraftIssue{title}}
  fieldValues(first:100){nodes{
  ... on ProjectV2ItemFieldSingleSelectValue{name field{... on ProjectV2FieldCommon{name}}}
  ... on ProjectV2ItemFieldNumberValue{number field{... on ProjectV2FieldCommon{name}}}
@@ -231,10 +234,11 @@ func FetchSprintBoardTracked(rawURL, filter string, step func(done, more int)) (
 	return b, nil
 }
 
-// RefreshSprint fetches only one iteration and retains other cached iterations.
+// RefreshSprint fetches one iteration (or unscheduled items for an empty key)
+// and retains other cached iterations.
 func RefreshSprint(b SprintBoard, key string, step func(int, int)) (SprintBoard, error) {
 	sprint := b.SprintByKey(key)
-	if sprint.ID == "" {
+	if key != "" && sprint.ID == "" {
 		return b, fmt.Errorf("sprint is no longer available")
 	}
 	var terms []string
@@ -245,7 +249,11 @@ func RefreshSprint(b SprintBoard, key string, step func(int, int)) (SprintBoard,
 		}
 		terms = append(terms, term)
 	}
-	filter := strings.TrimSpace(strings.Join(terms, " ") + " sprint:" + strconv.Quote(sprint.Title))
+	scope := "no:sprint"
+	if key != "" {
+		scope = "sprint:" + strconv.Quote(sprint.Title)
+	}
+	filter := strings.TrimSpace(strings.Join(terms, " ") + " " + scope)
 	if step == nil {
 		step = func(int, int) {}
 	}
@@ -297,9 +305,9 @@ func fetchSprintItems(projectID, filter string, keep func(SprintItem), step func
 						Nodes []struct {
 							ID      string
 							Content *struct {
-								Title, URL string
-								Kind       string `json:"__typename"`
-								Parent     *struct{ Title, URL string }
+								Title, URL, State string
+								Kind              string `json:"__typename"`
+								Parent            *struct{ Title, URL string }
 							}
 							FieldValues struct {
 								Nodes []struct {
@@ -324,7 +332,7 @@ func fetchSprintItems(projectID, filter string, keep func(SprintItem), step func
 			if n.Content == nil || n.Content.Kind == "DraftIssue" {
 				continue
 			}
-			it := SprintItem{ID: n.ID, Title: n.Content.Title, URL: n.Content.URL, Kind: n.Content.Kind}
+			it := SprintItem{ID: n.ID, Title: n.Content.Title, URL: n.Content.URL, Kind: n.Content.Kind, Closed: n.Content.State != "" && n.Content.State != "OPEN"}
 			if p := n.Content.Parent; p != nil {
 				it.ParentTitle, it.ParentURL = p.Title, p.URL
 			}

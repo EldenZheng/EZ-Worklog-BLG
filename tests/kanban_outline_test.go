@@ -74,7 +74,7 @@ func TestSprintTodayAndCurrentSelectAreGold(t *testing.T) {
 				t.Fatal("today text not gold")
 			}
 		}
-		if selectBox, ok := o.(*widget.Select); ok && strings.HasSuffix(selectBox.Selected, "- Current") {
+		if selectBox, ok := o.(*widget.Select); ok && selectBox.Selected == sprintcalendar.CalendarSprintLabel(c.Sprint) {
 			selectGold = selectBox.Theme().Color(theme.ColorNameForeground, theme.VariantDark) == widgets.LogoGold
 		}
 	})

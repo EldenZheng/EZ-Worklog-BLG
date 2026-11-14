@@ -58,6 +58,9 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	cleanup := widget.NewEntry()
 	cleanup.SetPlaceHolder("Blank keeps everything")
 	mode := shell.NewGoldSelect([]string{"Create Worklog sub-issue", "Write on the issue itself"}, nil)
+	// Any number of months, typed in, rather than a few fixed choices.
+	reportRange := widget.NewEntry()
+	reportRange.SetPlaceHolder("1")
 	key := widget.NewPasswordEntry()
 	key.SetPlaceHolder("sk-ant-...")
 	// One board per org, one per line. Status and Report read the union of
@@ -117,6 +120,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		mode.SetSelected("Create Worklog sub-issue")
 	}
 	key.SetText(c.AnthropicAPIKey)
+	reportRange.SetText(strconv.Itoa(backend.FinishedReportMonths(c)))
 	projURL.SetText(strings.Join(backend.ProjectURLs(c), "\n"))
 	if !ui.HasCfg {
 		msg.SetText("Fill this in once to get started.")
@@ -202,6 +206,15 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 			}
 			cleanupN = n
 		}
+		reportN := 0
+		if text := strings.TrimSpace(reportRange.Text); text != "" {
+			n, err := strconv.Atoi(text)
+			if err != nil || n < 1 || n > backend.MaxReportMonths {
+				msg.SetText(fmt.Sprintf("Finished report range: enter a number of months from 1 to %d.", backend.MaxReportMonths))
+				return
+			}
+			reportN = n
+		}
 		m := "subissue"
 		if mode.Selected == "Write on the issue itself" {
 			m = "issue"
@@ -243,6 +256,11 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		newCfg.LookbackDays = backN
 		newCfg.CleanupDays = cleanupN
 		newCfg.DefaultMode = m
+		// One month is the default, saved as nothing.
+		newCfg.ReportMonths = 0
+		if reportN > 1 {
+			newCfg.ReportMonths = reportN
+		}
 		newCfg.AnthropicAPIKey = strings.TrimSpace(key.Text)
 		// First line stays the main board so an older build of this app, and
 		// anything reading project_url, still finds the one it expects.
@@ -403,11 +421,11 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		bubbleBox,
 	)
 	sourcesSection := container.NewVBox(
-		shell.SectionTitle("Sources"),
+		settingsTitle("Sources"),
 		container.New(widgets.NewFluidRow(0.72, 0.28), fieldsCol, legendCol),
 	)
 	salarySection := container.NewVBox(
-		shell.SectionTitle("Salary"),
+		settingsTitle("Salary"),
 		container.NewGridWithColumns(3,
 			shell.LabeledHint("Base salary", "Paid per 21 working days.", sal),
 			shell.LabeledHint("Currency", "Currency the salary is paid in.", outlined(cur)),
@@ -417,14 +435,20 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		shell.LabeledHint("Support payment per set", "Paid per seven qualifying support issues, in the salary currency. Blank means unset.", supportPay),
 	)
 	worklogSection := container.NewVBox(
-		shell.SectionTitle("Worklog"),
+		settingsTitle("Worklog"),
 		container.NewGridWithColumns(3,
 			shell.LabeledHint("Look back", "Days back the commit sweep scans for unlogged work.", back),
 			shell.LabeledHint("Default push mode", "Sub-issue creates a linked child. Issue writes on the parent itself.", outlinedSelect(mode)),
 			shell.LabeledHint("Anthropic API key", "Enables the AI Compact-remarks button. Leave blank to disable.", key),
 		),
 		shell.LabeledHint("Clean up after (days)", "Forgets ignored commits, and the commit list on pushed entries, after this many days, or the look back if longer. The entries themselves stay. Blank keeps everything.", cleanup),
-		msg,
+	)
+
+	projectsSection := container.NewVBox(
+		settingsTitle("Projects"),
+		container.NewGridWithColumns(3,
+			shell.LabeledHint("Finished report range (months)", "How many months the finished report shows at a time. Its month opens every week since the start.", reportRange),
+		),
 	)
 
 	mainInner := container.NewVBox(
@@ -432,6 +456,8 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		layout.NewSpacer(),
 		salarySection,
 		worklogSection,
+		projectsSection,
+		msg,
 	)
 	// Chunky theme bumps input padding so entries and the dropdown read as
 	// larger controls — filling more of the panel — without needing a per-widget
@@ -457,6 +483,12 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// body — the Settings tab now fills to the bottom of the window instead
 	// of hugging its natural content height.
 	return container.NewStack(container.NewBorder(top, nil, nil, nil, body), toast.layer)
+}
+
+// settingsTitle is a section's heading with room above it, so each section
+// reads as starting fresh rather than running on from the last one's fields.
+func settingsTitle(title string) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(theme.Padding()*4, 0, 0, 0), shell.SectionTitle(title))
 }
 
 // sidebarField is a field whose label wraps, so the longest label does not set

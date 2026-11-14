@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -283,12 +284,13 @@ func MeterParts(cfg backend.Config, byOrg, draft map[string]int, goal int) []Met
 		total += byOrg[o]
 	}
 	pending := 0
-	for _, m := range draft {
-		if m > 0 {
+	for key, m := range draft {
+		if m > 0 && key != SupportPendingKey {
 			pending += m
 		}
 	}
-	total += pending
+	support := max(draft[SupportPendingKey], 0)
+	total += pending + support
 	if total <= 0 {
 		return nil
 	}
@@ -309,6 +311,7 @@ func MeterParts(cfg backend.Config, byOrg, draft map[string]int, goal int) []Met
 		add(o, byOrg[o], OrgColor(cfg, o))
 	}
 	add("@draft", pending, DraftWash())
+	add(SupportPendingKey, support, SupportFill(DraftSolidTint))
 	return parts
 }
 
@@ -329,7 +332,11 @@ func VMeterFill(cfg backend.Config, byOrg map[string]int, draft, goal int, radiu
 }
 
 // VMeterFillPlanned is VMeterFill with planned time in purple on top.
-func VMeterFillPlanned(cfg backend.Config, byOrg map[string]int, draft, planned, goal int, radius float32) fyne.CanvasObject {
+func VMeterFillPlanned(cfg backend.Config, byOrg map[string]int, draft, planned, goal int, radius float32, supportMinutes ...int) fyne.CanvasObject {
+	support := 0
+	if len(supportMinutes) > 0 {
+		support = max(0, supportMinutes[0])
+	}
 	if goal <= 0 {
 		return canvas.NewRectangle(color.Transparent)
 	}
@@ -344,6 +351,7 @@ func VMeterFillPlanned(cfg backend.Config, byOrg map[string]int, draft, planned,
 	if planned > 0 {
 		total += planned
 	}
+	total += support
 	if total <= 0 {
 		return canvas.NewRectangle(color.Transparent)
 	}
@@ -382,6 +390,12 @@ func VMeterFillPlanned(cfg backend.Config, byOrg map[string]int, draft, planned,
 	// draft is stacked on, not the other way round.
 	if w := float32(float64(draft) / float64(goal) * scale); draft > 0 && w > 0 {
 		seg := canvas.NewRectangle(DraftYellow(MeterTint))
+		seg.CornerRadius = radius
+		weights = append(weights, w)
+		segs = append(segs, seg)
+	}
+	if w := float32(float64(support) / float64(goal) * scale); support > 0 && w > 0 {
+		seg := canvas.NewRectangle(SupportFill(MeterTint))
 		seg.CornerRadius = radius
 		weights = append(weights, w)
 		segs = append(segs, seg)
@@ -470,11 +484,13 @@ func ShareBar(fill color.Color, mins, total int, height float32) fyne.CanvasObje
 func OrgLegend(cfg backend.Config, byOrg map[string]int, hidden map[string]bool,
 	toggle func(org string)) fyne.CanvasObject {
 	if len(OrgsByShare(cfg, byOrg)) < 2 {
-		// A month of one org is one colour, and a key naming the only colour on
-		// screen is a row of furniture above the calendar.
-		return nil
+		// A month of one org is one colour, and a chip naming the only org colour
+		// on screen is furniture. The draft and plan colours still need naming.
+		byOrg = nil
 	}
-	return OrgLegendWith(cfg, byOrg, hidden, backend.HoursMins, toggle)
+	// Sideways scroll, as the project legends do, so a long row of chips cannot
+	// force the window wider.
+	return container.NewHScroll(OrgLegendWith(cfg, byOrg, hidden, backend.HoursMins, toggle))
 }
 
 // OrgLegendWith is orgLegend with the amount beside each name spelled out by
@@ -486,24 +502,52 @@ func OrgLegend(cfg backend.Config, byOrg map[string]int, hidden map[string]bool,
 // look for; the colour on the tiles should always have somewhere that names it.
 func OrgLegendWith(cfg backend.Config, byOrg map[string]int, hidden map[string]bool,
 	amount func(int) string, toggle func(org string)) fyne.CanvasObject {
+	row := OrgFilter(cfg, byOrg, hidden, amount, toggle)
+	row.Add(LegendChip(DraftKeyFill(), DraftLogsLabel, hidden[DraftsKey], func() { toggle(DraftsKey) }))
+	row.Add(LegendChip(PlannerPlanColor, PlannedIssuesLabel, hidden[PlansKey], func() { toggle(PlansKey) }))
+	return row
+}
 
-	orgs := OrgsByShare(cfg, byOrg)
-	if len(orgs) == 0 {
-		return nil // nothing on screen to key
-	}
+// OrgFilter is the organisation-only key for views without draft or plan keys.
+// A nil amount shows just the org names, beside the view's own count.
+func OrgFilter(cfg backend.Config, byOrg map[string]int, hidden map[string]bool,
+	amount func(int) string, toggle func(org string)) *fyne.Container {
+
 	items := []fyne.CanvasObject{
 		widget.NewLabelWithStyle("Filter", fyne.TextAlignLeading, fyne.TextStyle{Italic: true}),
 	}
-	for _, o := range orgs {
+	for _, o := range OrgsByShare(cfg, byOrg) {
 		o := o
-		items = append(items, orgChip(cfg, o, amount(byOrg[o]), hidden[o], toggle))
+		value := ""
+		if amount != nil {
+			value = amount(byOrg[o])
+		}
+		items = append(items, orgChip(cfg, o, value, hidden[o], toggle))
 	}
-	return container.NewHBox(items...)
+	return FilterGroup(layout.NewHBoxLayout(), items...)
+}
+
+// The two entries that close every organisation legend (Log Work, Status,
+// Report). They are never sorted in with the orgs. DraftsKey and PlansKey are
+// their places in UI.OrgOff; a GitHub org name cannot start with "@".
+const (
+	DraftLogsLabel     = "Drafts Logs"
+	PlannedIssuesLabel = "Planned Issues"
+	DraftsKey          = "@drafts"
+	PlansKey           = "@plans"
+)
+
+// DraftKeyFill is the draft colour as a legend dot, opaque like the org dots.
+func DraftKeyFill() color.Color {
+	return DraftYellow(DraftSolidTint)
 }
 
 // orgChip is one entry in the key: the colour, the name, and what it is worth.
 func orgChip(cfg backend.Config, org, amount string, off bool, toggle func(org string)) fyne.CanvasObject {
-	label := fmt.Sprintf("%s (%s)", backend.OrDefault(org, "unknown org"), amount)
+	label := backend.OrDefault(org, "unknown org")
+	if amount != "" {
+		label += fmt.Sprintf(" (%s)", amount)
+	}
 	return LegendChip(OrgColor(cfg, org), label, off, func() { toggle(org) })
 }
 
@@ -523,5 +567,5 @@ func LegendChip(fill color.Color, label string, off bool, onTap func()) *Tappabl
 	}
 	name := canvas.NewText(label, ink)
 	name.TextSize = theme.TextSize()
-	return NewCardTappable(container.NewPadded(container.NewHBox(OrgDotIn(fill), container.NewCenter(name))), onTap)
+	return NewFilterTappable(container.NewPadded(container.NewHBox(OrgDotIn(fill), container.NewCenter(name))), onTap)
 }

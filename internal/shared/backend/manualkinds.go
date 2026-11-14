@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 )
 
@@ -41,6 +42,37 @@ const (
 	KindBulkReview  = "codereview_bulk"
 	KindIndependent = "independent"
 )
+
+// RowIsBulkCodeReview includes the early bulk drafts that used the single
+// review kind before Bulk Review had its own stored type.
+func RowIsBulkCodeReview(r Row) bool {
+	return r["type"] == KindBulkReview ||
+		r["type"] == KindCodeReview && RowCreatesOwnIssue(r)
+}
+
+// RowIsSingleCodeReview also recognises older manual rows by their saved
+// generated description. Named daily bulk titles and ordinary issue titles
+// mentioning reviews do not count.
+func RowIsSingleCodeReview(r Row) bool {
+	if RowIsBulkCodeReview(r) {
+		return false
+	}
+	kind := strings.TrimSpace(r["type"])
+	single := kind == KindCodeReview || strings.EqualFold(kind, "Code Review")
+	if !single && (kind == "" || kind == KindOther) {
+		saved := strings.TrimSpace(r["description"])
+		if strings.EqualFold(saved, "Code Review") {
+			single = true
+		} else if date, ok := strings.CutPrefix(saved, "Code Review: "); ok {
+			_, err := time.Parse("2006-01-02", date)
+			single = err == nil
+		}
+		if _, err := ParseCodeReviewItems(r["remarks"]); err == nil {
+			single = false
+		}
+	}
+	return single
+}
 
 // RowCreatesOwnIssue identifies manual work whose GitHub issue is determined
 // by the app rather than pasted from an existing development issue. These rows

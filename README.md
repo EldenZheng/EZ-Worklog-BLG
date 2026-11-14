@@ -26,10 +26,13 @@ Built with [Fyne](https://fyne.io). All GitHub access goes through the
 | **Status** | A month calendar; each day fills towards the daily target, coloured by organisation. |
 | **Report** | A payroll period — the 21st to the 20th — as stat tiles, a per-day bar chart, and the split by organisation. |
 | **Settings** | Everything below. |
-| **Kanban** | Issues and pull requests from your configured projects, with sprint dates and estimates. Filter by project or type; drag cards between statuses or onto a sprint to update GitHub. |
+| **Kanban** | Issues and pull requests from your configured projects, with sprint dates and estimates. Filter by project or type; drag cards between statuses or onto a sprint to update GitHub. Drag a column's heading, or its check in the column filter (it lifts and follows the pointer), or click the menu icon at the filter's left (up and down per column), to reorder the columns; they slide into place and the order is kept. |
 | **Sprint Calendar** | A local week/month/sprint calendar using Status styling, editable durations and drag-and-drop planning across multiple days. |
+| **Projects** | One tab per project, and a **+** to add one. A project is a name plus the parent issues (epics) pasted into it; GitHub holds 100 child issues per issue, so a big project takes several. The page reads their child issues and charts them on one screen. On the left: the status doughnut (its Done counts closed issues and open ones the board calls Done), a scrolling workload-by-person list and the parent issues (by title), each with a gold tick that counts it in every figure or leaves it out (kept in `projects.json`). Beside it: headline tiles (the Forecast tile carries the weekly pace line and opens a calculator: finish dates at other paces, counting new issues, the pace a date needs), a burn-up (scaled to the most issues the project has had; issues done climbing toward all issues; the project is finished where the lines meet; point at a week to see how many issues were created and done in it), issues finished each week since the start by person with the 4-week pace across them, a Week panel (done, in review, in progress and opened for the picked week, and who finished them), issues by sprint and by priority as columns (board fields, or P1 / priority: labels), and milestones with their due dates (or "No milestones"), standing as tall as the sprint and priority charts together. Under the charts sits the **Issues** heading, folded to start with so the page fits the window; click it to slide open every issue in a table with a search bar and an Open / Done / Not planned / All choice. Click a column's name to sort by it, again to reverse, and a third time to go back to newest first. A sprint's or a priority's issues open grouped by assignee within Open and Done. Assignee, board Status (in its Kanban column colour), Priority and Sprint are searchable drop-downs that change the issue on GitHub (assignees are whoever the issue's repo lets be assigned, plus anyone on the project); drop-downs near the bottom of the window open upward. Drag a project's tab to reorder the projects; the order is kept. Click a tile, a status, a week, a sprint, a priority or a person to see those issues as bubbles, and export any such list, or the whole project, as CSV to `exports`. The editor's issue box grows as links are pasted. Edit, Refresh, Export and Delete sit in the menu behind the arrow on the open project's tab. GitHub keeps no history of statuses, so each refresh records that week's in review and in progress in `projects.json` for the Week panel. Only the issue table writes to GitHub; projects are saved in `projects.json`. |
 
 Tapping an organisation in any colour key hides its work across all three tabs.
+Each key ends with Drafts Logs (yellow) and Planned Issues (purple), which hide
+those the same way.
 
 ### Kanban and local sprint planning
 
@@ -98,7 +101,7 @@ without an outer scrolling page.
 ![Sprint Calendar: drag an issue from the sidebar onto Wednesday, stretch its bubble in 15-minute steps, schedule it again on Friday, switch views and open a day's Clear confirmation](docs/sprint-calendar.gif)
 
 *Plan the same issue on several days and resize each bubble by its bottom edge.
-Purple shows remaining planned time, gold shows local drafts or temporary
+Purple shows planned time, gold shows local drafts or temporary
 support, and project colors show time already logged on GitHub.*
 
 **Sprint Calendar** has a sprint dropdown for current, future and completed
@@ -120,17 +123,20 @@ from the same configured sources, owner filter, and monthly cache as Log Work.
 Opening the calendar loads every month in the displayed range; Refresh GitHub
 refreshes both the issue boards and worklogs. Saved unpushed Log Work rows are
 included as drafts. Project colors mean GitHub minutes, gold means drafts or
-temporary support, and purple means remaining planned minutes. Logged/draft
-time for the same issue and date reduces its plan contribution to prevent double
-counting. A local completion checkbox never fabricates GitHub time. Dates label
+temporary support, and purple means planned minutes. A plan is independent of
+logged and draft time: work logged on GitHub or saved in Log Work against the
+same issue never reduces it. A local completion checkbox never fabricates
+GitHub time. Dates label
 all three readings. Full logged days have a stronger green background; days
 that reach the target through drafts or plans use Log Work's lighter green.
 The shared ruler on the left measures planned minutes per day, starting at 0m,
-with labels every 60m and grid marks every 15m. Bubbles stack in appointment
-order and their heights represent their durations, without clock-time gaps.
+with labels every 60m and grid marks every 15m. Bubbles stack in position
+order and their heights represent their durations. Blocks have no time of day:
+each day keeps its bubbles in a saved position order, and dragging a bubble
+between two others on a day puts it there.
 Drag the bottom edge inside a scheduled bubble to stretch it in 15-minute steps.
-There is no separate resize panel. Resizing preserves the saved start time,
-rejects overlaps, and keeps the calendar's scroll position. Manual duration
+There is no separate resize panel. Resizing changes only that bubble's minutes,
+refuses a day past 24 hours, and keeps the calendar's scroll position. Manual duration
 entry also requires 15-minute increments. Planned dates use gold outlines,
 turning green at the daily target.
 Hover over an issue in the left sidebar to preview eligible dates. Scheduled
@@ -167,10 +173,10 @@ complexity scale (10/30/60/120/240/480 minutes), or 60 minutes when neither is
 set. New time blocks round up to the next 15 minutes; the source estimate stays
 unchanged. Existing saved durations are retained until edited. Local durations
 can exceed the GitHub estimate without changing GitHub.
-**Allocate unscheduled** fills weekday 09:00-17:00 slots, preserves existing
-appointments and splits long tasks across days. Issues that cannot fit before
+**Allocate unscheduled** fills each weekday up to 8 hours after its existing
+blocks, keeps those blocks, and splits long tasks across days. Issues that cannot fit before
 the sprint ends remain unscheduled. Manual blocks must fall inside the issue's
-assigned sprint and cannot overlap other appointments.
+assigned sprint and fit in what is left of the day's 8 hours.
 
 The local schedule, overrides, display mode and last successful board snapshot
 are stored in `sprint-planner.json` beside the app's other data. Calendar
@@ -227,8 +233,8 @@ messages. **Worklog mins is the only field you have to fill in** — then
 <img src="docs/screenshots/08-log-popup.png" alt="The logging popup with every field pre-filled except Worklog mins, which is called out">
 
 The line under the fields says how full the chosen day already is on GitHub and
-what it comes to with this entry, so you can see whether the day is finished
-before you push. To log against a different day, open the calendar on the date
+what it comes to with this entry, then with anything planned for that day (in
+purple), so you can see whether the day is finished before you push. To log against a different day, open the calendar on the date
 field: every day carries its logged minutes and what it still owes, in the same
 colours as the Status tab.
 
@@ -459,6 +465,7 @@ Each menu has its own package; anything two menus share lives under `shared`.
 | `internal/menus/settings` | Settings |
 | `internal/menus/kanban` | Kanban board |
 | `internal/menus/sprintcalendar` | Sprint Calendar and plan upkeep |
+| `internal/menus/projects` | Projects: saved projects, child-issue fetch, figures and charts |
 | `internal/shared/shell` | the window state (`UI`), tabs, loading, and components used by several menus (commit calendar, week columns, colours, popups) |
 | `internal/shared/widgets` | small Fyne widgets with no app state |
 | `internal/shared/backend` | storage, GitHub, sprint planning model, exports |

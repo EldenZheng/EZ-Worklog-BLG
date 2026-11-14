@@ -22,11 +22,13 @@ import (
 // A title peek keeps long names available without growing every summary row.
 // issue can be a GitHub URL, an owner/repo#number reference, or an unfiled label.
 func IssueSummaryCard(cfg backend.Config, issue, title, amount string, actions ...func()) fyne.CanvasObject {
-	return IssueSummaryCardForRows(cfg, issue, title, amount, nil, actions...)
+	return IssueSummaryCardForRows(cfg, issue, title, amount, nil, false, actions...)
 }
 
-// IssueSummaryCardForRows retains the Log Work accent for locally known entries.
-func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, rows []backend.Row, actions ...func()) fyne.CanvasObject {
+// IssueSummaryCardForRows retains the Log Work accent and single-review badge.
+// singleReview also carries review information from fetched worklog titles when
+// the local rows are unavailable (for example, work saved on another device).
+func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, rows []backend.Row, singleReview bool, actions ...func()) fyne.CanvasObject {
 	var target *url.URL
 	ref := ""
 	canonical, _ := backend.IssueRefFromAny(issue)
@@ -59,6 +61,24 @@ func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, ro
 		mark := container.NewThemeOverride(widget.NewIcon(backend.SprintItem{}.TypeIcon()), gold)
 		refLine = container.NewBorder(nil, nil, container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), mark)), nil,
 			container.NewThemeOverride(meta, gold))
+	}
+	for _, row := range rows {
+		rowRef, _ := backend.IssueRefFromAny(row["issue"])
+		matches := canonical != "" && strings.EqualFold(canonical, rowRef)
+		if canonical == "" && row["issue"] == "" {
+			matches = true // callers supply the rows grouped under this unfiled label
+		}
+		if matches && backend.RowIsSingleCodeReview(row) {
+			singleReview = true
+			break
+		}
+	}
+	if singleReview {
+		full := fyne.MeasureText(ref, theme.TextSize(), meta.TextStyle).Width + 2*theme.InnerPadding() + 1
+		if ref != "" {
+			full += 16 + theme.Padding()
+		}
+		refLine = container.New(&widgets.RefTagLayout{Full: full}, refLine, CodeReviewTag())
 	}
 	footer := container.New(widgets.NewSidesLayout(refLine, badge, 0), refLine, badge)
 	var onTap func()

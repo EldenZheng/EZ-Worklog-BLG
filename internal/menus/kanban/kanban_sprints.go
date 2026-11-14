@@ -35,6 +35,7 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 		}
 	}
 	groups := k.CombinedSprints(true)
+	var hoverRows []*shell.Tappable
 	// into is where add puts a sprint's row: the sidebar, or the folding list
 	// of finished sprints.
 	into := side
@@ -56,11 +57,7 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 		selected := (k.Filter == "current" && g.Sprint.Contains(shell.Today())) || k.Filter == "sprint" && k.Sprint == g.Key
 		right := container.NewHBox()
 		if selected {
-			refresh := widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), func() { k.RefreshSprint(g.Key) })
-			if k.Loading || k.Busy {
-				refresh.Disable()
-			}
-			right.Add(shell.QuietButton(refresh))
+			right.Add(sprintRefreshControl(k, g.Key))
 		}
 		if current != nil {
 			right.Add(current)
@@ -81,7 +78,9 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 			}
 		}
 		// The whole tall row is both clickable and a drop target.
-		into.Add(rippleRow(k, shell.NewCardTappable(container.New(sprintRowLayout{}, area), func() { ToggleSprint(k, g.Key); Draw(k) })))
+		row := rippleRow(k, shell.NewCardTappable(container.New(sprintRowLayout{}, area), func() { ToggleSprint(k, g.Key); Draw(k) }))
+		hoverRows = append(hoverRows, row)
+		into.Add(row)
 		divider := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameBackground), theme.Color(theme.ColorNameForeground), 0.35))
 		divider.SetMinSize(fyne.NewSize(1, 1))
 		into.Add(divider)
@@ -128,10 +127,13 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 	if noSprint > 0 {
 		label := widget.NewLabelWithStyle("No Sprint", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 		ink := color.Color(widgets.LogoGold)
+		right := container.NewHBox()
 		if k.Filter == "none" {
 			ink = color.NRGBA{R: 24, G: 24, B: 24, A: 255}
+			right.Add(sprintRefreshControl(k, ""))
 		}
-		row := container.NewPadded(container.NewBorder(nil, nil, nil, shell.CountBadge(noSprint), container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink})))
+		right.Add(container.NewCenter(shell.CountBadge(noSprint)))
+		row := container.NewPadded(container.NewThemeOverride(container.NewBorder(nil, nil, nil, right, label), widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink}))
 		area := dropArea(k, row, "", "sprint", "")
 		for _, target := range k.Targets {
 			if target.Object == area {
@@ -143,14 +145,16 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 				}
 			}
 		}
-		side.Add(rippleRow(k, shell.NewCardTappable(area, func() {
+		noSprintRow := rippleRow(k, shell.NewCardTappable(area, func() {
 			if k.Filter == "none" {
 				k.Filter = "all"
 			} else {
 				k.Filter = "none"
 			}
 			Draw(k)
-		})))
+		}))
+		hoverRows = append(hoverRows, noSprintRow)
+		side.Add(noSprintRow)
 	}
 	hasCompleted := false
 	for _, g := range groups {
@@ -179,7 +183,7 @@ func sprintSidebar(k *shell.KanbanUI) fyne.CanvasObject {
 		side.Add(head)
 		side.Add(area)
 	}
-	return side
+	return shell.HoverRows(side, hoverRows)
 }
 
 type sprintRowLayout struct{}

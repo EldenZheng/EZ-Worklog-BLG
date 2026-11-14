@@ -9,6 +9,8 @@ import (
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/shell"
 )
 
 var (
@@ -90,21 +92,16 @@ func reportMetricTintedWithAside(value, label, note, aside, conversion string, s
 }
 
 // reportMetricDarkBlue keeps the support bonus visually distinct from both
-// ordinary payable work and the yellow draft projection.
-func reportMetricDarkBlue(value, label, note, conversion string) fyne.CanvasObject {
-	panel := reportPanelTinted(label,
+// ordinary payable work and the yellow draft projection. action, if set, sits at
+// the right end of its heading.
+func reportMetricDarkBlue(value, label, note, conversion string, action fyne.CanvasObject) fyne.CanvasObject {
+	panel := reportPanelWithAction(label, action,
 		reportMetricContent(value, note, "", conversion, color.White, ReportSupportConversionAccent),
 		ReportSupportSurface, reportSupportHeader, reportSupportBorder)
 	return container.NewThemeOverride(panel, darkBlueReportTheme{Theme: theme.Current()})
 }
 
-func ReportSupportAccent() color.NRGBA {
-	r, g, b, _ := theme.Color(theme.ColorNameBackground).RGBA()
-	if r+g+b < 3*0x8000 {
-		return color.NRGBA{R: 0x64, G: 0xb5, B: 0xf6, A: 0xff}
-	}
-	return color.NRGBA{R: 0x15, G: 0x65, B: 0xc0, A: 0xff}
-}
+func ReportSupportAccent() color.NRGBA { return shell.SupportAccent() }
 
 func ReportConversionAccent() color.NRGBA {
 	r, g, b, _ := theme.Color(theme.ColorNameBackground).RGBA()
@@ -166,6 +163,12 @@ func reportPanel(title string, content fyne.CanvasObject) fyne.CanvasObject {
 // projected-receivable card uses the draft yellow so it reads as provisional
 // against the settled green panels beside it.
 func reportPanelTinted(title string, content fyne.CanvasObject, surface, header, border color.NRGBA) fyne.CanvasObject {
+	return reportPanelWithAction(title, nil, content, surface, header, border)
+}
+
+// reportPanelWithAction is reportPanelTinted with a control at the right end of
+// the heading band.
+func reportPanelWithAction(title string, action, content fyne.CanvasObject, surface, header, border color.NRGBA) fyne.CanvasObject {
 	background := canvas.NewRectangle(surface)
 	background.CornerRadius = 10
 	background.StrokeColor = border
@@ -174,8 +177,12 @@ func reportPanelTinted(title string, content fyne.CanvasObject, surface, header,
 	band.CornerRadius = 6
 	heading := widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	heading.Wrapping = fyne.TextWrapWord
+	var head fyne.CanvasObject = heading
+	if action != nil {
+		head = container.NewBorder(nil, nil, nil, container.NewCenter(action), heading)
+	}
 	return container.NewStack(background, container.NewPadded(container.NewVBox(
-		container.NewStack(band, heading), container.NewPadded(content))))
+		container.NewStack(band, head), container.NewPadded(content))))
 }
 
 // draftPanelTones is the yellow tinting used for the projected receivable

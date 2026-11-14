@@ -4,10 +4,12 @@ import (
 	"image/color"
 	"math"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/test"
 
 	"worklog/internal/shared/backend"
@@ -47,6 +49,9 @@ func TestCardFeedbackPreservesFillAndImmediateAction(t *testing.T) {
 	card := shell.NewCardTappable(bg, func() { calls++ })
 	card.Resize(fyne.NewSize(340, 152))
 	card.MouseIn(nil)
+	if card.Feedback.Animation.Duration != 180*time.Millisecond {
+		t.Fatal("ordinary issue card feedback should keep its original 180ms speed")
+	}
 	card.Feedback.Animation.Tick(1)
 	card.Tapped(nil)
 	if calls != 1 {
@@ -64,6 +69,24 @@ func TestCardFeedbackPreservesFillAndImmediateAction(t *testing.T) {
 	card.CreateRenderer().Destroy()
 	if card.Feedback.Animation != nil {
 		t.Fatal("destroyed renderer retained animation")
+	}
+}
+
+func TestIssueBubbleHoverKeepsOriginalSpeedWhileFiltersStaySlower(t *testing.T) {
+	base := test.NewApp()
+	shell.ReleaseBubble()
+	d := &collectDriver{Driver: base.Driver()}
+	fyne.SetCurrentApp(&motionTestApp{App: base, driver: d})
+	defer func() { fyne.SetCurrentApp(base); base.Quit() }()
+	issue := shell.HoverBubble(shell.OrgPalette[0], canvas.NewText("Issue", shell.OrgPalette[0]))
+	issue.MouseIn(nil)
+	if len(d.anims) != 1 || d.anims[0].Duration != 180*time.Millisecond {
+		t.Fatal("shared worklog, Kanban, meeting, list and calendar bubbles must return to 180ms")
+	}
+	filter := shell.NewFilterTappable(canvas.NewText("Org", shell.OrgPalette[0]), nil)
+	filter.MouseIn(nil)
+	if filter.Feedback.Animation.Duration != 600*time.Millisecond {
+		t.Fatal("org filters must retain their separate 600ms motion")
 	}
 }
 
@@ -215,6 +238,32 @@ func TestDropdownOutsideClickFoldsAndReopeningCancelsOldClose(t *testing.T) {
 	closing.Tick(1)
 	if !current.Visible() || w.Canvas().Overlays().Top() == nil {
 		t.Fatal("stale closing animation hid the new dropdown")
+	}
+	selectBox.CloseChoices()
+	driver.animation.Tick(1)
+}
+
+// A drop-down with no room below its field rises above it instead, growing
+// up from the field's top edge.
+func TestDropdownOpensUpwardNearTheBottom(t *testing.T) {
+	a := newMotionTestApp(t).(*motionTestApp)
+	driver := &cascadeFrameDriver{Driver: a.driver}
+	a.driver = driver
+	defer shell.FinishDropdownClosings()
+	w := a.NewWindow("dropdown")
+	options := []string{"One", "Two", "Three", "Four", "Five", "Six"}
+	selectBox := shell.NewGoldSelect(options, nil)
+	selectBox.Searchable = true
+	w.SetContent(container.NewBorder(nil, selectBox, nil, nil, layout.NewSpacer()))
+	w.Resize(fyne.NewSize(400, 400))
+	selectBox.Tapped(nil)
+	field := fyne.CurrentApp().Driver().AbsolutePositionForObject(selectBox)
+	for _, step := range []float32{.5, 1} {
+		driver.animation.Tick(step)
+		popup := selectBox.Popup
+		if bottom := popup.Position().Y + popup.Size().Height; bottom > field.Y+0.5 || bottom < field.Y-0.5 {
+			t.Fatalf("at %v the drop-down should end at the field's top %v, not %v", step, field.Y, bottom)
+		}
 	}
 	selectBox.CloseChoices()
 	driver.animation.Tick(1)

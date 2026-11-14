@@ -120,7 +120,7 @@ func TestSprintGoldDropdownSelectionAndKeyboard(t *testing.T) {
 		if rect, ok := o.(*canvas.Rectangle); ok && rect.FillColor == widgets.LogoGold {
 			goldFill = true
 		}
-		if label, ok := o.(*widget.Label); ok && strings.HasSuffix(label.Text, "- Current") {
+		if label, ok := o.(*widget.Label); ok && selector.Current != "" && label.Text == selector.Current {
 			goldCurrent = label.Theme().Color(theme.ColorNameForeground, theme.VariantDark) == widgets.LogoGold
 		}
 	})

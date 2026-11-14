@@ -40,7 +40,7 @@ func DrawRecent(ui *shell.UI) {
 		shell.Relayout(ui.LogBody)
 		return
 	}
-	// The key at the foot of the tab governs this list too, not only the commits
+	// The key above the week governs this list too, not only the commits
 	// above it: filtering the pending tiles to one employer and then listing the
 	// other's saved entries underneath would defeat the point of filtering.
 	rows = ui.ShownRows(rows)
@@ -72,6 +72,9 @@ func DrawRecent(ui *shell.UI) {
 	for _, r := range rows {
 		waiting := r["pushed_at"] == ""
 		if waiting {
+			if !ui.DraftsShown() {
+				continue
+			}
 			pendingCount++
 			if inStrip[r["date"]] {
 				onStrip++
@@ -103,15 +106,36 @@ func DrawRecent(ui *shell.UI) {
 	if onStrip > 0 {
 		head += fmt.Sprintf("   ·   %d on the week below", onStrip)
 	}
+	if !ui.DraftsShown() {
+		head = "Drafts hidden by the filter"
+	}
 
 	objs := []fyne.CanvasObject{
 		widget.NewLabelWithStyle(head, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 	}
+	// Nothing is drawn while GitHub is still fetching the week's worklogs or
+	// the pending commits and their issue titles, which name these entries:
+	// the list arrives once, when they have landed.
+	days := shell.WeekDates(ui.WeekStart)
+	_, weekState := WeekWorklogs(ui, days)
+	if !savedShown(ui, days, weekState) {
+		ui.RecentBox.Objects = []fyne.CanvasObject{widget.NewLabelWithStyle("Loading from GitHub…", fyne.TextAlignLeading, fyne.TextStyle{Italic: true})}
+		ui.RecentBox.Refresh()
+		shell.Relayout(ui.LogBody)
+		DrawLogLegend(ui)
+		return
+	}
 	switch {
 	case len(shown) > 0 || showAll:
-		objs = append(objs, entryTable(ui, shown, func() { DrawRecent(ui) }))
+		entries := entryTable(ui, shown, func() { DrawRecent(ui) })
+		if grid, ok := entries.(*fyne.Container); ok {
+			ui.Arrival("recent", ui.WeekStart).RevealIn(grid)
+		}
+		objs = append(objs, entries)
 	case onStrip > 0:
 		// Nothing to list: everything waiting is standing on its day below.
+	case !ui.DraftsShown():
+		// The heading says why; "everything has been pushed" may not be true.
 	default:
 		objs = append(objs, widget.NewLabel("Everything logged has been pushed to GitHub."))
 	}
@@ -126,7 +150,7 @@ func DrawRecent(ui *shell.UI) {
 	DrawLogLegend(ui)
 }
 
-// DrawLogLegend fills the key at the foot of the Log work tab.
+// DrawLogLegend fills the key beside the Log work week's navigation.
 //
 // It counts everything the key governs on that tab — commits waiting to be
 // logged, and entries saved but not yet pushed — because the two empty at
@@ -176,33 +200,38 @@ func DrawLogLegend(ui *shell.UI) {
 			}
 		}
 	}
-	ui.LogLegend.Objects = nil
-	if key := shell.OrgLegendWith(ui.Cfg, byOrg, ui.OrgOff,
-		strconv.Itoa, ui.ToggleOrg); key != nil {
-		ui.LogLegend.Objects = []fyne.CanvasObject{key}
+	var offset fyne.Position
+	if len(ui.LogLegend.Objects) > 0 {
+		if previous, ok := ui.LogLegend.Objects[0].(*container.Scroll); ok {
+			offset = previous.Offset
+		}
 	}
+	scroll := container.NewHScroll(shell.OrgLegendWith(ui.Cfg, byOrg, ui.OrgOff, strconv.Itoa, ui.ToggleOrg))
+	scroll.Resize(ui.LogLegend.Size())
+	scroll.ScrollToOffset(offset)
+	ui.LogLegend.Objects = []fyne.CanvasObject{scroll}
 	ui.LogLegend.Refresh()
 	shell.Relayout(ui.LogBody)
 }
 
-// githubMinutesOn sums one day's worklog minutes from the project, kicking that
-// month's fetch off the first time it is asked. State is one of "ok",
-// "loading", "off" (no project configured) or "error".
-func githubMinutesOn(ui *shell.UI, date string) (int, string) {
+// githubItemsOn is one day's worklogs from the project, kicking that month's
+// fetch off the first time it is asked. State is one of "ok", "loading", "off"
+// (no project configured) or "error".
+func githubItemsOn(ui *shell.UI, date string) ([]backend.WorklogItem, string) {
 	if len(date) < 7 {
-		return 0, "off"
+		return nil, "off"
 	}
 	items, state := monthWorklogs(ui, date[:7])
 	if state != "ok" {
-		return 0, state
+		return nil, state
 	}
-	total := 0
+	var day []backend.WorklogItem
 	for _, it := range items {
 		if it.Date == date {
-			total += it.Minutes
+			day = append(day, it)
 		}
 	}
-	return total, "ok"
+	return day, "ok"
 }
 
 // The readout that used to live here is now dayFillReadout, beside the picker
@@ -343,8 +372,12 @@ func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	// Minutes, not hours and minutes: this is the number that goes in the
 	// worklog field, and reading "1h 30m" here meant converting it back to 90
 	// every time before pushing.
+	summary := caption(fmt.Sprintf("%s  ·  %d min  ·  %s", r["date"], r.Minutes(), issue))
+	if backend.RowIsSingleCodeReview(r) {
+		summary = container.NewBorder(nil, nil, nil, container.NewCenter(shell.CodeReviewTag()), summary)
+	}
 	foot := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), container.NewVBox(
-		caption(fmt.Sprintf("%s  ·  %d min  ·  %s", r["date"], r.Minutes(), issue)),
+		summary,
 		caption(state)))
 
 	push, edit, del := rowActions(ui, r, refresh)
@@ -409,6 +442,8 @@ func ConfirmDelete(ui *shell.UI, r backend.Row, refresh func()) {
 			ui.Errf(err)
 			return
 		}
+		ui.ReplayWorkArrivals()
+		ui.ReplayArrival("planner")
 		refresh()
 	})
 	buttons := shell.RemovalButtons(cancel, confirm)
@@ -428,28 +463,12 @@ func ConfirmDelete(ui *shell.UI, r backend.Row, refresh func()) {
 
 // pushRow sends one saved row to GitHub and reports what landed.
 func pushRow(ui *shell.UI, r backend.Row, refresh func()) {
-	remarks := strings.TrimSpace(r["remarks"])
-	if remarks == "" {
-		remarks = strings.TrimSpace(r["description"])
-	}
-	pushProgress, stop := ui.PushSpinner("Pushing to GitHub…")
-	var res backend.PushResult
-	var perr error
-	ui.Async(func() error {
-		resolved, err := resolveForPush(ui, r)
-		if err != nil {
-			perr = err
-			return nil
+	pushSavedEntry(ui, r, func(updated backend.Row, res backend.PushResult, perr error) {
+		r = updated
+		if perr == errReviewPushCancelled {
+			refresh()
+			return
 		}
-		r = resolved
-		res, perr = backend.PushEntry(ui.Cfg, r["issue"], r["date"], r["owner"],
-			r.Minutes(), remarks, r["issue_body"], backend.OrDefault(r["mode"], "issue"), r["issue_url"],
-			backend.SubTitleBaseFor(r), pushProgress)
-		// Reported here rather than handed to async: a failure has to take the
-		// spinner down with it, and async skips its done func on an error.
-		return nil
-	}, func() {
-		stop()
 		repush := func() { repushRow(ui, r["id"], refresh) }
 		if perr != nil {
 			msg := widget.NewLabel(perr.Error())

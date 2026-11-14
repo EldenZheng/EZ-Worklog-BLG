@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"image/color"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -19,21 +21,49 @@ import (
 
 // CommitWeekSummary is the line above the day grid: how many commits landed and
 // on how many issues, plus a note if the fetch is still running.
-func (ui *UI) CommitWeekSummary(commits []backend.Commit, loading, cached bool) fyne.CanvasObject {
+func (ui *UI) CommitWeekSummary(commits []backend.Commit, loading, cached bool, rows ...[]backend.Row) fyne.CanvasObject {
 	if loading && !cached {
 		return widget.NewLabel("Reading your commits from GitHub…")
 	}
-	issues := map[string]bool{}
+	// Count the whole source for the key, so a hidden org keeps its way back.
+	byOrg := map[string]int{}
 	for _, c := range commits {
+		byOrg[CommitOrg(c)]++
+	}
+	for _, group := range rows {
+		for _, r := range group {
+			byOrg[RowOrg(r)]++
+		}
+	}
+	shown := ui.ShownCommits(commits)
+	issues := map[string]bool{}
+	for _, c := range shown {
 		issues[c.Issue] = true
 	}
 	line := fmt.Sprintf("%d commit%s across %d issue%s",
-		len(commits), Plural(len(commits)), len(issues), Plural(len(issues)))
+		len(shown), Plural(len(shown)), len(issues), Plural(len(issues)))
 	if loading {
 		line += " · refreshing…"
 	}
-	return container.NewHBox(Bold("This week"),
+	summary := container.NewHBox(Bold("This week"),
 		widget.NewLabelWithStyle(line, fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}))
+	return container.NewBorder(nil, nil, summary, nil,
+		container.NewHScroll(OrgFilter(ui.Cfg, byOrg, ui.OrgOff, strconv.Itoa, ui.ToggleOrg)))
+}
+
+// CommitOrg also identifies commits without an issue by their repository.
+func CommitOrg(c backend.Commit) string {
+	return strings.ToLower(OrgOf(backend.OrDefault(c.Issue, c.Repo)))
+}
+
+func (ui *UI) ShownCommits(commits []backend.Commit) []backend.Commit {
+	shown := make([]backend.Commit, 0, len(commits))
+	for _, c := range commits {
+		if ui.OrgShown(CommitOrg(c)) {
+			shown = append(shown, c)
+		}
+	}
+	return shown
 }
 
 func (ui *UI) CommitDaysPanel(days []string, byDay map[string][]backend.Commit) *fyne.Container {
@@ -96,7 +126,7 @@ func (ui *UI) commitDayColumn(ds string, commits []backend.Commit,
 	}
 	frame.CornerRadius = CellCornerRadius
 
-	body := container.NewBorder(head, nil, nil, nil, scroll)
+	body := container.NewBorder(ui.DayLink(ds, label, head, nil), nil, nil, nil, scroll)
 	return container.NewStack(frame, container.NewPadded(body))
 }
 

@@ -15,6 +15,68 @@ import (
 	"worklog/internal/shared/shell"
 )
 
+func menuReveals(root fyne.CanvasObject) int {
+	n := 0
+	walkCanvas(root, func(o fyne.CanvasObject) {
+		if _, ok := o.(*shell.Reveal); ok {
+			n++
+		}
+	})
+	return n
+}
+
+func TestDeletingSavedEntryReplaysTheMenuAfterConfirmation(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	rows, err := ui.Store.AppendRows([]backend.Row{
+		{"date": "2026-08-11", "minutes": "60", "issue": "exampleorg/repo#1", "description": "Delete this"},
+		{"date": "2026-08-12", "minutes": "30", "issue": "exampleorg/repo#2", "description": "Keep on week"},
+		{"date": "2026-08-03", "minutes": "30", "issue": "exampleorg/repo#3", "description": "Keep in list"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logwork.DrawRecent(ui)
+	logwork.DrawRecent(ui)
+	if menuReveals(ui.WeekBox) != 0 || menuReveals(ui.RecentBox) != 0 {
+		t.Fatal("an ordinary redraw should leave the menu's entrance alone")
+	}
+	refreshes := 0
+	refresh := func() { refreshes++; logwork.DrawRecent(ui) }
+	choose := func(label string) {
+		t.Helper()
+		var button *widget.Button
+		walkPopup(ui.Win.Canvas().Overlays().Top(), func(o fyne.CanvasObject) {
+			if b, ok := o.(*widget.Button); ok && b.Text == label {
+				button = b
+			}
+		})
+		if button == nil {
+			t.Fatalf("missing %s confirmation button", label)
+		}
+		test.Tap(button)
+	}
+	logwork.ConfirmDelete(ui, rows[0], refresh)
+	choose("Cancel")
+	logwork.DrawRecent(ui)
+	if refreshes != 0 || menuReveals(ui.WeekBox) != 0 || menuReveals(ui.RecentBox) != 0 {
+		t.Fatal("cancelling must not replay the menu or refresh deleted work")
+	}
+	logwork.ConfirmDelete(ui, rows[0], refresh)
+	choose("Delete")
+	remaining, err := ui.Store.ReadRows()
+	if err != nil || len(remaining) != 2 || refreshes != 1 {
+		t.Fatalf("the confirmed entry alone should be deleted: rows=%d refreshes=%d err=%v", len(remaining), refreshes, err)
+	}
+	if menuReveals(ui.WeekBox) == 0 || menuReveals(ui.RecentBox) == 0 {
+		t.Fatal("deletion should replay both the week and the remaining saved bubbles")
+	}
+	logwork.DrawRecent(ui)
+	if menuReveals(ui.WeekBox) != 0 || menuReveals(ui.RecentBox) != 0 {
+		t.Fatal("a later redraw must not keep replaying the entrance")
+	}
+}
+
 // A block on the calendar offers its own Delete while the pointer is on it, as
 // the day does, and asks before removing only that block.
 func TestSprintBlockDeleteShowsOnHoverAndRemovesOnlyThatBlock(t *testing.T) {
@@ -24,6 +86,7 @@ func TestSprintBlockDeleteShowsOnHoverAndRemovesOnlyThatBlock(t *testing.T) {
 	k.Plan.Tasks[c.Key] = backend.SprintTask{Notes: "keep", Blocks: []backend.PlanBlock{
 		{Date: day, Start: 540, Minutes: 60}, {Date: backend.AddDays(day, 1), Start: 600, Minutes: 30}}}
 	kanban.Draw(k)
+	kanban.Draw(k) // finish the original entrance before testing deletion
 	w.Content().Refresh()
 
 	var card *shell.PlannerDragCard
@@ -75,6 +138,53 @@ func TestSprintBlockDeleteShowsOnHoverAndRemovesOnlyThatBlock(t *testing.T) {
 	p, err := ui.Store.LoadSprintPlan()
 	if err != nil || len(p.Tasks[c.Key].Blocks) != 1 || p.Tasks[c.Key].Blocks[0].Date != backend.AddDays(day, 1) || p.Tasks[c.Key].Notes != "keep" {
 		t.Fatal("block Delete affected other blocks or the issue's notes", err, p.Tasks[c.Key])
+	}
+	if menuReveals(k.CalendarBody) != 7 {
+		t.Fatal("deleting a block should replay the calendar's seven days")
+	}
+}
+
+func TestClearingDayOrSprintReplaysCalendarEntrance(t *testing.T) {
+	for _, action := range []string{"day", "sprint"} {
+		t.Run(action, func(t *testing.T) {
+			ui, w, c := plannerFixture(t)
+			k := ui.Kanban
+			k.Plan.Tasks[c.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: k.Week, Start: 540, Minutes: 60}}}
+			kanban.Draw(k)
+			kanban.Draw(k)
+			if menuReveals(k.CalendarBody) != 0 {
+				t.Fatal("the original calendar entrance should have finished")
+			}
+			confirmLabel := "Clear"
+			if action == "day" {
+				confirmLabel = "Delete"
+				for _, d := range k.Dates {
+					if d.Date == k.Week {
+						d.Object.(*shell.PlannerDayHover).Clear.OnTapped()
+						break
+					}
+				}
+			} else {
+				button := buttonNamed(k.CalendarBody, "Clear")
+				if button == nil {
+					t.Fatal("sprint Clear button missing")
+				}
+				test.Tap(button)
+			}
+			var confirm *widget.Button
+			walkPopup(w.Canvas().Overlays().Top(), func(o fyne.CanvasObject) {
+				if b, ok := o.(*widget.Button); ok && b.Text == confirmLabel {
+					confirm = b
+				}
+			})
+			if confirm == nil {
+				t.Fatal("removal confirmation missing")
+			}
+			test.Tap(confirm)
+			if len(k.Plan.Tasks[c.Key].Blocks) != 0 || menuReveals(k.CalendarBody) != 7 {
+				t.Fatal("a confirmed clear should remove the blocks and replay the calendar entrance")
+			}
+		})
 	}
 }
 

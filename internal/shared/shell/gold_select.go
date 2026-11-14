@@ -7,6 +7,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -17,17 +18,25 @@ import (
 // in its popup so selected and current options remain distinguishable.
 type GoldSelect struct {
 	widget.Select
-	unfold *Reveal
-	Popup  *widget.PopUp
-	Rows   *fyne.Container
-	active int
-	Flash  *widgets.ChoiceFeedback
-	Scroll *container.Scroll
+	unfold      *Reveal
+	Popup       *widget.PopUp
+	Rows        *fyne.Container
+	choiceHover *filterHover
+	active      int
+	Flash       *widgets.ChoiceFeedback
+	Scroll      *container.Scroll
 	// Searchable tops the popup with a search field that narrows its rows, for
 	// a list too long to scroll through.
 	Searchable bool
 	Find       *choiceSearch // the open popup's search field
 	shown      []int         // the Options the popup lists; active indexes this
+	// Current is the option written in gold in the popup, such as the sprint
+	// running today.
+	Current string
+	// Hue, when set, gives each option a colour of its own (a Status as the
+	// Kanban colours it): its row in the popup is washed with it and led by
+	// a dot of it. nil leaves a row plain.
+	Hue func(option string) color.Color
 }
 
 func NewGoldSelect(options []string, changed func(string)) *GoldSelect {
@@ -141,6 +150,10 @@ func (s *GoldSelect) Choose(index int) {
 }
 
 func (s *GoldSelect) CloseChoices() {
+	if s.choiceHover != nil {
+		s.choiceHover.pill.Stop()
+		s.choiceHover = nil
+	}
 	if s.Flash != nil && s.Flash.Animation != nil {
 		s.Flash.Animation.Stop()
 	}
@@ -173,7 +186,9 @@ func (s *GoldSelect) showChoices() {
 		s.Find = newChoiceSearch(s)
 	}
 	s.filterChoices()
-	s.Rows = container.NewVBox()
+	s.choiceHover = &filterHover{pill: widgets.NewHoverPill(), frames: map[*Tappable]fyne.CanvasObject{}, overlay: true}
+	s.choiceHover.ExtendBaseWidget(s.choiceHover)
+	s.Rows = container.New(&filterGroupLayout{flow: layout.NewVBoxLayout(), hover: s.choiceHover, overlay: true}, s.choiceHover)
 	s.renderChoices()
 	height := fyne.Min(s.Rows.MinSize().Height+8, 320)
 	var content fyne.CanvasObject = s.Rows
@@ -201,9 +216,31 @@ func (s *GoldSelect) showChoices() {
 	s.unfold.OnDismiss = s.CloseChoices
 	s.Popup = widget.NewPopUp(s.unfold, c)
 	width := fyne.Max(s.Size().Width, 200)
-	s.Popup.Resize(fyne.NewSize(width, height))
 	origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(s)
-	s.Popup.ShowAtPosition(origin.Add(fyne.NewPos(0, s.Size().Height)))
+	// The list drops below the field, or rises above it when the window has
+	// more room there, and is cut to the room it has rather than running off
+	// the window.
+	const edge = 4
+	below := c.Size().Height - origin.Y - s.Size().Height - edge
+	above := origin.Y - edge
+	up := height > below && above > below
+	room := below
+	if up {
+		room = above
+	}
+	if room >= 80 && height > room {
+		height = room
+	}
+	s.Popup.Resize(fyne.NewSize(width, height))
+	at := origin.Add(fyne.NewPos(0, s.Size().Height))
+	if up {
+		at = fyne.NewPos(origin.X, origin.Y-height)
+		OpenUpward(s.Popup, origin.Y)
+	}
+	if limit := c.Size().Width - width - edge; at.X > limit {
+		at.X = fyne.Max(limit, 0)
+	}
+	s.Popup.ShowAtPosition(at)
 	s.centerActive()
 	UnfoldPopUp(s.Popup, s.unfold, s.Popup.Size())
 	if s.Find != nil {
@@ -214,12 +251,12 @@ func (s *GoldSelect) showChoices() {
 func (s *GoldSelect) renderChoices() {
 	s.Rows.Objects = nil
 	if len(s.shown) == 0 {
-		s.Rows.Add(widget.NewLabel("No matches"))
+		s.Rows.Objects = append(s.Rows.Objects, widget.NewLabel("No matches"))
 	}
 	for position, i := range s.shown {
 		i, option := i, s.Options[i]
 		selected := option == s.Selected
-		current := strings.HasSuffix(option, "- Current")
+		current := s.Current != "" && option == s.Current
 		ink := theme.Color(theme.ColorNameForeground)
 		fill := theme.Color(theme.ColorNameOverlayBackground)
 		if current {
@@ -233,10 +270,32 @@ func (s *GoldSelect) renderChoices() {
 		}
 		label := widget.NewLabel(option)
 		label.Wrapping = fyne.TextWrapWord
+		var hue color.Color
+		if s.Hue != nil {
+			hue = s.Hue(option)
+		}
+		if hue != nil && !selected {
+			fill = BlendColor(fill, hue, 0.22)
+			if position == s.active {
+				fill = BlendColor(fill, hue, 0.2)
+			}
+		}
 		bg := canvas.NewRectangle(fill)
 		bg.CornerRadius = 5
-		row := container.NewStack(bg, container.NewPadded(container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink})))
-		s.Rows.Add(NewCardTappable(row, func() { s.Choose(i) }))
+		var text fyne.CanvasObject = container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink})
+		if hue != nil {
+			dot := canvas.NewCircle(hue)
+			dot.StrokeColor = theme.Color(theme.ColorNameForeground)
+			dot.StrokeWidth = 0.5
+			holder := canvas.NewRectangle(color.Transparent)
+			holder.SetMinSize(fyne.NewSquareSize(10))
+			text = container.NewBorder(nil, nil, container.NewCenter(container.NewStack(holder, dot)), nil, text)
+		}
+		row := container.NewStack(bg, container.NewPadded(text))
+		s.Rows.Objects = append(s.Rows.Objects, NewCardTappable(row, func() { s.Choose(i) }))
+	}
+	if s.choiceHover != nil {
+		s.Rows.Objects = append(s.Rows.Objects, s.choiceHover)
 	}
 	s.Rows.Refresh()
 	s.revealActive()

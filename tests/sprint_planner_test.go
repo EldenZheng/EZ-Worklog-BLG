@@ -28,15 +28,17 @@ func TestSprintAllocationPreservesBlocksSplitsAndStopsAtEnd(t *testing.T) {
 	if !reflect.DeepEqual(tasks["existing"], p.Tasks["existing"]) {
 		t.Fatal("existing appointment changed")
 	}
-	want := []backend.PlanBlock{{Date: "2026-11-02", Start: 660, Minutes: 360}, {Date: "2026-11-03", Start: 540, Minutes: 240}}
+	// Days fill up to eight hours after what is there, by position; no
+	// block carries a time of day.
+	want := []backend.PlanBlock{{Date: "2026-11-02", Minutes: 360, Pos: 1}, {Date: "2026-11-03", Minutes: 240}}
 	if !reflect.DeepEqual(tasks["large"].Blocks, want) {
 		t.Fatalf("large task: %v", tasks["large"].Blocks)
 	}
 	if len(unplaced) != 1 || unplaced[0] != "overflow" || len(tasks["overflow"].Blocks) != 0 {
 		t.Fatalf("overflow: %v, %v", unplaced, tasks)
 	}
-	if tasks["small"].Blocks[0].Start != 780 {
-		t.Fatal("failed allocation leaked reservations")
+	if b := tasks["small"].Blocks[0]; b.Date != "2026-11-03" || b.Pos != 1 || b.Start != 0 {
+		t.Fatal("failed allocation leaked reservations", b)
 	}
 	if len(p.Tasks) != 1 {
 		t.Fatal("input mutated")
@@ -55,12 +57,12 @@ func TestSprintEstimateAndBoundaries(t *testing.T) {
 	if !s.Contains("2026-11-04") || s.Contains("2026-11-05") {
 		t.Fatal("exclusive sprint boundary")
 	}
-	tasks := map[string]backend.SprintTask{"other": {Blocks: []backend.PlanBlock{{Date: "2026-11-02", Start: 540, Minutes: 120}}}}
-	if backend.ValidatePlanBlock("mine", backend.PlanBlock{Date: "2026-11-02", Start: 600, Minutes: 30}, tasks) == nil {
-		t.Fatal("overlap allowed")
+	tasks := map[string]backend.SprintTask{"other": {Blocks: []backend.PlanBlock{{Date: "2026-11-02", Minutes: 450}}}}
+	if backend.ValidatePlanBlock("mine", backend.PlanBlock{Date: "2026-11-02", Minutes: 60}, tasks) == nil {
+		t.Fatal("a block past the day's eight hours was allowed")
 	}
-	if backend.ValidatePlanBlock("mine", backend.PlanBlock{Date: "2026-11-02", Start: 660, Minutes: 30}, tasks) != nil {
-		t.Fatal("adjacent block rejected")
+	if backend.ValidatePlanBlock("mine", backend.PlanBlock{Date: "2026-11-02", Minutes: 30}, tasks) != nil {
+		t.Fatal("a block that fills the day exactly was rejected")
 	}
 }
 
@@ -88,7 +90,7 @@ func TestSprintCalendarDropRespectsCapacityAndPreservesDuration(t *testing.T) {
 		t.Fatal("date outside sprint allowed")
 	}
 	block, ok := backend.PlannerSlot(p, c, -1, "2026-11-02")
-	if !ok || block.Start != 660 || block.Minutes != 90 {
+	if !ok || block.Start != 0 || block.Pos != 1 || block.Minutes != 90 {
 		t.Fatalf("default project estimate not used: %v", block)
 	}
 	p.Tasks["mine"] = backend.SprintTask{Estimate: 180}
@@ -149,7 +151,9 @@ func TestSprintPlanSaveReloadAndOfflineUI(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.LoadSprintPlan()
-	if err != nil || !reflect.DeepEqual(got.Tasks, p.Tasks) {
+	// A block saved with a start time reads back as a position, Start 0.
+	want := map[string]backend.SprintTask{"issue": {Estimate: 90, Notes: "local only", Blocks: []backend.PlanBlock{{Date: "2026-11-02", Minutes: 90}}}}
+	if err != nil || !reflect.DeepEqual(got.Tasks, want) {
 		t.Fatalf("roundtrip: %v, %v", got, err)
 	}
 	if len(got.Boards) != 0 {

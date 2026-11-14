@@ -11,6 +11,7 @@ import (
 	"worklog/internal/menus/loglist"
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/meeting"
+	"worklog/internal/menus/projects"
 	"worklog/internal/menus/report"
 	"worklog/internal/menus/settings"
 	"worklog/internal/menus/status"
@@ -31,5 +32,6 @@ func BuildAllTabs(ui *shell.UI) {
 		container.NewTabItemWithIcon(shell.SettingsTabName, theme.SettingsIcon(), settings.BuildSettingsTab(ui)),
 		container.NewTabItem(shell.KanbanTabName, kanban.BuildKanbanTab(ui)),
 		container.NewTabItem(shell.PlannerTabName, kanban.BuildPlannerTab(ui)),
+		container.NewTabItem(shell.ProjectsTabName, projects.BuildProjectsTab(ui)),
 	)
 }

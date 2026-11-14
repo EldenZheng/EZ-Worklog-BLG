@@ -3,6 +3,7 @@ package sprintcalendar
 import (
 	"fmt"
 	"net/url"
+	"sort"
 	"strings"
 
 	"worklog/internal/shared/backend"
@@ -168,20 +169,14 @@ type plannerDayTotals struct {
 
 func DayTotals(k *shell.KanbanUI, date string, candidates []backend.SprintCandidate, work PlannerDayWork) plannerDayTotals {
 	t := plannerDayTotals{byOrg: shell.MinutesByOrg(work.Logged), draftByOrg: map[string]int{}, plannedBy: map[string]int{}}
-	credited := map[string]int{}
 	supportItems := append([]backend.WorklogItem{}, work.Logged...)
 	for _, it := range work.Logged {
 		t.Logged += it.Minutes
-		if ref := PlannerIssueRef(backend.OrDefault(it.ParentURL, it.URL)); ref != "" {
-			credited[ref] += it.Minutes
-		}
 	}
 	for _, r := range work.Drafts {
 		t.Draft += r.Minutes()
 		t.draftByOrg[shell.RowOrg(r)] += r.Minutes()
-		if ref := PlannerIssueRef(r["issue"]); ref != "" {
-			credited[ref] += r.Minutes()
-		}
+		// Drafts are waiting work, separate from the time allocated in a plan.
 		supportItems = append(supportItems, backend.WorklogItem{Title: r["issue_title"], ParentTitle: r["parent_title"]})
 	}
 	seen := map[string]bool{}
@@ -201,23 +196,14 @@ func DayTotals(k *shell.KanbanUI, date string, candidates []backend.SprintCandid
 			continue
 		}
 		supportItems = append(supportItems, backend.WorklogItem{Title: c.Item.Title})
-		if backend.PlannerIssueFinished(c.Item, task) {
-			continue
-		}
-		ref := PlannerIssueRef(c.Item.URL)
-		covered := credited[ref]
-		if covered > minutes {
-			covered = minutes
-		}
-		t.Planned += minutes - covered
-		t.plannedBy[c.Key] += minutes - covered
-		if ref != "" {
-			credited[ref] -= covered
-		}
+		// The plan stands as planned: time logged on GitHub or saved in Log
+		// Work, or completing the issue, never takes anything off it.
+		t.Planned += minutes
+		t.plannedBy[c.Key] += minutes
 	}
 	t.support = shell.SupportPlaceholderFor(k.Ui.Cfg, SupportOn(k.Ui, date), date, supportItems)
 	if t.support > 0 {
-		t.draftByOrg[strings.ToLower(shell.OrgOf(k.Ui.Cfg.WorklogOwner))] += t.support
+		t.draftByOrg[shell.SupportPendingKey] += t.support
 	}
 	return t
 }
@@ -234,12 +220,46 @@ func (t plannerDayTotals) parts(cfg backend.Config) []shell.MeterPart {
 	return parts
 }
 
-// PlannedMinutes is the Sprint Calendar's purple figure for a day: planned
-// blocks not yet covered by work logged or drafted against the same issue.
+// worklogPlannedItems keeps locally saved blocks available before the first
+// successful board fetch. Only the tooltip's issue details need that fetch.
+// Known items, including those hidden by a project filter, never get a fallback.
+func worklogPlannedItems(k *shell.KanbanUI) []backend.SprintCandidate {
+	items := ScheduledItems(k)
+	if k.Loaded {
+		return items
+	}
+	seen := map[string]bool{}
+	for _, c := range items {
+		seen[c.Key] = true
+	}
+	for _, b := range k.Plan.Boards {
+		for _, it := range b.Items {
+			seen[it.Key(b.ID)] = true
+		}
+	}
+	var keys []string
+	for key, task := range k.Plan.Tasks {
+		if !seen[key] && len(task.Blocks) > 0 {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		items = append(items, backend.SprintCandidate{Key: key,
+			Item: backend.SprintItem{URL: key, Title: "Fetching Issue..."}})
+	}
+	return items
+}
+
+// PlannedMinutes is the Sprint Calendar's purple figure for a day: the
+// planned blocks of all scheduled issues, in full. Neither GitHub worklogs nor
+// Log Work drafts against the same issue reduce it.
+// This is what the other menus read, so their key's Planned Issues entry hides
+// it here. The Sprint Calendar reads DayTotals and keeps its plans on show.
 func PlannedMinutes(ui *shell.UI, date string, logged []backend.WorklogItem, drafts []backend.Row) int {
 	k := ui.Kanban
-	if k == nil {
+	if k == nil || !ui.PlansShown() {
 		return 0
 	}
-	return DayTotals(k, date, ScheduledItems(k), PlannerDayWork{Logged: logged, Drafts: drafts}).Planned
+	return DayTotals(k, date, worklogPlannedItems(k), PlannerDayWork{Logged: logged, Drafts: drafts}).Planned
 }

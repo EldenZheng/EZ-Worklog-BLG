@@ -23,7 +23,7 @@ func blockTitle(title string, n, count int) string {
 	return title
 }
 
-// blockNumbers numbers the blocks of key on date by start time: index to
+// blockNumbers numbers the blocks of key on date by position: index to
 // (n, count). Blocks on other days are left out.
 func blockNumbers(blocks []backend.PlanBlock, date string) map[int][2]int {
 	var on []int
@@ -32,7 +32,7 @@ func blockNumbers(blocks []backend.PlanBlock, date string) map[int][2]int {
 			on = append(on, i)
 		}
 	}
-	sort.SliceStable(on, func(i, j int) bool { return blocks[on[i]].Start < blocks[on[j]].Start })
+	sort.SliceStable(on, func(i, j int) bool { return backend.PlanBlockBefore(blocks[on[i]], blocks[on[j]]) })
 	out := map[int][2]int{}
 	for n, i := range on {
 		out[i] = [2]int{n + 1, len(on)}
@@ -57,16 +57,16 @@ func plannedLine(k *shell.KanbanUI, c backend.SprintCandidate, block backend.Pla
 }
 
 // PlannedLines lists what makes up a day's purple "planned" figure: each
-// block still waiting for work, in start order, with its allocated minutes.
+// scheduled block, in start order, with its allocated minutes.
 func PlannedLines(ui *shell.UI, date string, logged []backend.WorklogItem, drafts []backend.Row) []shell.PlannedLine {
 	k := ui.Kanban
 	if k == nil {
 		return nil
 	}
-	items := ScheduledItems(k)
+	items := worklogPlannedItems(k)
 	totals := DayTotals(k, date, items, PlannerDayWork{Logged: logged, Drafts: drafts})
 	type entry struct {
-		start int
+		block backend.PlanBlock
 		line  shell.PlannedLine
 	}
 	var entries []entry
@@ -81,11 +81,11 @@ func PlannedLines(ui *shell.UI, date string, logged []backend.WorklogItem, draft
 		for i, b := range blocks {
 			if b.Date == date {
 				nc := numbers[i]
-				entries = append(entries, entry{b.Start, plannedLine(k, c, b, nc[0], nc[1])})
+				entries = append(entries, entry{b, plannedLine(k, c, b, nc[0], nc[1])})
 			}
 		}
 	}
-	sort.SliceStable(entries, func(i, j int) bool { return entries[i].start < entries[j].start })
+	sort.SliceStable(entries, func(i, j int) bool { return backend.PlanBlockBefore(entries[i].block, entries[j].block) })
 	var out []shell.PlannedLine
 	for _, e := range entries {
 		out = append(out, e.line)

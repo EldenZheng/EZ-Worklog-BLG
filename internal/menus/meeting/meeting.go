@@ -130,7 +130,18 @@ func DrawMeeting(ui *shell.UI) {
 	commits, cached := ui.MeetingCommits[weekStart]
 	errs := ui.MeetingCommitErrs[weekStart]
 
-	topRows := []fyne.CanvasObject{ui.CommitWeekSummary(commits, loading, cached)}
+	rows, _ := ui.Store.ReadRows()
+	inDays := map[string]bool{}
+	for _, d := range days {
+		inDays[d] = true
+	}
+	var weekRows []backend.Row
+	for _, row := range rows {
+		if inDays[row["date"]] {
+			weekRows = append(weekRows, row)
+		}
+	}
+	topRows := []fyne.CanvasObject{ui.CommitWeekSummary(commits, loading, cached, weekRows)}
 	if len(errs) > 0 {
 		for _, e := range errs {
 			topRows = append(topRows, shell.ColorLabel(e, theme.ColorNameError))
@@ -139,7 +150,7 @@ func DrawMeeting(ui *shell.UI) {
 	top := container.NewVBox(topRows...)
 
 	byDay := map[string][]backend.Commit{}
-	for _, c := range commits {
+	for _, c := range ui.ShownCommits(commits) {
 		byDay[c.Date] = append(byDay[c.Date], c)
 	}
 	// The sidebar is a fixed 15 percent of the tab. A custom layout keeps that
@@ -241,7 +252,7 @@ func meetingRowsPanel(ui *shell.UI, days []string, arrive *shell.Arrival) fyne.C
 	byKey := map[string]*bucket{}
 	total := 0
 	entries := 0
-	for _, r := range rows {
+	for _, r := range ui.ShownRows(rows) {
 		if !inDays[r["date"]] {
 			continue
 		}
@@ -296,7 +307,7 @@ func meetingRowsPanel(ui *shell.UI, days []string, arrive *shell.Arrival) fyne.C
 		items.Add(empty)
 	}
 	for _, p := range pairs {
-		items.Add(shell.IssueSummaryCardForRows(ui.Cfg, p.key, p.title, fmt.Sprintf("%dm", p.mins), p.rows))
+		items.Add(shell.IssueSummaryCardForRows(ui.Cfg, p.key, p.title, fmt.Sprintf("%dm", p.mins), p.rows, false))
 	}
 	arrive.RevealIn(items)
 	totalLine := widget.NewLabelWithStyle(

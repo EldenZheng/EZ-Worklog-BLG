@@ -71,7 +71,7 @@ func (*PlannerResizeGrip) Cursor() desktop.Cursor { return desktop.VResizeCursor
 
 func (g *PlannerResizeGrip) Dragged(e *fyne.DragEvent) {
 	t := g.k.Plan.Tasks[g.Key]
-	if g.Index < 0 || g.Index >= len(t.Blocks) || t.Done {
+	if g.Index < 0 || g.Index >= len(t.Blocks) {
 		return
 	}
 	if !g.Started {
@@ -84,7 +84,7 @@ func (g *PlannerResizeGrip) Dragged(e *fyne.DragEvent) {
 		shell.HoldBubble(g.Face)
 	}
 	g.delta += e.Dragged.DY
-	max := 1440 - t.Blocks[g.Index].Start
+	max := 1440 - backend.PlannerDayUsed(g.k.Plan.Tasks, t.Blocks[g.Index].Date, g.Key, g.Index)
 	minutes := SnapPlannerDuration(float64(g.original)+float64(g.delta/g.pixelsPerMinute), max)
 	g.Preview = minutes
 	g.Layout.minutes = minutes

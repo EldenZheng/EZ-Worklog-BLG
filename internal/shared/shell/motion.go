@@ -18,10 +18,11 @@ import (
 // Feedback paints only a neutral outline; the card's semantic fill and accent
 // never change. Every transition finishes, including when a card is removed.
 type cardFeedback struct {
-	outline   *canvas.Rectangle
-	Level     float32
-	hovered   bool
-	Animation *fyne.Animation
+	outline         *canvas.Rectangle
+	Level           float32
+	hovered         bool
+	Animation       *fyne.Animation
+	filter, grouped bool
 }
 
 func NewCardTappable(content fyne.CanvasObject, onTap func()) *Tappable {
@@ -34,6 +35,14 @@ func NewCardTappable(content fyne.CanvasObject, onTap func()) *Tappable {
 	return t
 }
 
+// NewFilterTappable keeps the toggle's fade inside the button's own bounds.
+func NewFilterTappable(content fyne.CanvasObject, onTap func()) *Tappable {
+	t := NewCardTappable(content, onTap)
+	t.FadeOnTap = true
+	t.Feedback.filter = true
+	return t
+}
+
 // NewBubbleTappable is a clickable StripeBubble: the shared card look, lit
 // under the pointer, with links and buttons inside it keeping it lit.
 func NewBubbleTappable(bubble *StripeBubble, onTap func()) *Tappable {
@@ -43,7 +52,13 @@ func NewBubbleTappable(bubble *StripeBubble, onTap func()) *Tappable {
 }
 
 func (t *Tappable) MouseIn(*desktop.MouseEvent) {
-	if t.Bubble != nil {
+	if t.filterHover != nil {
+		t.filterHover.hover(t, true)
+	}
+	if t.OnHover != nil {
+		t.OnHover(true)
+	}
+	if t.Bubble != nil && t.filterHover == nil {
 		t.Bubble.SetHover(true)
 	}
 	if t.Feedback != nil {
@@ -55,7 +70,17 @@ func (t *Tappable) MouseIn(*desktop.MouseEvent) {
 func (t *Tappable) MouseMoved(*desktop.MouseEvent) {}
 
 func (t *Tappable) MouseOut() {
-	if t.Bubble != nil {
+	if t.filterHover != nil {
+		t.filterHover.hover(t, false)
+	}
+	if next := t.filterReplacement; next != nil {
+		t.filterReplacement = nil
+		next.MouseOut()
+	}
+	if t.OnHover != nil {
+		t.OnHover(false)
+	}
+	if t.Bubble != nil && t.filterHover == nil {
 		t.Bubble.SetHover(false)
 	}
 	if t.Feedback != nil {
@@ -72,6 +97,9 @@ func (t *Tappable) Cursor() desktop.Cursor {
 }
 
 func (t *Tappable) Hide() {
+	if t.filterHover != nil {
+		t.filterHover.hover(t, false)
+	}
 	if t.Feedback != nil {
 		t.Feedback.stop()
 		t.Feedback.hovered = false
@@ -82,6 +110,16 @@ func (t *Tappable) Hide() {
 
 func (f *cardFeedback) paint(level float32) {
 	f.Level = level
+	if f.grouped {
+		return
+	}
+	if f.filter {
+		f.outline.CornerRadius, f.outline.StrokeWidth = 8, 1
+		f.outline.StrokeColor = widgets.WithAlpha(widgets.LogoGold, 0.45*level/0.24)
+		f.outline.FillColor = widgets.WithAlpha(widgets.LogoGold, 0.16*level/0.24)
+		f.outline.Refresh()
+		return
+	}
 	f.outline.StrokeColor = widgets.WithAlpha(theme.Color(theme.ColorNameForeground), level)
 	// A faint wash fades in with the outline, so the hover reads as the card
 	// lighting up rather than only being edged.
@@ -98,17 +136,28 @@ func (f *cardFeedback) stop() {
 
 func (f *cardFeedback) fade(to float32) {
 	f.stop()
+	if f.grouped {
+		f.paint(to)
+		return
+	}
 	from := f.Level
 	if from == to {
 		return
 	}
-	f.Animation = fyne.NewAnimation(180*time.Millisecond, func(p float32) {
+	duration := 180 * time.Millisecond
+	if f.filter {
+		duration = widgets.HoverDuration
+	}
+	f.Animation = fyne.NewAnimation(duration, func(p float32) {
 		f.paint(from + (to-from)*p)
 		if p == 1 {
 			f.Animation = nil
 		}
 	})
 	f.Animation.Curve = easeOutQuart
+	if f.filter {
+		f.Animation.Curve = fyne.AnimationEaseOut
+	}
 	f.Animation.Start()
 }
 

@@ -16,6 +16,7 @@ import (
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // WorklogDatePicker is the month grid the worklog date is chosen from, with each
@@ -238,9 +239,10 @@ func (p *WorklogDatePicker) Refresh() {
 		}
 		byDay[it.Date][shell.ItemOrg(it)] += it.Minutes
 	}
-	drafts := map[string]int{}
+	drafts, supportByDay := map[string]int{}, map[string]int{}
 	if from, to, err := backend.MonthBounds(p.Month); err == nil {
 		drafts = p.ui.DraftMinutesByDay(from, to)
+		supportByDay = p.ui.SupportPlaceholdersByDay(from, to, items)
 	}
 	planned := p.plannedByDay(items)
 
@@ -261,18 +263,18 @@ func (p *WorklogDatePicker) Refresh() {
 	}
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", p.Month, shell.Pad2(day))
-		grid.Add(p.dayCell(ds, day, byDay[ds], drafts[ds], planned[ds]))
+		grid.Add(p.dayCell(ds, day, byDay[ds], drafts[ds], planned[ds], supportByDay[ds]))
 	}
 	if p.CalendarOpen() {
-		days := grid.Objects[7:]
+		// The blank weekday slots already occupy the grid's leading columns.
+		// Animate only real days, so firstWd is applied exactly once.
+		firstDay := 7 + firstWd
+		days := grid.Objects[firstDay:]
 		arrive := p.motion.Arrival("picker", p.Month)
 		days = arrive.Reveal(days, shell.GridDelays(len(days), 7, firstWd), func(i int, share float32) {
-			day := i - firstWd + 1
-			if day > 0 && day <= daysIn {
-				p.motion.MeterShare(strconv.Itoa(day), share)
-			}
+			p.motion.MeterShare(strconv.Itoa(i+1), share)
 		})
-		grid.Objects = append(grid.Objects[:7], days...)
+		grid.Objects = append(grid.Objects[:firstDay], days...)
 	}
 	p.Grid.Objects = []fyne.CanvasObject{grid}
 	p.Grid.Refresh()
@@ -337,20 +339,24 @@ func DayOwedLine(mins, draft int) string {
 
 // dayCell is one day in the picker: the date, what it holds against the target,
 // and the wash that says which kind of day it is.
-func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, draft, planned int) fyne.CanvasObject {
+func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, draft, planned int, supportMinutes ...int) fyne.CanvasObject {
+	support := 0
+	if len(supportMinutes) > 0 {
+		support = supportMinutes[0]
+	}
 	mins := 0
 	for _, m := range byOrg {
 		mins += m
 	}
 	// Planned time counts toward the day as it does on Log Work's week.
-	state := shell.DayState(mins, draft+planned)
+	state := shell.DayState(mins, draft+support+planned)
 
 	num := canvas.NewText(strconv.Itoa(day), theme.Color(theme.ColorNameForeground))
 	num.TextStyle = fyne.TextStyle{Bold: ds == p.date}
 	num.Alignment = fyne.TextAlignCenter
 
 	body := []fyne.CanvasObject{num}
-	if mins > 0 || draft > 0 || planned > 0 {
+	if mins > 0 || draft > 0 || support > 0 || planned > 0 {
 		caption := func(s string) *canvas.Text {
 			c := canvas.NewText(s, theme.Color(state.TextColor))
 			c.TextSize = theme.CaptionTextSize()
@@ -361,7 +367,12 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 		// What the day still owes, which is the number the choice is actually
 		// made on — "240/480" left you to work it out every time. Counted after
 		// the drafts where there are any, since those are hours already worked.
-		body = append(body, caption(DayOwedLine(mins, draft+planned)))
+		body = append(body, caption(DayOwedLine(mins, draft+support+planned)))
+		if support > 0 {
+			note := caption(fmt.Sprintf("+%dm support", support))
+			note.Color = shell.WeekdaySupportColor()
+			body = append(body, note)
+		}
 		if planned > 0 {
 			plan := caption(fmt.Sprintf("%dm planned", planned))
 			plan.Color = shell.PlannerPlanColor
@@ -384,9 +395,9 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 
 	// Use the Status cell's org fill and the Log tab's progress bar. Both read
 	// the same minutes; drafts stay yellow and never count as pushed work.
-	bar := p.motion.ProgressBarParts(strconv.Itoa(day), ds, shell.PlannedBarParts(p.ui.Cfg, byOrg, map[string]int{"@draft": draft}, planned), 6)
+	bar := p.motion.ProgressBarParts(strconv.Itoa(day), ds, shell.PlannedBarParts(p.ui.Cfg, byOrg, map[string]int{"@draft": draft, shell.SupportPendingKey: support}, planned), 6)
 	stack := container.NewStack(floor, wash,
-		shell.VMeterFill(p.ui.Cfg, byOrg, draft, backend.Target, shell.CellCornerRadius), border,
+		shell.VMeterFillPlanned(p.ui.Cfg, byOrg, draft, planned, backend.Target, shell.CellCornerRadius, support), border,
 		container.NewPadded(container.NewBorder(nil, bar, nil, nil, container.NewVBox(body...))))
 	return shell.NewTappable(stack, func() {
 		p.date = ds
@@ -401,22 +412,35 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 // dayFillReadout is the line under the picker: how full the chosen day already
 // is, and what it would come to once what is saved here goes up.
 //
-// The two halves sit at either end of the line rather than being joined by an
+// What the day holds stands at the left end of the line and what it would come
+// to at the right, under the minutes field, rather than being joined by an
 // arrow. An arrow is one more glyph to find in whatever font the system hands
-// us, and the one that was there rendered as a box.
+// us, and the one that was there rendered as a box. A right-hand section that
+// does not fit moves to the next line whole, still against the right edge, so a
+// long readout cannot force the popup wider.
 //
-// The right end grows a third piece — what the day would score once the number
-// typed in the Worklog mins field lands on it — so the answer to "does this
-// entry finish the day" is on the same line as the picker rather than a tab
-// away. Passing a nil minE keeps the old two-piece line.
+// Drafts are gold and plans purple, as on Log List. One more section says what
+// the day would score once the number typed in the Worklog mins field lands on
+// it, so the answer to "does this entry finish the day" is on the same line as
+// the picker rather than a tab away. Each section counts the ones before it, and
+// plans come last because they are the only part not yet worked. Passing a nil
+// minE leaves the entry's section out.
 //
 // excludeRowID names the draft the editor is looking at, so its saved minutes
 // stop being counted as pending the moment the field is on screen — otherwise
 // a 300-minute draft opened at 300 would read as 600 waiting the second the
 // popup drew.
 func dayFillReadout(ui *shell.UI, p *WorklogDatePicker, minE *widget.Entry, excludeRowID string) fyne.CanvasObject {
-	left := widget.NewLabel("")
-	right := widget.NewLabelWithStyle("", fyne.TextAlignTrailing, fyne.TextStyle{})
+	fg := theme.Color(theme.ColorNameForeground)
+	left := canvas.NewText("", fg)
+	right := container.New(&TrailingSectionsLayout{})
+	// In a VBox so it stays on the first line when the right end wraps.
+	line := container.NewBorder(nil, nil, container.NewVBox(left), nil, right)
+	show := func(held string, sections ...shell.TextSection) {
+		left.Text = held
+		right.Objects = shell.SectionTexts(fyne.TextStyle{}, sections)
+		line.Refresh()
+	}
 
 	parseMins := func() int {
 		if minE == nil {
@@ -431,33 +455,46 @@ func dayFillReadout(ui *shell.UI, p *WorklogDatePicker, minE *widget.Entry, excl
 
 	update := func() {
 		date := p.ISO()
-		right.SetText("")
 		if date == "" {
-			left.SetText("Pick a date to see how full it is.")
+			show("Pick a date to see how full it is.")
 			return
 		}
-		mins, state := githubMinutesOn(ui, date)
+		items, state := githubItemsOn(ui, date)
 		switch state {
 		case "ok":
-			left.SetText(fmt.Sprintf("%s already on GitHub: %s", date, DayScoreLine(mins)))
+			mins := 0
+			for _, it := range items {
+				mins += it.Minutes
+			}
+			var sections []shell.TextSection
 			waiting := ui.DraftMinutesOn(date, excludeRowID)
-			entry := parseMins()
-			var parts []string
 			if waiting > 0 {
-				parts = append(parts, fmt.Sprintf("%d min on pending log, then %s",
-					waiting, DayScoreLine(mins+waiting)))
+				sections = append(sections, shell.TextSection{Text: fmt.Sprintf("%d min on pending log, then %s",
+					waiting, DayScoreLine(mins+waiting)), Ink: widgets.LogoGold})
 			}
+			if shell.Hooks.SupportOn != nil {
+				if support := shell.SupportPlaceholderFor(ui.Cfg, shell.Hooks.SupportOn(ui, date), date, items); support > 0 {
+					waiting += support
+					sections = append(sections, shell.TextSection{Text: fmt.Sprintf("+%d min support (display only), then %s",
+						support, DayScoreLine(mins+waiting)), Ink: shell.WeekdaySupportColor()})
+				}
+			}
+			entry := parseMins()
 			if entry > 0 {
-				parts = append(parts, fmt.Sprintf("+%d min this entry, then %s",
-					entry, DayScoreLine(mins+waiting+entry)))
+				sections = append(sections, shell.TextSection{Text: fmt.Sprintf("+%d min this entry, then %s",
+					entry, DayScoreLine(mins+waiting+entry)), Ink: fg})
 			}
-			right.SetText(strings.Join(parts, "  ·  "))
+			if planned := plannedOn(ui, date, items); planned > 0 {
+				sections = append(sections, shell.TextSection{Text: fmt.Sprintf("+%d min planned, then %s",
+					planned, DayScoreLine(mins+waiting+entry+planned)), Ink: shell.PlannerPlanColor})
+			}
+			show(fmt.Sprintf("%s already on GitHub: %s", date, DayScoreLine(mins)), sections...)
 		case "loading":
-			left.SetText(date + ": checking GitHub…")
+			show(date + ": checking GitHub…")
 		case "off":
-			left.SetText("Set a project URL in Settings to see how full a day is.")
+			show("Set a project URL in Settings to see how full a day is.")
 		default:
-			left.SetText(date + ": could not read the GitHub project.")
+			show(date + ": could not read the GitHub project.")
 		}
 	}
 	update()
@@ -474,7 +511,73 @@ func dayFillReadout(ui *shell.UI, p *WorklogDatePicker, minE *widget.Entry, excl
 			update()
 		}
 	}
-	return container.NewBorder(nil, nil, nil, right, left)
+	inset := theme.InnerPadding()
+	return container.New(layout.NewCustomPaddedLayout(inset, inset, inset, inset), line)
+}
+
+// TrailingSectionsLayout sets the children of shell.SectionTexts against the
+// right edge, moving a section that does not fit to the next line whole. The
+// children alternate section, dot, section; a dot only shows between two
+// sections on the same line, so no line starts or ends with one.
+type TrailingSectionsLayout struct{ height float32 }
+
+func (l *TrailingSectionsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	pad := theme.Padding()
+	y := float32(0)
+	for start := 0; start < len(objects); {
+		end, width := start, objects[start].MinSize().Width
+		for end+2 < len(objects) {
+			more := objects[end+1].MinSize().Width + objects[end+2].MinSize().Width
+			if width+more > size.Width {
+				break
+			}
+			width += more
+			end += 2
+		}
+		x := max(size.Width-width, 0)
+		for _, o := range objects[start : end+1] {
+			m := o.MinSize()
+			o.Show()
+			o.Move(fyne.NewPos(x, y))
+			o.Resize(m)
+			x += m.Width
+		}
+		if end+1 < len(objects) {
+			objects[end+1].Hide()
+		}
+		y += objects[start].MinSize().Height + pad
+		start = end + 2
+	}
+	l.height = max(y-pad, 0)
+}
+
+// MinSize asks for the widest section, and the height of the lines last laid out.
+func (l *TrailingSectionsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var size fyne.Size
+	for i := 0; i < len(objects); i += 2 {
+		m := objects[i].MinSize()
+		size.Width = max(size.Width, m.Width)
+		size.Height = max(size.Height, m.Height)
+	}
+	size.Height = max(size.Height, l.height)
+	return size
+}
+
+// plannedOn is the time planned for one day, less work already on GitHub.
+// Drafts, including the one open in the editor, remain separate from the plan.
+func plannedOn(ui *shell.UI, date string, items []backend.WorklogItem) int {
+	if shell.Hooks.PlannedMinutes == nil {
+		return 0
+	}
+	var drafts []backend.Row
+	if rows, err := ui.Store.ReadRows(); err == nil {
+		for _, r := range ui.ShownRows(rows) {
+			if r["pushed_at"] == "" && r["date"] == date {
+				drafts = append(drafts, r)
+			}
+		}
+	}
+	return shell.Hooks.PlannedMinutes(ui, date, items, drafts)
 }
 
 // labelledPicker is the picker with its caption, laid out like the other fields

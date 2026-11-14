@@ -110,6 +110,73 @@ func TestSprintCalendarMonthRetainsAllBubbles(t *testing.T) {
 	t.Fatal("month date missing")
 }
 
+func TestFinishedCalendarBlocksRemainAdjustableAndPlanned(t *testing.T) {
+	for _, state := range []string{"local", "Done", "closed"} {
+		t.Run(state, func(t *testing.T) {
+			ui, _, c := plannerFixture(t)
+			k := ui.Kanban
+			k.Week = backend.AddDays(k.Week, 7)
+			c.Item.URL = "https://github.com/acme/app/issues/7"
+			c.Item.Status = state
+			c.Item.Closed = state == "closed"
+			c.Key = c.Item.Key("p")
+			k.Plan.Boards[0].Items[0] = c.Item
+			k.Plan.Tasks[c.Key] = backend.SprintTask{Done: state == "local", Blocks: []backend.PlanBlock{{Date: k.Week, Minutes: 60, Note: "Keep me"}}}
+			kanban.Draw(k)
+			assertPlan := func(date string, minutes int) {
+				t.Helper()
+				if got := sprintcalendar.PlannedMinutes(ui, date, nil, nil); got != minutes {
+					t.Errorf("finished block planned minutes = %d, want %d", got, minutes)
+				}
+				lines := sprintcalendar.PlannedLines(ui, date, nil, nil)
+				if len(lines) != 1 || lines[0].Minutes != minutes || lines[0].Title != c.Item.Title || lines[0].Detail != "app#7" {
+					t.Errorf("finished block missing from planned tooltip: %+v", lines)
+				}
+			}
+			assertPlan(k.Week, 60)
+			card := sprintcalendar.PlannerCard(k, c, 0).(*shell.PlannerDragCard)
+			var grip *sprintcalendar.PlannerResizeGrip
+			walkCanvas(card, func(o fyne.CanvasObject) {
+				if g, ok := o.(*sprintcalendar.PlannerResizeGrip); ok {
+					grip = g
+				}
+			})
+			if grip == nil {
+				t.Fatal("finished block has no resize grip")
+			}
+			grip.Dragged(&fyne.DragEvent{Dragged: fyne.Delta{DY: 30 * sprintcalendar.PlannerPixelsPerMinute}})
+			grip.DragEnd()
+			assertPlan(k.Week, 90)
+			date := backend.AddDays(k.Week, 1)
+			var target *shell.PlannerDateTarget
+			for _, d := range k.Dates {
+				if d.Date == date {
+					target = d
+				}
+			}
+			if target == nil {
+				t.Fatal("destination date missing")
+			}
+			card = sprintcalendar.PlannerCard(k, c, 0).(*shell.PlannerDragCard)
+			at := fyne.CurrentApp().Driver().AbsolutePositionForObject(target.Object).Add(fyne.NewPos(10, 10))
+			card.Dragged(&fyne.DragEvent{PointEvent: fyne.PointEvent{AbsolutePosition: at}})
+			if card.Hover != target {
+				t.Fatal("finished block cannot move to another date")
+			}
+			card.DragEnd()
+			assertPlan(date, 90)
+			p, err := ui.Store.LoadSprintPlan()
+			task := p.Tasks[c.Key]
+			if err != nil || len(task.Blocks) != 1 || task.Blocks[0].Date != date || task.Blocks[0].Minutes != 90 || task.Blocks[0].Note != "Keep me" || task.Done != (state == "local") {
+				t.Fatal("adjustment did not preserve the saved block and completion", task, err)
+			}
+			if k.Busy || k.Plan.Boards[0].Items[0] != c.Item {
+				t.Fatal("adjustment changed GitHub state")
+			}
+		})
+	}
+}
+
 func countPlannerBubbles(o fyne.CanvasObject) int {
 	switch x := o.(type) {
 	case *shell.PlannerDayHover:

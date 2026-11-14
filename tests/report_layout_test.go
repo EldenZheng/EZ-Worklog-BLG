@@ -83,6 +83,9 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 		{"Support bonus", "RM 125.00", "Converted: IDR 475.00"},
 	}
 	for i, want := range wants {
+		if _, actionable := top.Objects[i].(*shell.Tappable); actionable {
+			t.Fatal("read-only report figures must not advertise a card action through hover")
+		}
 		got := labels(top.Objects[i])
 		for _, text := range want {
 			if !contains(got, text) {
@@ -160,6 +163,9 @@ func TestReportPutsMoneyAboveTheChartAndTimeBelowIt(t *testing.T) {
 }
 
 func hasInlineReportDetail(o fyne.CanvasObject, left, right string) bool {
+	if card, ok := o.(*shell.Tappable); ok {
+		return hasInlineReportDetail(card.Content, left, right)
+	}
 	if themed, ok := o.(*container.ThemeOverride); ok {
 		return hasInlineReportDetail(themed.Content, left, right)
 	}

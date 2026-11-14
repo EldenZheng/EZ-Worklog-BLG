@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
@@ -19,6 +20,7 @@ import (
 	"worklog/internal/menus/sprintcalendar"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // The day turns over at 08:00, not at midnight: work carried past midnight is
@@ -476,6 +478,100 @@ func TestDayCardDistinguishesIncompletePushFromRemainingCommits(t *testing.T) {
 	}
 	if got := labels(logwork.RowTile(ui, partial, func() {})); !contains(got, "partly saved on GitHub — retry push") {
 		t.Fatalf("the saved-entry bubble should explain the retry state: %v", got)
+	}
+}
+
+func TestSingleReviewCardsShowPurpleOutlineByTime(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	for _, kind := range []string{backend.KindCodeReview, backend.KindBulkReview, backend.KindOther} {
+		row := backend.Row{"date": "2026-08-11", "minutes": "30", "issue": "exampleorg/repo#7", "type": kind}
+		for _, card := range []fyne.CanvasObject{logwork.DayRowCard(ui, row, func() {}), logwork.RowTile(ui, row, func() {})} {
+			if got := contains(labels(card), "Code review"); got != (kind == backend.KindCodeReview) {
+				t.Fatalf("review badge for %s: %v", kind, labels(card))
+			}
+			if kind == backend.KindCodeReview {
+				assertOutlineTag(t, card, "Code review", shell.PlannerPlanColor)
+			}
+		}
+	}
+	legacy := backend.Row{"type": backend.KindCodeReview, "remarks": "https://github.com/o/r/pull/1 (30m)"}
+	for _, card := range []fyne.CanvasObject{logwork.DayRowCard(ui, legacy, func() {}), logwork.RowTile(ui, legacy, func() {})} {
+		if contains(labels(card), "Code review") {
+			t.Fatal("legacy bulk reviews must not get a single-review badge")
+		}
+	}
+}
+
+func TestOlderSavedReviewsGetBadgeWithoutBadgingBulk(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	for _, tc := range []struct {
+		name, kind, description, remarks string
+		want                             bool
+	}{
+		{"saved type", backend.KindCodeReview, "Old issue title", "", true},
+		{"saved label", "Code Review", "Old issue title", "", true},
+		{"old manual description", backend.KindOther, "Code Review: 2026-08-01", "reviewed changes", true},
+		{"missing old kind", "", "Code Review: 2026-08-01", "", true},
+		{"old saved name", backend.KindOther, "Code Review", "", true},
+		{"bulk kind", backend.KindBulkReview, "Code Review: 2026-08-01", "", false},
+		{"legacy bulk", backend.KindCodeReview, "Code Review: 2026-08-01", "https://github.com/o/r/pull/1 (30m)", false},
+		{"old manual bulk", backend.KindOther, "Code Review: 2026-08-01", "https://github.com/o/r/pull/1 (30m)", false},
+		{"named bulk title", backend.KindOther, "Alex Code Review: 2026-08-01", "", false},
+		{"ordinary issue", backend.KindOther, "Improve Code Review flow", "", false},
+		{"commit title", backend.KindCommit, "Code Review: 2026-08-01", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			row := backend.Row{"date": "2026-08-11", "minutes": "30", "issue": "exampleorg/repo#7", "type": tc.kind, "description": tc.description, "remarks": tc.remarks}
+			for _, card := range []fyne.CanvasObject{logwork.DayRowCard(ui, row, func() {}), logwork.RowTile(ui, row, func() {})} {
+				if got := contains(labels(card), "Code review"); got != tc.want {
+					t.Fatalf("badge=%v, want %v: %v", got, tc.want, labels(card))
+				}
+			}
+		})
+	}
+}
+
+func TestBulkReviewCardsOmitMissingIssueReference(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	for _, kind := range []string{backend.KindBulkReview, backend.KindCodeReview} {
+		row := backend.Row{"date": "2026-08-11", "minutes": "30", "type": kind, "remarks": "https://github.com/o/r/pull/1 (30m)"}
+		for _, card := range []fyne.CanvasObject{logwork.DayRowCard(ui, row, func() {}), logwork.RowTile(ui, row, func() {})} {
+			if got := labels(card); strings.Contains(strings.Join(got, " "), "no issue ref") || contains(got, "Code review") {
+				t.Fatalf("bulk review needs neither a badge nor a missing-reference caption: %v", got)
+			}
+		}
+		row["issue"] = "exampleorg/repo#7"
+		if got := labels(logwork.DayRowCard(ui, row, func() {})); !contains(got, "repo#7") {
+			t.Fatalf("a bulk review with a real issue must still show it: %v", got)
+		}
+	}
+}
+
+func TestSavedStatusTagsHaveGoldOutlines(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	for _, label := range []string{"partly saved", "commits remaining"} {
+		assertOutlineTag(t, shell.SavedTag(label), label, widgets.LogoGold)
+	}
+}
+
+func assertOutlineTag(t *testing.T, card fyne.CanvasObject, text string, ink color.Color) {
+	t.Helper()
+	labelFound, outlineFound := false, false
+	walk(card, func(o fyne.CanvasObject) {
+		if label, ok := o.(*canvas.Text); ok && label.Text == text {
+			labelFound = label.Color == ink
+		}
+		if frame, ok := o.(*canvas.Rectangle); ok && frame.StrokeColor == ink && frame.StrokeWidth > 0 {
+			_, _, _, alpha := frame.FillColor.RGBA()
+			outlineFound = outlineFound || alpha == 0
+		}
+	})
+	if !labelFound || !outlineFound {
+		t.Fatalf("%q needs matching ink and a transparent outlined pill", text)
 	}
 }
 

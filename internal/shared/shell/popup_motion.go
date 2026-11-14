@@ -187,12 +187,29 @@ const dropTime = 240 * time.Millisecond
 var dropdownOpening = map[*widget.PopUp]*fyne.Animation{}
 var dropdownClosing = map[*widget.PopUp]*fyne.Animation{}
 
+// dropdownBottoms holds the bottom edge of each drop-down that opens upward,
+// above what opened it: such a drop-down grows and shrinks from that edge.
+var dropdownBottoms = map[*widget.PopUp]float32{}
+
+// OpenUpward pins p's bottom edge at bottom while it unfolds and folds, for a
+// drop-down with no room below what opened it.
+func OpenUpward(p *widget.PopUp, bottom float32) { dropdownBottoms[p] = bottom }
+
+// keepBottom moves an upward drop-down so its bottom edge stays put as its
+// height changes.
+func keepBottom(p *widget.PopUp) {
+	if bottom, ok := dropdownBottoms[p]; ok {
+		p.Move(fyne.NewPos(p.Position().X, bottom-p.Size().Height))
+	}
+}
+
 // Complete old folds before adding an overlay: hiding an old Fyne popup later
 // would also remove any new overlay opened above it.
 func FinishDropdownClosings() {
 	for p, a := range dropdownClosing {
 		a.Stop()
 		delete(dropdownClosing, p)
+		delete(dropdownBottoms, p)
 		p.Hide()
 	}
 }
@@ -203,6 +220,7 @@ func UnfoldPopUp(p *widget.PopUp, r *Reveal, size fyne.Size) *fyne.Animation {
 	step := func(share float32) {
 		r.SetShare(share)
 		p.Resize(fyne.NewSize(size.Width, size.Height*share))
+		keepBottom(p)
 	}
 	if !animationsOn() {
 		step(1)
@@ -234,6 +252,7 @@ func FoldPopUp(p *widget.PopUp, r *Reveal) *fyne.Animation {
 	}
 	size := p.Size()
 	if r == nil || !animationsOn() {
+		delete(dropdownBottoms, p)
 		p.Hide()
 		return nil
 	}
@@ -246,8 +265,10 @@ func FoldPopUp(p *widget.PopUp, r *Reveal) *fyne.Animation {
 		share := 1 - done
 		r.SetShare(startShare * share)
 		p.Resize(fyne.NewSize(size.Width, size.Height*share))
+		keepBottom(p)
 		if done >= 1 {
 			delete(dropdownClosing, p)
+			delete(dropdownBottoms, p)
 			p.Hide()
 		}
 	})

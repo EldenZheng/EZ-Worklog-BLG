@@ -52,11 +52,12 @@ func TestSprintColumnsDefaultOrderAndPersistedControls(t *testing.T) {
 	}
 }
 
-func TestSprintDropdownUsesDatesAndCurrentSuffix(t *testing.T) {
+func TestSprintDropdownUsesDatesWithoutCurrentSuffix(t *testing.T) {
 	ui, _, c := plannerFixture(t)
 	k := ui.Kanban
 	label := sprintcalendar.CalendarSprintLabel(c.Sprint)
-	if !strings.Contains(label, " | ") || !strings.HasSuffix(label, " - Current") {
+	// The running sprint is marked in gold, not by a suffix that overflows.
+	if !strings.Contains(label, " | ") || strings.Contains(label, "Current") {
 		t.Fatalf("current sprint label: %s", label)
 	}
 	var selector *widget.Select

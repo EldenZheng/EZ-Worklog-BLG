@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
+	"worklog/internal/menus/projects"
 	"worklog/internal/menus/report"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
@@ -53,6 +54,12 @@ func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 	case *shell.PlannerFastScroll:
 		walk(v.Content, fn)
 	case *container.ThemeOverride:
+		walk(v.Content, fn)
+	case *projects.HoverList:
+		walk(v.Rows, fn)
+	case *projects.ColumnChart:
+		walk(v.Content, fn)
+	case *projects.GanttChart:
 		walk(v.Content, fn)
 	case *report.DayChart:
 		// A widget's children live in its renderer, which is where the bars are.
