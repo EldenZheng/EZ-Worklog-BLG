@@ -87,7 +87,7 @@ const (
 var FieldOrder = []string{
 	"id", "date", "minutes", "type", "description", "refs", "issue",
 	"owner", "remarks", "mode", "issue_url", "item_id", "pushed_at", "logged_at",
-	"parent_repo", "parent_title", "issue_body", "issue_title",
+	"parent_repo", "parent_title", "issue_body", "issue_title", "meeting_title", "meeting_recording",
 }
 
 // Config mirrors config.json so data carries over from the Python app.
@@ -113,8 +113,6 @@ type Config struct {
 	CleanupDays      int      `json:"cleanup_days,omitempty"`
 	WorklogOwner     string   `json:"worklog_owner"`
 	DefaultMode      string   `json:"default_mode"`
-	AnthropicAPIKey  string   `json:"anthropic_api_key"`
-	AnthropicModel   string   `json:"anthropic_model"`
 	ProjectURL       string   `json:"project_url"`
 	ExtraProjectURLs []string `json:"extra_project_urls"`
 	// DisplayName is the name a meeting issue is titled with — "Alex" in
@@ -127,7 +125,8 @@ type Config struct {
 	OrgColors map[string]string `json:"org_colors,omitempty"`
 	// ReportMonths is how many months the Projects finished report shows at a
 	// time. Zero means one.
-	ReportMonths int `json:"finished_report_months,omitempty"`
+	ReportMonths int    `json:"finished_report_months,omitempty"`
+	ArchiveDir   string `json:"history_archive_directory,omitempty"`
 }
 
 // MaxReportMonths is the longest page Settings takes for the finished report.
@@ -153,7 +152,6 @@ func DefaultConfig() Config {
 		DisplayCurrency: "USD",
 		LookbackDays:    7,
 		DefaultMode:     "subissue",
-		AnthropicModel:  "claude-sonnet-4-6",
 	}
 }
 
@@ -203,9 +201,6 @@ func (s *Store) LoadConfig() (Config, bool) {
 	}
 	// Unmarshal over defaults so missing keys keep their fallback.
 	_ = json.Unmarshal(data, &cfg)
-	if cfg.AnthropicModel == "" {
-		cfg.AnthropicModel = "claude-sonnet-4-6"
-	}
 	return cfg, true
 }
 

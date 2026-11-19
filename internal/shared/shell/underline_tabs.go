@@ -50,7 +50,7 @@ type UnderlineTabs struct {
 	drop         *canvas.Rectangle
 	order        []string
 	lineX, lineW float32
-	slide        *fyne.Animation
+	slide        *widgets.Steady
 }
 
 const (
@@ -142,6 +142,7 @@ func (t *UnderlineTabs) paintItem(item *underlineTab) {
 		item.arrow.Translucency = float64(1 - item.pick.level)
 		item.arrow.Refresh()
 	}
+	item.shot.repaint()
 }
 
 // target is where the line belongs: under the picked label.
@@ -181,17 +182,19 @@ func (t *UnderlineTabs) slideLine() {
 		return
 	}
 	fromX, fromW := t.lineX, t.lineW
-	var slide *fyne.Animation
-	slide = fyne.NewAnimation(tabSlideTime, func(p float32) {
+	// Steady, because picking a tab usually redraws the page under it: the line
+	// sets off once that frame is drawn rather than jumping most of the way.
+	var slide *widgets.Steady
+	slide = widgets.NewSteady(tabSlideTime, func(share float32) {
 		if t.slide != slide {
 			return
 		}
+		p := easeOutQuart(share)
 		t.placeLine(fromX+(x-fromX)*p, fromW+(w-fromW)*p)
-		if p >= 1 {
+		if share >= 1 {
 			t.slide = nil
 		}
 	})
-	slide.Curve = easeOutQuart
 	t.slide = slide
 	slide.Start()
 }
@@ -256,6 +259,11 @@ type underlineTab struct {
 	text        *canvas.Text
 	arrow       *canvas.Image // the drop-down arrow, gold like the picked label
 	hover, pick Glow
+	press       widgets.PressMotion
+	// shot stands in for the label and arrow while the tab is pressed; labelAt
+	// and arrowAt are where they sit at rest.
+	shot             *tabPress
+	labelAt, arrowAt fyne.Position
 }
 
 // hasMenu says whether the option carries a drop-down arrow.
@@ -296,11 +304,29 @@ func newUnderlineTab(owner *UnderlineTabs, option string) *underlineTab {
 	item.arrow = canvas.NewImageFromResource(tabArrow)
 	item.arrow.FillMode = canvas.ImageFillContain
 	item.arrow.Translucency = 1
+	item.shot = newTabPress(item)
 	item.ExtendBaseWidget(item)
 	return item
 }
 
+// MouseDown shrinks the tab as the pointer goes down on it; MouseUp lets it
+// spring back. PressReleased is the same for a pointer let go somewhere else.
+func (i *underlineTab) MouseDown(e *desktop.MouseEvent) {
+	if e != nil && e.Button == desktop.MouseButtonPrimary {
+		i.shot.locate()
+		i.press.Down(i.Refresh)
+	}
+}
+func (i *underlineTab) MouseUp(*desktop.MouseEvent) { i.press.Up() }
+func (i *underlineTab) PressReleased()              { i.press.Up() }
+
 func (i *underlineTab) Tapped(*fyne.PointEvent) {
+	// A tap with no pointer down before it (the tests, a touch) is located
+	// and played whole here.
+	if i.press.Scale() == 1 {
+		i.shot.locate()
+	}
+	i.press.Play(i.Refresh)
 	if o := i.owner; o.OnAction != nil && i.option == o.Action {
 		o.OnAction()
 		return
@@ -380,23 +406,26 @@ func (r *underlineTabRenderer) arrowRoom() float32 {
 }
 
 func (r *underlineTabRenderer) Layout(size fyne.Size) {
+	r.i.text.TextSize = theme.TextSize() + tabTextGrowth
 	m := r.i.text.MinSize()
 	x := (size.Width - m.Width - r.arrowRoom()) / 2
 	y := (size.Height - tabLineHeight - m.Height) / 2
-	r.i.text.Move(fyne.NewPos(x, y))
+	r.i.labelAt = fyne.NewPos(x, y)
+	r.i.text.Move(r.i.labelAt)
 	r.i.text.Resize(m)
 	// The arrow sits just after the label, centred on its line.
-	r.i.arrow.Move(fyne.NewPos(x+m.Width+tabArrowGap, y+(m.Height-tabArrowSize)/2))
+	r.i.arrowAt = fyne.NewPos(x+m.Width+tabArrowGap, y+(m.Height-tabArrowSize)/2)
+	r.i.arrow.Move(r.i.arrowAt)
 	r.i.arrow.Resize(fyne.NewSquareSize(tabArrowSize))
-	if r.i.hasMenu() {
-		r.i.arrow.Show()
-	} else {
-		r.i.arrow.Hide()
-	}
+	// Pressed, one picture of the two shrinks in their place.
+	pressed := r.i.press.Scale() != 1
+	ShowIf(r.i.text, !pressed)
+	ShowIf(r.i.arrow, r.i.hasMenu() && !pressed)
+	r.i.shot.place(size, pressed)
 }
 
 func (r *underlineTabRenderer) MinSize() fyne.Size {
-	m := r.i.text.MinSize()
+	m := fyne.MeasureText(r.i.option, theme.TextSize()+tabTextGrowth, r.i.text.TextStyle)
 	return fyne.NewSize(m.Width+r.arrowRoom()+tabSidePadding*2, m.Height+tabEndPadding*2+tabLineHeight)
 }
 
@@ -407,6 +436,6 @@ func (r *underlineTabRenderer) Refresh() {
 }
 
 func (r *underlineTabRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.i.text, r.i.arrow}
+	return []fyne.CanvasObject{r.i.text, r.i.arrow, r.i.shot.raster}
 }
-func (r *underlineTabRenderer) Destroy() {}
+func (r *underlineTabRenderer) Destroy() { r.i.press.Stop() }

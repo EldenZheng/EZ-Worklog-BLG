@@ -212,7 +212,17 @@ func (c *checkCatcher) check() *widget.Check {
 func (c *checkCatcher) Tapped(e *fyne.PointEvent) {
 	if check := c.check(); check != nil && !check.Disabled() && !c.group.Disabled() {
 		was := check.Checked
-		check.Tapped(e)
+		// As a parent issue's row in Projects: the ripple spreads across the
+		// hover pill beside the box, never over the tick drawing in it.
+		if g := c.group; c.index < len(g.items) {
+			pos, size := g.pillFrame(c.index)
+			box := theme.InnerPadding()/2 + theme.Size(theme.SizeNameInputBorder) + theme.Size(theme.SizeNameInlineIcon) + theme.Padding()
+			from := g.items[c.index].Position().X + box
+			ripple(g, fyne.NewPos(from, pos.Y), fyne.NewSize(pos.X+size.Width-from, size.Height), e)
+		}
+		// Ticked without the click itself, which would focus the box and
+		// light it: only the tick draws, as on a parent issue's box.
+		check.SetChecked(!check.Checked)
 		if ticks := c.group.ticks; check.Checked != was && c.index < len(ticks) {
 			ticks[c.index].Play(check.Checked)
 		}

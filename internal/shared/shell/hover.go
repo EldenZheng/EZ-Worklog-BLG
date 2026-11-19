@@ -36,7 +36,14 @@ func MixColor(a, b color.Color, share float32) color.Color {
 type Glow struct {
 	level float32
 	anim  *fyne.Animation
+	// Duration, when set, replaces the quick hover fade, as SlowFade does
+	// for the gentler highlights.
+	Duration time.Duration
 }
+
+// SlowFade is how long the gentle highlights (outlines, a Delete's hover)
+// take to fade in or out.
+const SlowFade = 600 * time.Millisecond
 
 // Level is how far lit it is now, 0 to 1.
 func (g *Glow) Level() float32 { return g.level }
@@ -49,8 +56,18 @@ func (g *Glow) to(target float32, paint func(level float32)) {
 		g.anim.Stop()
 	}
 	from := g.level
+	length := hoverFade
+	if g.Duration > 0 {
+		length = g.Duration
+	}
+	if !animationsOn() {
+		g.anim = nil
+		g.level = target
+		paint(target)
+		return
+	}
 	var anim *fyne.Animation
-	anim = fyne.NewAnimation(hoverFade, func(done float32) {
+	anim = fyne.NewAnimation(length, func(done float32) {
 		if g.anim != anim {
 			return
 		}
@@ -88,6 +105,7 @@ type HoverTag struct {
 	bg                  *canvas.Rectangle
 	label               *canvas.Text
 	hover               Glow
+	press               widgets.PressMotion
 	parent              func(on bool)
 }
 
@@ -123,17 +141,20 @@ func (t *HoverTag) inset() float32 {
 
 // fitText sets the text at the size the tag asks for.
 func (t *HoverTag) fitText() {
+	t.label.TextSize = t.textSize()
+}
+
+func (t *HoverTag) textSize() float32 {
 	size := theme.CaptionTextSize()
 	if t.Large {
 		size = theme.TextSize()
 	}
-	t.label.TextSize = size
+	return size
 }
 
 // NaturalWidth is the width the tag takes with its whole text showing.
 func (t *HoverTag) NaturalWidth() float32 {
-	t.fitText()
-	return fyne.MeasureText(t.Text, t.label.TextSize, t.label.TextStyle).Width + 2*t.inset()
+	return fyne.MeasureText(t.Text, t.textSize(), t.label.TextStyle).Width + 2*t.inset()
 }
 
 // Shown is the text the tag shows now, after any ellipsis.
@@ -164,9 +185,21 @@ func (t *HoverTag) MouseOut() {
 
 func (t *HoverTag) Tapped(*fyne.PointEvent) {
 	if t.OnTapped != nil {
+		t.press.Play(t.Refresh)
 		t.OnTapped()
 	}
 }
+
+// MouseDown shrinks a tag that does something as the pointer goes down on it;
+// MouseUp lets it spring back. PressReleased is the same for a pointer let go
+// somewhere else.
+func (t *HoverTag) MouseDown(e *desktop.MouseEvent) {
+	if t.OnTapped != nil && e != nil && e.Button == desktop.MouseButtonPrimary {
+		t.press.Down(t.Refresh)
+	}
+}
+func (t *HoverTag) MouseUp(*desktop.MouseEvent) { t.press.Up() }
+func (t *HoverTag) PressReleased()              { t.press.Up() }
 
 func (t *HoverTag) Cursor() desktop.Cursor {
 	if t.OnTapped != nil {
@@ -199,19 +232,19 @@ func (r *hoverTagRenderer) Layout(size fyne.Size) {
 	}
 	t.label.Move(fyne.NewPos(x, (size.Height-m.Height)/2))
 	t.label.Resize(m)
+	widgets.ApplyPressScale(size, t.press.Scale(), t.bg, t.label)
 }
 
 func (r *hoverTagRenderer) MinSize() fyne.Size {
 	t := r.t
-	t.fitText()
-	text := fyne.MeasureText(t.Text, t.label.TextSize, t.label.TextStyle)
+	text := fyne.MeasureText(t.Text, t.textSize(), t.label.TextStyle)
 	if t.Large {
 		return fyne.NewSize(text.Width+2*t.inset(), text.Height+2*theme.InnerPadding())
 	}
 	if t.Wide {
 		return fyne.NewSize(text.Width+2*tagInset, text.Height+2*theme.Padding()+4)
 	}
-	ellipsis := fyne.MeasureText("…", t.label.TextSize, t.label.TextStyle)
+	ellipsis := fyne.MeasureText("…", t.textSize(), t.label.TextStyle)
 	return fyne.NewSize(ellipsis.Width+2*tagInset, text.Height+4)
 }
 
@@ -223,7 +256,7 @@ func (r *hoverTagRenderer) Refresh() {
 func (r *hoverTagRenderer) Objects() []fyne.CanvasObject {
 	return []fyne.CanvasObject{r.t.bg, r.t.label}
 }
-func (r *hoverTagRenderer) Destroy() {}
+func (r *hoverTagRenderer) Destroy() { r.t.press.Stop() }
 
 // HugTag places a tag at its text's width, never wider than the row it sits
 // in, so the tag (and its hover) covers only itself.
@@ -282,9 +315,42 @@ type StripeBubble struct {
 	inside      int  // links and tags inside it the pointer is on
 	present     bool // the pointer is on the bubble or something in it
 	parent      func(on bool)
+	// OnLight, if set, hears the bubble start to light up or go dark, for
+	// what shows only while it is lit (a Delete fading in and out).
+	OnLight func(on bool)
+	// match edges the bubble in gold, fading over SlowFade, while a card
+	// going to the same place is carried over its day (SetMatch).
+	match   Glow
+	matched bool
 }
 
+// SetMatch edges the bubble in gold, as the date picker edges the day picked,
+// or lets the edge go: the card it marks already holds what is being dragged.
+func (b *StripeBubble) SetMatch(on bool) {
+	if on == b.matched {
+		return
+	}
+	b.matched = on
+	target := float32(0)
+	if on {
+		target = 1
+	}
+	b.match.Duration = SlowFade
+	b.match.to(target, func(float32) { b.paint(b.hover.level) })
+}
+
+// MatchFill is the tint of a bubble lit in gold as a match.
+func MatchFill() color.Color {
+	return BlendColor(theme.Color(theme.ColorNameInputBackground), widgets.LogoGold, 0.34)
+}
+
+// Matched reports whether the bubble is edged in gold, or on its way to it.
+func (b *StripeBubble) Matched() bool { return b.matched }
+
 const stripeWidth = 4
+
+// bubbleRadius is the rounding of a StripeBubble's corners.
+const bubbleRadius = 10
 
 // BubbleFill and BubbleStroke are a bubble's tint and edge at rest and under
 // the pointer. The lighter pair is the Sprint Calendar's bubble.
@@ -307,7 +373,7 @@ func NewStripeBubble(accent color.Color, body fyne.CanvasObject) *StripeBubble {
 	b.bg = canvas.NewRectangle(BubbleFill(accent, false))
 	b.bg.StrokeColor = BubbleStroke(accent, false)
 	b.bg.StrokeWidth = 1
-	b.bg.CornerRadius = 10
+	b.bg.CornerRadius = bubbleRadius
 	b.stripe = canvas.NewRectangle(color.Transparent)
 	b.stripe.CornerRadius = 2
 	b.ExtendBaseWidget(b)
@@ -319,6 +385,14 @@ func (b *StripeBubble) paint(level float32) {
 	b.bg.FillColor = MixColor(BubbleFill(b.accent, false), BubbleFill(b.accent, true), level)
 	b.bg.StrokeColor = MixColor(BubbleStroke(b.accent, false), BubbleStroke(b.accent, true), level)
 	b.stripe.FillColor = MixColor(color.Transparent, b.accent, level)
+	// A match is lit as a held card is, in gold: the gold tint, a gold edge
+	// and the gold bar slid in.
+	if m := b.match.level; m > 0 {
+		b.bg.FillColor = MixColor(b.bg.FillColor, MatchFill(), m)
+		b.bg.StrokeColor = MixColor(b.bg.StrokeColor, widgets.LogoGold, m)
+		b.stripe.FillColor = MixColor(b.stripe.FillColor, widgets.LogoGold, m)
+	}
+	b.bg.StrokeWidth = 1 + b.match.level
 	b.placeStripe(b.Size())
 	b.bg.Refresh()
 	b.stripe.Refresh()
@@ -327,7 +401,7 @@ func (b *StripeBubble) paint(level float32) {
 func (b *StripeBubble) placeStripe(size fyne.Size) {
 	pad := theme.Padding()
 	// Slides in from just outside the bubble's left edge to its slot.
-	x := pad - (pad+stripeWidth+8)*(1-b.hover.level)
+	x := pad - (pad+stripeWidth+8)*(1-max(b.hover.level, b.match.level))
 	b.stripe.Move(fyne.NewPos(x, 2*pad))
 	b.stripe.Resize(fyne.NewSize(stripeWidth, max(size.Height-4*pad, 0)))
 }
@@ -386,6 +460,9 @@ func (b *StripeBubble) light() {
 		target = 1
 	}
 	b.hover.to(target, b.paint)
+	if b.OnLight != nil {
+		b.OnLight(on)
+	}
 }
 
 // HoverChild is a link or tag inside a bubble that tells the bubble when the
@@ -423,6 +500,8 @@ func AttachHoverChildren(obj fyne.CanvasObject, hover func(on bool)) {
 type HoverButton struct {
 	widget.Button
 	parent func(on bool)
+	// hoverHook hears the pointer come and go too (FadeHover's wash).
+	hoverHook func(on bool)
 }
 
 // NewHoverButton is widget.NewButtonWithIcon as a HoverButton; icon may be nil.
@@ -439,6 +518,9 @@ func (b *HoverButton) SetHoverParent(f func(on bool)) { b.parent = f }
 
 func (b *HoverButton) MouseIn(e *desktop.MouseEvent) {
 	b.Button.MouseIn(e)
+	if b.hoverHook != nil {
+		b.hoverHook(true)
+	}
 	if b.parent != nil {
 		b.parent(true)
 	}
@@ -446,6 +528,9 @@ func (b *HoverButton) MouseIn(e *desktop.MouseEvent) {
 
 func (b *HoverButton) MouseOut() {
 	b.Button.MouseOut()
+	if b.hoverHook != nil {
+		b.hoverHook(false)
+	}
 	if b.parent != nil {
 		b.parent(false)
 	}
@@ -623,11 +708,14 @@ func DragGhost(title string, minutes int, accent color.Color) *fyne.Container {
 
 // CountBadge is a count, in gold, in a small rounded badge; a long count
 // widens it rather than touching its edge.
-func CountBadge(count int) fyne.CanvasObject {
+func CountBadge(count int) fyne.CanvasObject { return TextBadge(strconv.Itoa(count)) }
+
+// TextBadge is CountBadge with any short text in it.
+func TextBadge(text string) fyne.CanvasObject {
 	bg := canvas.NewRectangle(theme.Color(theme.ColorNameOverlayBackground))
 	bg.CornerRadius = 12
 	bg.SetMinSize(fyne.NewSize(26, 26))
-	label := canvas.NewText(strconv.Itoa(count), widgets.LogoGold)
+	label := canvas.NewText(text, widgets.LogoGold)
 	label.TextSize = theme.CaptionTextSize()
 	label.TextStyle = fyne.TextStyle{Bold: true}
 	return container.NewStack(bg, container.New(layout.NewCustomPaddedLayout(0, 0, 7, 7), container.NewCenter(label)))
@@ -675,20 +763,52 @@ func (r *clipRenderer) Destroy()                     {}
 // layer (an overlay without a layout, above the area) so it plays on even if
 // the area is redrawn underneath it straight away.
 func Ripple(layer *fyne.Container, area fyne.CanvasObject, at fyne.Position) {
+	if start := prepareRipple(layer, area, at); start != nil {
+		start()
+	}
+}
+
+// prepareRipple measures where area stands now and returns what starts its
+// ripple, so the ripple can start after a redraw has moved or replaced area.
+func prepareRipple(layer *fyne.Container, area fyne.CanvasObject, at fyne.Position) func() {
+	return prepareRippleBeside(layer, area, 0, at)
+}
+
+// prepareRippleBeside is prepareRipple with the leftmost clearLeft of area
+// left out, so the ripple never paints over what stands there (a check box
+// drawing its tick).
+func prepareRippleBeside(layer *fyne.Container, area fyne.CanvasObject, clearLeft float32, at fyne.Position) func() {
+	if area == nil {
+		return nil
+	}
+	return prepareRippleIn(layer, area, fyne.NewPos(clearLeft, 0), area.Size().SubtractWidthHeight(clearLeft, 0), at)
+}
+
+// prepareRippleIn is prepareRipple over the part of area at pos (in area) of
+// size.
+func prepareRippleIn(layer *fyne.Container, area fyne.CanvasObject, pos fyne.Position, size fyne.Size, at fyne.Position) func() {
 	if layer == nil || area == nil {
-		return
+		return nil
 	}
 	driver := fyne.CurrentApp().Driver()
-	origin := driver.AbsolutePositionForObject(area)
-	size := area.Size()
+	origin := driver.AbsolutePositionForObject(area).Add(pos)
+	if size.Width <= 0 || size.Height <= 0 {
+		return nil
+	}
+	from := origin.Subtract(driver.AbsolutePositionForObject(layer))
+	return func() { rippleAt(layer, from, size, at.Subtract(origin)) }
+}
+
+// rippleAt spreads the ripple over the box at pos (in layer) of size, from
+// centre within it.
+func rippleAt(layer *fyne.Container, pos fyne.Position, size fyne.Size, centre fyne.Position) {
 	circle := canvas.NewCircle(color.Transparent)
-	box := newClipBox(circle)
-	box.Move(origin.Subtract(driver.AbsolutePositionForObject(layer)))
+	box := newRippleClip(circle)
+	box.Move(pos)
 	box.Resize(size)
-	centre := at.Subtract(origin)
 	reach := float32(math.Hypot(float64(max(centre.X, size.Width-centre.X)), float64(max(centre.Y, size.Height-centre.Y))))
 	layer.Add(box)
-	anim := fyne.NewAnimation(420*time.Millisecond, func(done float32) {
+	anim := fyne.NewAnimation(RippleTime, func(done float32) {
 		radius := reach * done
 		circle.Move(fyne.NewPos(centre.X-radius, centre.Y-radius))
 		circle.Resize(fyne.NewSquareSize(2 * radius))

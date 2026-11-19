@@ -74,6 +74,9 @@ func OrDash(s string) string {
 	return s
 }
 
+// OpenLink opens raw in the browser, if it parses.
+func OpenLink(raw string) { openURL(raw) }
+
 func openURL(raw string) {
 	if u, err := url.Parse(raw); err == nil {
 		_ = fyne.CurrentApp().OpenURL(u)

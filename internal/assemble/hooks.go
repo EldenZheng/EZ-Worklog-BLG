@@ -6,6 +6,7 @@ import (
 	"worklog/internal/menus/loglist"
 	"worklog/internal/menus/logwork"
 	"worklog/internal/menus/meeting"
+	"worklog/internal/menus/projects"
 	"worklog/internal/menus/report"
 	"worklog/internal/menus/sprintcalendar"
 	"worklog/internal/menus/status"
@@ -15,6 +16,8 @@ import (
 // WireHooks connects shell.Hooks to the menus that implement them. It must
 // run before any window is built.
 func WireHooks() {
+	shell.Hooks.ClearProjectHistory = projects.ClearReportHistory
+	shell.Hooks.ReloadProjectHistory = projects.ReloadReportHistory
 	shell.Hooks.DrawCalendar = status.DrawCalendar
 	shell.Hooks.DrawCommitList = commitlist.DrawCommitList
 	shell.Hooks.DrawDayPanel = status.DrawDayPanel

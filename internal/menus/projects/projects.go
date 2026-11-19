@@ -84,6 +84,9 @@ type page struct {
 	// toggled is the parent issue whose tick was just clicked, while the page
 	// is drawn again for it.
 	toggled string
+	// parentHover is the parent issue row under the pointer, kept so the
+	// list a tick redraws comes up with it still lit.
+	parentHover string
 	// ticks are the parent issues' tick boxes, by project and parent, kept
 	// from one drawing of the page to the next so a tick just clicked goes
 	// on drawing itself while the figures round it change.
@@ -95,6 +98,30 @@ type page struct {
 }
 
 var pages = map[*shell.UI]*page{}
+
+func ReloadReportHistory(ui *shell.UI) {
+	p := pages[ui]
+	if p == nil {
+		return
+	}
+	saved, err := Load(ui.Store)
+	if err != nil {
+		p.loadErr = err
+		p.draw()
+		return
+	}
+	for i := range p.saved.Projects {
+		if current := saved.Find(p.saved.Projects[i].ID); current != nil {
+			p.saved.Projects[i].History = current.History
+		}
+	}
+	// A refresh started before the clear must not restore those snapshots.
+	for id := range p.fetches {
+		p.fetches[id]++
+		p.loading[id] = false
+	}
+	p.draw()
+}
 
 // Now is the clock the page's figures are worked out against. A variable so
 // the tests can hold it still.
@@ -162,7 +189,6 @@ func (p *page) buildTabs() {
 			if project.Name == name && project.ID != p.saved.Selected {
 				p.saved.Selected = project.ID
 				clear(p.allWeeks)
-				p.save()
 				p.draw()
 				p.load(false)
 				return
@@ -412,7 +438,7 @@ func (p *page) openMenu(anchor fyne.CanvasObject) {
 // ---- the dashboard ----
 
 const (
-	tileMinWidth   = 118
+	tileMinWidth   = 162
 	tileMaxWidth   = 460
 	panelMinWidth  = float32(290)
 	panelMinHeight = float32(210)
@@ -420,7 +446,6 @@ const (
 	sideShare    = float32(0.28)
 	sideMinWidth = float32(360)
 	sideMaxWidth = float32(480)
-	legendNameW  = float32(130)
 	// keyNameW is how wide a name may be in a chart's legend.
 	keyNameW = float32(80)
 	// workloadFloor is the least height the workload keeps when the parent
@@ -597,7 +622,7 @@ func (l *gridLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 func (v *view) tiles() fyne.CanvasObject {
 	s, pal := v.s, v.pal
 	var figures []*canvas.Text
-	tile := func(name, figure, note string, accent color.Color, counts bool, open func(), beside ...fyne.CanvasObject) fyne.CanvasObject {
+	tile := func(name string, icon fyne.Resource, figure, note string, accent color.Color, counts bool, open func(), beside ...fyne.CanvasObject) fyne.CanvasObject {
 		big := canvas.NewText(figure, pal.ink)
 		big.TextSize = theme.TextSize() + 8
 		big.TextStyle = fyne.TextStyle{Bold: true}
@@ -610,7 +635,8 @@ func (v *view) tiles() fyne.CanvasObject {
 			line = container.NewBorder(nil, nil, big, nil,
 				container.New(layout.NewCustomPaddedLayout(0, 0, theme.Padding()*2, 0), beside[0]))
 		}
-		bubble := shell.NewStripeBubble(accent, container.NewVBox(caption(name, pal.soft), line, tileNote(note)))
+		text := container.NewVBox(caption(name, pal.soft), line, tileNote(note))
+		bubble := shell.NewStripeBubble(accent, container.NewBorder(nil, nil, tileIcon(icon, accent), nil, text))
 		if open == nil {
 			return bubble
 		}
@@ -632,22 +658,22 @@ func (v *view) tiles() fyne.CanvasObject {
 		pace = pace[len(pace)-sparkWeeks:]
 	}
 	tiles := []fyne.CanvasObject{
-		tile("Progress", fmt.Sprintf("%d of %d", s.Done, s.Total), "issues done", pal.done, true, func() {
-			v.p.showIssues("In scope", issueGroup{Name: "Done", Items: v.finishedSince(time.Time{})}, issueGroup{Name: "Open", Items: v.open()})
+		tile("Progress", theme.ConfirmIcon(), fmt.Sprintf("%d of %d", s.Done, s.Total), "issues done", pal.done, true, func() {
+			v.p.showIssues("In Scope", issueGroup{Name: "Done", Items: v.finishedSince(time.Time{})}, issueGroup{Name: "Open", Items: v.open()})
 		}),
-		tile("Open", fmt.Sprint(s.Open), fmt.Sprintf("%d with nobody assigned", s.UnassignedOpen), gold, true, func() {
+		tile("Open", theme.FolderOpenIcon(), fmt.Sprint(s.Open), fmt.Sprintf("%d with nobody assigned", s.UnassignedOpen), gold, true, func() {
 			v.p.showIssues("Open", issueGroup{Name: "", Items: v.open()})
 		}),
-		tile("Last 7 Days", fmt.Sprintf("%d Done", s.ClosedLast7), fmt.Sprintf("%d opened", s.OpenedLast7), pal.review, true, func() {
+		tile("Last 7 Days", theme.HistoryIcon(), fmt.Sprintf("%d Done", s.ClosedLast7), fmt.Sprintf("%d opened", s.OpenedLast7), pal.review, true, func() {
 			v.p.showIssues("Last 7 Days", issueGroup{Name: "Done", Items: v.finishedSince(weekAgo)},
 				issueGroup{Name: "Opened", Items: s.Where(func(it Item) bool { return it.Created.After(weekAgo) })})
 		}),
-		tile("Pace", fmt.Sprintf("%.1f / wk", s.Velocity), paceTrend(s), pal.backlog, true, func() {
-			v.p.showIssues(fmt.Sprintf("Finished in the last %d weeks", velocityWeeks), issueGroup{Name: "", Items: v.finishedSince(paceFrom)})
+		tile("Pace", theme.MediaFastForwardIcon(), fmt.Sprintf("%.1f / wk", s.Velocity), paceTrend(s), pal.backlog, true, func() {
+			v.p.showIssues(fmt.Sprintf("Finished in the Last %d Weeks", velocityWeeks), issueGroup{Name: "", Items: v.finishedSince(paceFrom)})
 		}),
 		// The pace line beside the forecast says whether that date is coming
 		// nearer or slipping. The tile opens the forecast's workings.
-		tile("Forecast", forecast, forecastNote, pal.todo, false, v.p.showForecast(s, v.now),
+		tile("Forecast", theme.CalendarIcon(), forecast, forecastNote, pal.todo, false, v.p.showForecast(s, v.now),
 			Sparkline(pace, pal.ink, pal)),
 	}
 	tiles = v.arrive.Reveal(tiles, shell.ArriveDelays(len(tiles)), nil)
@@ -671,6 +697,18 @@ func paceTrend(s Summary) string {
 		return fmt.Sprintf("%.1f slower than the %d weeks before", -change, velocityWeeks)
 	}
 	return fmt.Sprintf("same as the %d weeks before", velocityWeeks)
+}
+
+// tileIcon is a tile's emblem at its left: the icon in the tile's colour on a
+// faint disc of it, centred down the tile.
+func tileIcon(icon fyne.Resource, accent color.Color) fyne.CanvasObject {
+	disc := canvas.NewCircle(widgets.WithAlpha(accent, .18))
+	image := widget.NewIcon(theme.NewThemedResource(icon))
+	tinted := container.NewThemeOverride(container.New(layout.NewCustomPaddedLayout(7, 7, 7, 7), image),
+		widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: accent})
+	badge := container.NewStack(disc, tinted)
+	return container.New(layout.NewCustomPaddedLayout(0, 0, 0, theme.Padding()*2), container.NewCenter(
+		container.NewGridWrap(fyne.NewSquareSize(36), badge)))
 }
 
 // tileNote is the small line under a tile's figure, cut short with an
@@ -860,19 +898,32 @@ func (v *view) side() fyne.CanvasObject {
 	// the key opens its issues.
 	colors := pal.sliceColors(s.Statuses)
 	all := s.Total + s.NotPlanned
-	key := container.New(layout.NewCustomPaddedVBoxLayout(0))
+	keyRows := container.New(&statusLegendColumn{})
+	var keyTargets []*shell.Tappable
 	for i, slice := range s.Statuses {
-		name := shell.FitText(slice.Label, theme.TextSize(), fyne.TextStyle{}, legendNameW)
-		entry := legendEntry(pal, colors[i], name, fmt.Sprintf("%d  ·  %s", slice.Count, share(slice.Count, all)))
-		key.Add(shell.NewCardTappable(container.New(layout.NewCustomPaddedLayout(2, 2, 6, 6), entry), func() {
-			v.p.showIssues(slice.Label, issueGroup{Name: "", Items: slice.Items})
-		}))
+		entry := statusLegendEntry(pal, colors[i], slice, all)
+		row := shell.NewCardTappable(entry, func() {
+			v.p.showIssues(titleCase(slice.Label), issueGroup{Items: slice.Items, ByPerson: true})
+		})
+		keyRows.Add(row)
+		keyTargets = append(keyTargets, row)
 	}
+	key := shell.HoverRows(keyRows, keyTargets)
 	donut := Donut(s.Statuses, colors, fmt.Sprintf("%d%%", s.RingPercent()), "Done", pal, v.arrive)
-	status := container.NewVBox(panelHeading("Status", nil), shell.VGap(theme.Padding()*2),
-		container.NewBorder(nil, nil, donut, nil, container.NewCenter(key)))
+	statusFill := canvas.NewRectangle(shell.BlendColor(pal.surface, pal.ink, .06))
+	statusFill.CornerRadius = shell.CellCornerRadius
+	legendFill := canvas.NewRectangle(pal.surface)
+	legendFill.CornerRadius = 8
+	legendArea := container.NewStack(legendFill, key)
+	chartArea := container.New(layout.NewCustomPaddedLayout(0, 0, 0, theme.Padding()*2), donut)
+	statusBody := container.NewBorder(nil, nil, chartArea, nil, legendArea)
+	statusTitle := container.New(layout.NewCustomPaddedLayout(0, theme.Padding()*3, theme.Padding()*2, 0), panelHeading("Status", nil))
+	statusInside := container.NewVBox(statusTitle, statusBody)
+	statusCard := container.NewStack(statusFill,
+		container.New(layout.NewCustomPaddedLayout(theme.Padding()*2, theme.Padding()*3.5, theme.Padding()*2.5, theme.Padding()*1.5), statusInside))
+	status := container.NewVBox(statusCard, shell.VGap(theme.Padding()*2))
 	// The key's lines uncover one after another as the ring sweeps round.
-	v.arrive.RevealIn(key)
+	v.arrive.RevealIn(keyRows)
 
 	// Workload: a bar a person, finished and still open. A line opens what
 	// that person holds.
@@ -926,8 +977,9 @@ func (v *view) side() fyne.CanvasObject {
 	rule := func() fyne.CanvasObject {
 		return container.New(layout.NewCustomPaddedLayout(theme.Padding()*2, theme.Padding()*2, 0, 0), widget.NewSeparator())
 	}
-	column := container.New(&sideLayout{parents: natural}, status, rule(), workload, rule(), parents)
-	return shell.Panel(column)
+	column := container.New(&sideLayout{parents: natural}, status, workload, rule(), parents)
+	return shell.PanelFrame(container.New(layout.NewCustomPaddedLayout(
+		theme.InnerPadding()*1.5, theme.InnerPadding()*1.5, theme.InnerPadding(), theme.InnerPadding()), column))
 }
 
 // sideLayout stacks the left-hand column: the status at its own height, the
@@ -947,8 +999,10 @@ func (l *sideLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 }
 
 func (l *sideLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
-	status, rule1, workload, rule2, parents := objects[0], objects[1], objects[2], objects[3], objects[4]
-	fixed := status.MinSize().Height + rule1.MinSize().Height + rule2.MinSize().Height
+	status, workload, rule, parents := objects[0], objects[1], objects[2], objects[3]
+	// Measure the key at its actual width before reserving its height.
+	status.Resize(fyne.NewSize(size.Width, status.MinSize().Height))
+	fixed := status.MinSize().Height + rule.MinSize().Height
 	room := size.Height - fixed - max(workload.MinSize().Height, workloadFloor)
 	parentsHeight := max(min(l.parents(), room), parents.MinSize().Height)
 	y := float32(0)
@@ -958,10 +1012,9 @@ func (l *sideLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 		y += h
 	}
 	place(status, status.MinSize().Height)
-	place(rule1, rule1.MinSize().Height)
-	rest := size.Height - y - rule2.MinSize().Height - parentsHeight
+	rest := size.Height - y - rule.MinSize().Height - parentsHeight
 	place(workload, max(rest, workload.MinSize().Height))
-	place(rule2, rule2.MinSize().Height)
+	place(rule, rule.MinSize().Height)
 	place(parents, parentsHeight)
 }
 
@@ -973,6 +1026,7 @@ func (v *view) parents() (fyne.CanvasObject, func() float32) {
 	pal := v.pal
 	pad := theme.Padding()
 	list := newHoverList(pad)
+	list.Held = &v.p.parentHover
 	// Each row's tick and bar, which are all that move as the page arrives;
 	// a parent that could not be read has no bar.
 	var ticks []*widgets.TickCheck
@@ -1000,13 +1054,14 @@ func (v *view) parents() (fyne.CanvasObject, func() float32) {
 			h.SizeName = theme.SizeNameCaptionText
 			h.Truncation = fyne.TextTruncateEllipsis
 		}
+		linkArea := hugLink(link)
 		var body fyne.CanvasObject
 		var rowBar *bar
 		if parent.Err != "" {
 			problem := widget.NewLabel(parent.Err)
 			problem.SizeName = theme.SizeNameCaptionText
 			problem.Wrapping = fyne.TextWrapWord
-			body = container.New(layout.NewCustomPaddedVBoxLayout(0), tight(link),
+			body = container.New(layout.NewCustomPaddedVBoxLayout(0), tight(linkArea),
 				tight(container.NewThemeOverride(problem, errorInk{theme.Current()})))
 		} else {
 			ink, fill := pal.ink, pal.done
@@ -1017,7 +1072,7 @@ func (v *view) parents() (fyne.CanvasObject, func() float32) {
 			figure.TextStyle = fyne.TextStyle{Bold: true}
 			b := newBar([]Segment{{epic.Done, fill}}, epic.Total, pal.grid).thin(6)
 			rowBar = &b
-			body = container.New(layout.NewCustomPaddedVBoxLayout(0), tight(link),
+			body = container.New(layout.NewCustomPaddedVBoxLayout(0), tight(linkArea),
 				container.NewBorder(nil, nil, nil, container.NewCenter(figure), b.box))
 		}
 		ref, id := parent.Ref, v.cur.ID
@@ -1036,7 +1091,11 @@ func (v *view) parents() (fyne.CanvasObject, func() float32) {
 		}
 		gold := container.NewThemeOverride(tick, goldTick{theme.Current()})
 		ticks, bars, refs = append(ticks, tick), append(bars, rowBar), append(refs, ref)
-		list.add(container.NewBorder(nil, nil, container.NewCenter(gold), nil, body), nil)
+		// The whole row ticks the box; only the link's own words open it.
+		row := list.addAs(key, container.NewBorder(nil, nil, container.NewCenter(gold), nil, body), tick.Toggle)
+		// The ripple spreads beside the box, never over its tick drawing in.
+		row.RippleClear = tick
+		tick.OnTapAt = func(at fyne.Position) { shell.RippleBeside(row, shell.RippleClearOf(row, tick), at) }
 	}
 	// As the page arrives only the ticks and the bars move: one after
 	// another, each tick drawing itself in as its bar grows, over
@@ -1408,10 +1467,10 @@ func (v *view) week() fyne.CanvasObject {
 	// up again and grows the bars of who finished them. The bubbles stay put.
 	arrive := v.arrival(weekSlot, start.Format("2006-01-02"))
 	stats := container.NewGridWithColumns(4,
-		stat(fmt.Sprint(len(done)), "Done", pal.done, done, "Done, "+label),
-		stat(review, "Review", pal.review, reviewItems, "In review"),
-		stat(progress, "Progress", pal.progress, progressItems, "In progress"),
-		stat(fmt.Sprint(len(opened)), "Opened", pal.neutral, opened, "Opened, "+label),
+		stat(fmt.Sprint(len(done)), "Done", pal.done, done, titleCase("Done, "+label)),
+		stat(review, "Review", pal.review, reviewItems, "In Review"),
+		stat(progress, "Progress", pal.progress, progressItems, "In Progress"),
+		stat(fmt.Sprint(len(opened)), "Opened", pal.neutral, opened, titleCase("Opened, "+label)),
 	)
 	arrive.CountUp(figures)
 
@@ -1492,7 +1551,20 @@ func (v *view) buckets(title, none string, list []Bucket, marked int, note strin
 		}
 		spec.Labels = append(spec.Labels, label)
 	}
-	spec.OnTap = func(i int) { v.p.showIssues(title+": "+list[i].Name, byAssignee(issuesIn(list[i].Items))...) }
+	// A sprint's dates are said beside its column under the pointer, and in
+	// the popup it opens.
+	for _, b := range list {
+		if b.Range(v.now) != "" {
+			spec.Tips = make([]ColumnTip, len(list))
+			for i, b := range list {
+				spec.Tips[i] = ColumnTip{Title: b.Name, Line: b.Range(v.now)}
+			}
+			break
+		}
+	}
+	spec.OnTap = func(i int) {
+		v.p.showNotedIssues(titleCase(title)+": "+list[i].Name, list[i].Range(v.now), byAssignee(issuesIn(list[i].Items))...)
+	}
 	key := legend(legendEntry(pal, pal.done, "Done", ""), legendEntry(pal, pal.progress, "Open", ""))
 	// Every sprint or priority with an issue in it is shown; when there are
 	// more than fit, the chart scrolls sideways.
@@ -1519,12 +1591,12 @@ func (v *view) sprints() fyne.CanvasObject {
 	if marked >= 0 {
 		note = strings.TrimSpace(note + " Gold: the sprint running now.")
 	}
-	return v.buckets("By sprint", "No board gives these issues a Sprint.", list, marked, note)
+	return v.buckets("By Sprint", "No board gives these issues a Sprint.", list, marked, note)
 }
 
 // priorities splits the scope by the board's Priority, or priority labels.
 func (v *view) priorities() fyne.CanvasObject {
-	return v.buckets("By priority", "No board Priority or priority label (P1, priority: high) on these issues.",
+	return v.buckets("By Priority", "No board Priority or priority label (P1, priority: high) on these issues.",
 		v.s.Priorities, -1, "")
 }
 
@@ -1599,6 +1671,12 @@ const (
 // showIssues opens a popup of the issues behind a figure, a bubble each,
 // arriving one after another once the popup is in place.
 func (p *page) showIssues(title string, groups ...issueGroup) {
+	p.showNotedIssues(title, "", groups...)
+}
+
+// showNotedIssues is showIssues with note, such as a sprint's dates, after
+// the title.
+func (p *page) showNotedIssues(title, note string, groups ...issueGroup) {
 	win := p.ui.Win
 	if win == nil {
 		return
@@ -1619,15 +1697,19 @@ func (p *page) showIssues(title string, groups ...issueGroup) {
 			continue
 		}
 		if g.Name != "" {
-			rows.Add(panelHeading(fmt.Sprintf("%s  ·  %d", g.Name, len(g.Items)), nil))
+			rows.Add(popupGroupBand(fmt.Sprintf("%s  ·  %d", g.Name, len(g.Items))))
 		}
 		blocks := []issueGroup{{Items: g.Items}}
 		if g.ByPerson {
 			blocks = heldBy(g.Items)
 		}
-		for _, b := range blocks {
+		for k, b := range blocks {
 			if b.Name != "" {
-				who := caption(fmt.Sprintf("%s  ·  %d", b.Name, len(b.Items)), pal.ink)
+				// A gold line between one person's issues and the next's.
+				if k > 0 {
+					rows.Add(assigneeRule())
+				}
+				who := caption(fmt.Sprintf("%s  ·  %d", b.Name, len(b.Items)), widgets.LogoGold)
 				who.TextStyle = fyne.TextStyle{Bold: true}
 				rows.Add(container.New(layout.NewCustomPaddedLayout(theme.Padding(), 0, theme.Padding(), 0), who))
 			}
@@ -1661,9 +1743,9 @@ func (p *page) showIssues(title string, groups ...issueGroup) {
 	if total == 1 {
 		count = "1 issue"
 	}
-	content := container.NewBorder(nil, shell.DialogButtons(done, export), nil, nil,
+	content := container.NewBorder(popupTitleBand(title+"  ·  "+count, note), shell.DialogButtons(done, export), nil, nil,
 		container.NewVScroll(container.New(layout.NewCustomPaddedLayout(0, 0, 0, 12), rows)))
-	d = dialog.NewCustomWithoutButtons(p.ui.PopupTitle(title+"  ·  "+count), content, win)
+	d = dialog.NewCustomWithoutButtons("", content, win)
 	d.Resize(p.ui.PopupSize())
 	shell.ShowDialog(d, win)
 }
@@ -1781,7 +1863,7 @@ func (p *page) showForecast(s Summary, now time.Time) func() {
 
 		var d dialog.Dialog
 		done := widget.NewButton("Close", func() { shell.CloseDialog(d, win) })
-		d = dialog.NewCustomWithoutButtons("Forecast", container.NewBorder(nil, shell.DialogButtons(done), nil, nil,
+		d = dialog.NewCustomWithoutButtons("", container.NewBorder(popupTitleBand("Forecast", ""), shell.DialogButtons(done), nil, nil,
 			container.NewVScroll(body)), win)
 		// As tall as its contents, with room for the answers to come.
 		size := p.ui.PopupSize()
@@ -1798,10 +1880,11 @@ func (p *page) issueBubble(it Item, now time.Time, pal palette) fyne.CanvasObjec
 	switch {
 	case it.NotPlanned:
 		state = "Not planned"
+	case it.Status != "":
+		// The board's word for it, closed or not: Duplicated says more than Done.
+		state = it.Status
 	case it.Closed:
 		state = "Done"
-	case it.Status != "":
-		state = it.Status
 	}
 	who := "unassigned"
 	if len(it.Assignees) > 0 {
@@ -1826,7 +1909,15 @@ func (p *page) issueBubble(it Item, now time.Time, pal palette) fyne.CanvasObjec
 		caption(who, pal.soft),
 		caption(when, pal.soft),
 	)
-	return shell.HoverBubble(shell.OrgColor(p.ui.Cfg, org), body)
+	bubble := shell.HoverBubble(shell.OrgColor(p.ui.Cfg, org), body)
+	if it.URL == "" {
+		return bubble
+	}
+	// A click anywhere on the bubble opens the issue, as its link does, and
+	// the bubble presses as a card does.
+	card := shell.NewTappable(bubble, func() { shell.OpenLink(it.URL) })
+	card.Press = true
+	return card
 }
 
 // ---- adding, editing and deleting ----
@@ -1834,7 +1925,7 @@ func (p *page) issueBubble(it Item, now time.Time, pal palette) fyne.CanvasObjec
 // openEditor is the popup that adds a project (existing nil) or changes one.
 func (p *page) openEditor(existing *Project) {
 	win := p.ui.Win
-	title, id := "New project", ""
+	title, id := "New Project", ""
 	name := widget.NewEntry()
 	name.SetPlaceHolder("Checkout redesign")
 	issues := widget.NewMultiLineEntry()
@@ -1842,7 +1933,7 @@ func (p *page) openEditor(existing *Project) {
 	issues.Wrapping = fyne.TextWrapWord
 	issues.SetMinRowsVisible(editorRows)
 	if existing != nil {
-		title, id = "Edit project", existing.ID
+		title, id = "Edit Project", existing.ID
 		name.SetText(existing.Name)
 		issues.SetText(strings.Join(existing.Issues, "\n"))
 	}
@@ -1895,6 +1986,7 @@ func (p *page) openEditor(existing *Project) {
 		p.load(false)
 	})
 	form := container.NewVBox(
+		popupTitleBand(title, ""),
 		shell.LabeledHint("Name", "Shown on the project's tab.", name),
 		shell.LabeledHint("Parent issues",
 			"Paste the links of the issues whose child issues make up the project, one per line. "+
@@ -1903,7 +1995,7 @@ func (p *page) openEditor(existing *Project) {
 		problem,
 		shell.DialogButtons(cancel, save),
 	)
-	d = dialog.NewCustomWithoutButtons(title, form, win)
+	d = dialog.NewCustomWithoutButtons("", form, win)
 	width, maxRows := float32(620), 0
 	if win != nil && win.Canvas() != nil && win.Canvas().Size().Width > 0 {
 		size := win.Canvas().Size()

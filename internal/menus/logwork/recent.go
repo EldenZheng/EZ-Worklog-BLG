@@ -245,8 +245,9 @@ func entryTable(ui *shell.UI, rows []backend.Row, refresh func()) fyne.CanvasObj
 		return widget.NewLabel("Nothing logged yet.")
 	}
 	tiles := make([]fyne.CanvasObject, 0, len(rows))
+	dup := duplicateRows(rows)
 	for _, r := range rows {
-		tile := RowTile(ui, r, refresh)
+		tile := rowTile(ui, r, refresh, dup[r["id"]])
 		if r["pushed_at"] == "" {
 			// Still ours to move: it can be dragged onto a day in the strip
 			// above. A pushed entry is already a date on the board, so it stays
@@ -285,6 +286,9 @@ func RowLabel(ui *shell.UI, issue string, commits []backend.Commit) string {
 // date. Issue-backed rows read like the issue list, using the loaded title and
 // falling back to the ref while that title is unavailable.
 func RowTitle(ui *shell.UI, r backend.Row) string {
+	if r["type"] == backend.KindMeeting && strings.TrimSpace(r["meeting_title"]) != "" {
+		return strings.TrimSpace(r["meeting_title"])
+	}
 	if info, ok := ui.IssueInfo[r["issue"]]; ok && strings.TrimSpace(info.Title) != "" {
 		return strings.TrimSpace(info.Title)
 	}
@@ -330,6 +334,12 @@ func RowTitle(ui *shell.UI, r backend.Row) string {
 // RowTile is one locally saved entry: what it is, when, how long, and what can
 // still be done to it.
 func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
+	return rowTile(ui, r, refresh, false)
+}
+
+// rowTile is RowTile, tagged when another entry on the same day goes to the
+// same issue (or is another bulk review).
+func rowTile(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.CanvasObject {
 	accent := shell.RowAccentColor(ui.Cfg, r)
 	muted := theme.Color(theme.ColorNamePlaceHolder)
 	caption := func(s string) fyne.CanvasObject { return fitCaption(shell.Truncate(s, 56), muted) }
@@ -375,6 +385,8 @@ func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	summary := caption(fmt.Sprintf("%s  ·  %d min  ·  %s", r["date"], r.Minutes(), issue))
 	if backend.RowIsSingleCodeReview(r) {
 		summary = container.NewBorder(nil, nil, nil, container.NewCenter(shell.CodeReviewTag()), summary)
+	} else if backend.MissingMeetingRecording(r) {
+		summary = container.NewBorder(nil, nil, nil, container.NewCenter(shell.MissingMeetingRecordingTag()), summary)
 	}
 	foot := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), container.NewVBox(
 		summary,
@@ -382,9 +394,7 @@ func RowTile(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 
 	push, edit, del := rowActions(ui, r, refresh)
 	actionItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
-	if shell.RowPartlySaved(r) {
-		actionItems = append(actionItems, shell.SavedTag("partly saved"))
-	}
+	actionItems = append(actionItems, rowTags(ui, r, duplicate, false)...)
 	actions := container.NewHBox(append(actionItems, layout.NewSpacer(), widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del))...)
 
 	body := container.NewBorder(nil, container.NewVBox(foot, actions), nil, nil, title)

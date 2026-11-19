@@ -43,6 +43,16 @@ const (
 	KindIndependent = "independent"
 )
 
+func RowPushMode(r Row) string {
+	if RowCreatesOwnIssue(r) && r["type"] != KindIndependent {
+		return "issue"
+	}
+	if r["pushed_at"] != "" && r["mode"] == "issue" {
+		return "issue"
+	}
+	return "subissue"
+}
+
 // RowIsBulkCodeReview includes the early bulk drafts that used the single
 // review kind before Bulk Review had its own stored type.
 func RowIsBulkCodeReview(r Row) bool {
@@ -378,7 +388,13 @@ func EnsureIssueRef(cfg Config, r Row) (Row, error) {
 
 	switch r["type"] {
 	case KindMeeting:
-		ref, err := EnsureMeetingIssue(cfg, r["date"], body)
+		var ref string
+		var err error
+		if strings.TrimSpace(r["meeting_title"]) != "" {
+			ref, err = ensureNamedMeetingIssue(cfg, r)
+		} else {
+			ref, err = EnsureMeetingIssue(cfg, r["date"], body)
+		}
 		if err != nil {
 			return Row{}, err
 		}

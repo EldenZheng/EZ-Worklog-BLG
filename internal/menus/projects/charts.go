@@ -388,6 +388,7 @@ func BarTable(rows []BarRow, p palette, arrive *shell.Arrival) fyne.CanvasObject
 		bars = append(bars, b)
 		// The last of the four lies over the whole line and takes its clicks.
 		hit := shell.NewTappable(canvas.NewRectangle(color.Transparent), row.OnTap)
+		hit.Ripple = true
 		if row.OnTap == nil {
 			hit.Look = desktop.DefaultCursor
 		}
@@ -542,7 +543,9 @@ func BurnUp(weeks []WeekPoint, projection int, p palette, arrive *shell.Arrival)
 		l.tipLines = append(l.tipLines, add(caption("", p.ink)).(*canvas.Text))
 	}
 	l.tipKeys[2].Hide() // the totals line has no colour of its own
-	l.showHover()
+	l.hvInks = burnHoverInks{ink: p.ink, surface: p.surface, scope: p.review, done: p.done, keys: [2]color.Color{p.review, p.done}}
+	l.hvWeek = -1
+	l.paintHover()
 
 	c := &burnUpChart{layout: l}
 	c.box = container.New(l, l.objects...)
@@ -568,13 +571,21 @@ func (c *burnUpChart) MouseIn(e *desktop.MouseEvent) { c.MouseMoved(e) }
 func (c *burnUpChart) MouseMoved(e *desktop.MouseEvent) {
 	if i := c.layout.weekAt(e.Position.X); i != c.layout.hover {
 		c.layout.hover = i
+		c.layout.moved = true
 		c.layout.Layout(c.box.Objects, c.box.Size())
 	}
 }
 
 func (c *burnUpChart) MouseOut() {
 	c.layout.hover = -1
+	c.layout.moved = true
 	c.layout.Layout(c.box.Objects, c.box.Size())
+}
+
+// burnHoverInks are the hover marks' colours at full strength.
+type burnHoverInks struct {
+	ink, surface, scope, done color.Color
+	keys                      [2]color.Color
 }
 
 type burnUpLayout struct {
@@ -593,6 +604,18 @@ type burnUpLayout struct {
 	tipTitle        *canvas.Text
 	tipKeys         []*canvas.Rectangle
 	tipLines        []*canvas.Text
+	// moved says the pointer has just moved to another week, or off them,
+	// so the next layout moves the hover marks rather than putting them.
+	moved bool
+	// hv is where the hover marks stand now, hvShown how far they have faded
+	// in, and hvWeek and hvInk the week the box speaks of and how far its
+	// text has faded in.
+	hv      burnHover
+	hvShown float32
+	hvInk   float32
+	hvWeek  int
+	hvAnim  *fyne.Animation
+	hvInks  burnHoverInks
 	// share is how far across the plot the lines have been drawn, 0 to 1.
 	share float32
 
@@ -721,83 +744,210 @@ func (l *burnUpLayout) weekAt(x float32) int {
 	return i
 }
 
-// showHover shows or hides the hover marks as a week is under the pointer.
-func (l *burnUpLayout) showHover() {
-	objects := []fyne.CanvasObject{l.guide, l.hoverScope, l.hoverDone, l.tipBg, l.tipTitle, l.tipKeys[0], l.tipKeys[1]}
-	for _, t := range l.tipLines {
-		objects = append(objects, t)
+// burnHover is where the hover marks stand: the guide, the two dots on it,
+// and the box beside them.
+type burnHover struct {
+	at, top, height float32
+	scopeY, doneY   float32
+	boxAt           fyne.Position
+	box             fyne.Size
+}
+
+// burnTip is what the box says about week i.
+func (l *burnUpLayout) burnTip(i int) (title string, lines [3]string) {
+	w := l.weeks[i]
+	title = weekLabel(w.Start, i == len(l.weeks)-1)
+	if i != len(l.weeks)-1 {
+		title = "Week of " + title
 	}
-	for _, o := range objects {
-		if l.hover >= 0 {
-			o.Show()
-		} else {
-			o.Hide()
-		}
+	lines = [3]string{
+		fmt.Sprintf("Created  %d", w.Opened),
+		fmt.Sprintf("Done  %d", w.Closed),
+		fmt.Sprintf("By then: %d of %d done", w.Done, w.Scope),
 	}
+	return title, lines
+}
+
+const burnTipPad, burnTipKey, burnTipGap = float32(8), float32(8), float32(6)
+
+// burnTipIndent is how far line i of the box stands in, past its colour key.
+func burnTipIndent(i int) float32 {
+	if i < 2 {
+		return burnTipKey + burnTipGap
+	}
+	return 0
 }
 
 // placeHover puts the guide, the dots and the box on the week under the
 // pointer: the box on the guide's right, or its left near the chart's end.
+// When the pointer has just moved they go as the gold hover does: fading in
+// at the first week, sliding from week to week, and fading out where they
+// stood when the pointer leaves. The text crossfades on the way, so the new
+// week's never spills out of a box still sized for the old one.
 func (l *burnUpLayout) placeHover(size fyne.Size, x func(int) float32, y func(int) float32, topY, plotHeight float32) {
-	l.showHover()
+	slide := l.moved
+	l.moved = false
 	if l.hover < 0 || l.hover >= len(l.weeks) {
+		if slide && l.hvShown > 0 {
+			l.hoverTo(l.hv, false, l.hvWeek)
+		} else if !slide && l.hvAnim == nil {
+			l.hvShown = 0
+			l.paintHover()
+		}
 		return
 	}
 	w := l.weeks[l.hover]
 	at := x(l.hover)
-	l.guide.Move(fyne.NewPos(at, topY))
-	l.guide.Resize(fyne.NewSize(1, plotHeight))
-	for dot, v := range map[*canvas.Circle]int{l.hoverScope: w.Scope, l.hoverDone: w.Done} {
-		dot.Move(fyne.NewPos(at-plotDot/2, y(v)-plotDot/2))
-		dot.Resize(fyne.NewSquareSize(plotDot))
-		dot.Refresh()
-	}
-
-	l.tipTitle.Text = weekLabel(w.Start, l.hover == len(l.weeks)-1)
-	if l.hover != len(l.weeks)-1 {
-		l.tipTitle.Text = "Week of " + l.tipTitle.Text
-	}
-	l.tipLines[0].Text = fmt.Sprintf("Created  %d", w.Opened)
-	l.tipLines[1].Text = fmt.Sprintf("Done  %d", w.Closed)
-	l.tipLines[2].Text = fmt.Sprintf("By then: %d of %d done", w.Done, w.Scope)
-	const pad, key, gap = float32(8), float32(8), float32(6)
-	width := l.tipTitle.MinSize().Width
-	height := l.tipTitle.MinSize().Height
+	title, lines := l.burnTip(l.hover)
+	head := fyne.MeasureText(title, l.tipTitle.TextSize, l.tipTitle.TextStyle)
+	width, height := head.Width, head.Height
 	for i, t := range l.tipLines {
-		t.Refresh()
-		indent := key + gap
-		if i == 2 {
-			indent = 0
-		}
-		width = max(width, indent+t.MinSize().Width)
-		height += t.MinSize().Height
+		m := fyne.MeasureText(lines[i], t.TextSize, t.TextStyle)
+		width = max(width, burnTipIndent(i)+m.Width)
+		height += m.Height
 	}
-	box := fyne.NewSize(width+pad*2, height+pad*2)
+	box := fyne.NewSize(width+burnTipPad*2, height+burnTipPad*2)
 	left := at + 10
 	if left+box.Width > size.Width {
 		left = at - 10 - box.Width
 	}
-	left = max(left, 0)
-	top := topY
-	l.tipBg.Move(fyne.NewPos(left, top))
-	l.tipBg.Resize(box)
-	l.tipBg.Refresh()
-	row := fyne.NewPos(left+pad, top+pad)
+	target := burnHover{at: at, top: topY, height: plotHeight, scopeY: y(w.Scope), doneY: y(w.Done),
+		boxAt: fyne.NewPos(max(left, 0), topY), box: box}
+	if slide {
+		l.hoverTo(target, true, l.hover)
+		return
+	}
+	if l.hvAnim == nil {
+		l.hv, l.hvShown, l.hvInk, l.hvWeek = target, 1, 1, l.hover
+		l.paintHover()
+	}
+}
+
+// hoverTo runs the hover marks to target, shown or not, on the gold hover's
+// timing; week is the week the box is to speak of.
+func (l *burnUpLayout) hoverTo(target burnHover, on bool, week int) {
+	l.stopHover()
+	from, fromShown, fromInk, fromWeek := l.hv, l.hvShown, l.hvInk, l.hvWeek
+	toShown := float32(1)
+	if !on {
+		toShown = 0
+	} else if fromShown < 0.05 {
+		from = target
+	}
+	swap := on && fromShown >= 0.05 && week != fromWeek
+	if !swap && on {
+		l.hvWeek = week
+	}
+	step := func(done float32) {
+		mix := func(a, b float32) float32 { return a + (b-a)*done }
+		l.hv = burnHover{
+			at: mix(from.at, target.at), top: mix(from.top, target.top), height: mix(from.height, target.height),
+			scopeY: mix(from.scopeY, target.scopeY), doneY: mix(from.doneY, target.doneY),
+			boxAt: fyne.NewPos(mix(from.boxAt.X, target.boxAt.X), mix(from.boxAt.Y, target.boxAt.Y)),
+			box:   fyne.NewSize(mix(from.box.Width, target.box.Width), mix(from.box.Height, target.box.Height)),
+		}
+		l.hvShown = mix(fromShown, toShown)
+		switch {
+		case !swap:
+			l.hvInk = fromInk + (1-fromInk)*done
+		case done < 0.5:
+			l.hvWeek, l.hvInk = fromWeek, fromInk*(1-done*2)
+		default:
+			l.hvWeek, l.hvInk = week, done*2-1
+		}
+		l.paintHover()
+	}
+	if !fyne.CurrentApp().Settings().ShowAnimations() {
+		step(1)
+		return
+	}
+	var anim *fyne.Animation
+	anim = fyne.NewAnimation(widgets.HoverDuration, func(done float32) {
+		if l.hvAnim != anim {
+			return
+		}
+		step(done)
+		if done >= 1 {
+			l.hvAnim = nil
+		}
+	})
+	l.hvAnim = anim
+	anim.Curve = fyne.AnimationEaseOut
+	anim.Start()
+}
+
+func (l *burnUpLayout) stopHover() {
+	if l.hvAnim != nil {
+		l.hvAnim.Stop()
+		l.hvAnim = nil
+	}
+}
+
+// paintHover draws the hover marks where they stand, as faded as they are,
+// the box's text cut to the box's width.
+func (l *burnUpLayout) paintHover() {
+	objects := []fyne.CanvasObject{l.guide, l.hoverScope, l.hoverDone, l.tipBg, l.tipTitle, l.tipKeys[0], l.tipKeys[1]}
+	for _, t := range l.tipLines {
+		objects = append(objects, t)
+	}
+	if l.hvShown <= 0 || l.hvWeek < 0 || l.hvWeek >= len(l.weeks) {
+		for _, o := range objects {
+			o.Hide()
+		}
+		return
+	}
+	shown, ink, h := l.hvShown, l.hvShown*l.hvInk, l.hv
+	l.guide.FillColor = widgets.WithAlpha(l.hvInks.ink, 0.25*shown)
+	l.guide.Move(fyne.NewPos(h.at, h.top))
+	l.guide.Resize(fyne.NewSize(1, h.height))
+	dots := []struct {
+		dot *canvas.Circle
+		y   float32
+		ink color.Color
+	}{{l.hoverScope, h.scopeY, l.hvInks.scope}, {l.hoverDone, h.doneY, l.hvInks.done}}
+	for _, d := range dots {
+		d.dot.FillColor = widgets.WithAlpha(d.ink, shown)
+		d.dot.StrokeColor = widgets.WithAlpha(l.hvInks.surface, shown)
+		d.dot.Move(fyne.NewPos(h.at-plotDot/2, d.y-plotDot/2))
+		d.dot.Resize(fyne.NewSquareSize(plotDot))
+	}
+	l.tipBg.FillColor = widgets.WithAlpha(theme.Color(theme.ColorNameMenuBackground), shown)
+	l.tipBg.StrokeColor = widgets.WithAlpha(widgets.LogoGold, shown)
+	l.tipBg.Move(h.boxAt)
+	l.tipBg.Resize(h.box)
+
+	title, lines := l.burnTip(l.hvWeek)
+	room := max(h.box.Width-burnTipPad*2, 0)
+	fit := func(t *canvas.Text, full string, width float32) string {
+		text := shell.FitText(full, t.TextSize, t.TextStyle, max(width, 0))
+		if text == "…" {
+			return ""
+		}
+		return text
+	}
+	l.tipTitle.Text = fit(l.tipTitle, title, room)
+	l.tipTitle.Color = widgets.WithAlpha(widgets.LogoGold, ink)
+	row := fyne.NewPos(h.boxAt.X+burnTipPad, h.boxAt.Y+burnTipPad)
 	l.tipTitle.Move(row)
 	l.tipTitle.Resize(l.tipTitle.MinSize())
-	l.tipTitle.Refresh()
-	row.Y += l.tipTitle.MinSize().Height
+	row.Y += fyne.MeasureText(title, l.tipTitle.TextSize, l.tipTitle.TextStyle).Height
 	for i, t := range l.tipLines {
-		m := t.MinSize()
-		indent := float32(0)
+		indent := burnTipIndent(i)
+		t.Text = fit(t, lines[i], room-indent)
+		t.Color = widgets.WithAlpha(l.hvInks.ink, ink)
+		lineHeight := fyne.MeasureText(lines[i], t.TextSize, t.TextStyle).Height
 		if i < 2 {
-			indent = key + gap
-			l.tipKeys[i].Move(fyne.NewPos(row.X, row.Y+(m.Height-key)/2))
-			l.tipKeys[i].Resize(fyne.NewSquareSize(key))
+			l.tipKeys[i].FillColor = widgets.WithAlpha(l.hvInks.keys[i], ink)
+			l.tipKeys[i].Move(fyne.NewPos(row.X, row.Y+(lineHeight-burnTipKey)/2))
+			l.tipKeys[i].Resize(fyne.NewSquareSize(burnTipKey))
 		}
 		t.Move(fyne.NewPos(row.X+indent, row.Y))
-		t.Resize(m)
-		row.Y += m.Height
+		t.Resize(t.MinSize())
+		row.Y += lineHeight
+	}
+	for _, o := range objects {
+		o.Show()
+		o.Refresh()
 	}
 }
 
@@ -853,7 +1003,14 @@ type ColumnSpec struct {
 	// Scrolls asks for room enough that no column is narrower than
 	// columnSlot; put the chart in a sideways scroll.
 	Scrolls bool
+	// Tips, when set, are shown in a box beside the column under the
+	// pointer: a gold title and a line under it. A tip with no title shows
+	// no box.
+	Tips []ColumnTip
 }
+
+// ColumnTip is what the box beside a column under the pointer says.
+type ColumnTip struct{ Title, Line string }
 
 // ColumnChart is a chart of vertical columns. Under the pointer a column is
 // lit; with OnTap set, clicking it runs OnTap.
@@ -940,6 +1097,22 @@ func NewColumnChart(spec ColumnSpec, p palette, arrive *shell.Arrival) *ColumnCh
 			add(label)
 		}
 	}
+	if spec.Tips != nil {
+		// Added last, so the box stands over the columns beside it.
+		l.tipBg = canvas.NewRectangle(theme.Color(theme.ColorNameMenuBackground))
+		l.tipBg.CornerRadius = 6
+		l.tipBg.StrokeColor, l.tipBg.StrokeWidth = widgets.LogoGold, 1
+		l.tipTitle = boldText("", widgets.LogoGold)
+		l.tipTitle.TextSize = theme.CaptionTextSize() + 1
+		l.tipLine = caption("", p.ink)
+		l.tipInk = p.ink
+		add(l.tipBg)
+		add(l.tipTitle)
+		add(l.tipLine)
+		l.tipBg.Hide()
+		l.tipTitle.Hide()
+		l.tipLine.Hide()
+	}
 	c := &ColumnChart{Content: container.New(l, l.objects...), layout: l, onTap: spec.OnTap}
 	c.ExtendBaseWidget(c)
 	if arrive != nil && n > 0 {
@@ -964,15 +1137,20 @@ func NewColumnChart(spec ColumnSpec, p palette, arrive *shell.Arrival) *ColumnCh
 }
 
 func (c *ColumnChart) CreateRenderer() fyne.WidgetRenderer {
-	return &columnRenderer{WidgetRenderer: widget.NewSimpleRenderer(c.Content), pill: c.layout.pill}
+	return &columnRenderer{WidgetRenderer: widget.NewSimpleRenderer(c.Content), pill: c.layout.pill, layout: c.layout}
 }
 
 type columnRenderer struct {
 	fyne.WidgetRenderer
-	pill *widgets.HoverPill
+	pill   *widgets.HoverPill
+	layout *columnLayout
 }
 
-func (r *columnRenderer) Destroy() { r.pill.Stop(); r.WidgetRenderer.Destroy() }
+func (r *columnRenderer) Destroy() {
+	r.pill.Stop()
+	r.layout.stopTip()
+	r.WidgetRenderer.Destroy()
+}
 
 func (c *ColumnChart) slotAt(x float32) int {
 	n := len(c.layout.spec.Stacks)
@@ -985,6 +1163,12 @@ func (c *ColumnChart) slotAt(x float32) int {
 
 func (c *ColumnChart) Tapped(e *fyne.PointEvent) {
 	if i := c.slotAt(e.Position.X); i >= 0 && c.onTap != nil {
+		// The column clicked ripples across its gold hover.
+		hover := c.layout.hover
+		c.layout.hover = i
+		pos, frame := c.layout.hoverFrame(c.Content.Size())
+		c.layout.hover = hover
+		shell.RippleIn(c.Content, pos, frame, e.AbsolutePosition)
 		c.onTap(i)
 	}
 }
@@ -1027,6 +1211,20 @@ type columnLayout struct {
 	dots        []*canvas.Circle
 	figures     []*canvas.Text
 	labels      []*canvas.Text
+	// tipBg, tipTitle and tipLine are the box beside the column under the
+	// pointer, when the spec has Tips.
+	tipBg             *canvas.Rectangle
+	tipTitle, tipLine *canvas.Text
+	tipInk            color.Color
+	// Where the box stands and how far it has faded in, as it moves.
+	tipAt    fyne.Position
+	tipBox   fyne.Size
+	tipShown float32
+	tipAnim  *fyne.Animation
+	// tipCur is the text the box is drawing and tipInkShown how far that
+	// text has faded in, which runs apart from the box when it changes.
+	tipCur      ColumnTip
+	tipInkShown float32
 	// plot is the area the columns stand in, from the last Layout.
 	plotTop, base float32
 }
@@ -1072,6 +1270,7 @@ func (l *columnLayout) placeWashes(size fyne.Size) {
 		pos, frame := l.hoverFrame(size)
 		l.pill.Fit(pos, frame)
 	}
+	l.placeTip(size, false)
 }
 
 func (l *columnLayout) hoverFrame(size fyne.Size) (fyne.Position, fyne.Size) {
@@ -1082,6 +1281,172 @@ func (l *columnLayout) hoverFrame(size fyne.Size) (fyne.Position, fyne.Size) {
 func (l *columnLayout) moveHover(size fyne.Size) {
 	pos, frame := l.hoverFrame(size)
 	l.pill.MoveTo(pos, frame, l.hover >= 0)
+	l.placeTip(size, true)
+}
+
+// placeTip puts the box on the right of the column under the pointer, or on
+// its left where the chart runs out, level with the top of the plot. With
+// slide set it moves as the gold hover does: it fades in at the first column,
+// slides from one column to the next, and fades out where it stood when the
+// pointer leaves. Without it, a box already shown is just kept in place.
+func (l *columnLayout) placeTip(size fyne.Size, slide bool) {
+	if l.tipBg == nil {
+		return
+	}
+	var tip ColumnTip
+	if l.hover >= 0 && l.hover < len(l.spec.Tips) {
+		tip = l.spec.Tips[l.hover]
+	}
+	n := len(l.spec.Stacks)
+	on := tip.Title != "" && n > 0 && size.Width > 0
+	if !on {
+		if slide && l.tipShown > 0 {
+			l.tipTo(l.tipAt, l.tipBox, false, l.tipCur)
+		} else if !slide && l.tipAnim == nil {
+			l.tipShown = 0
+			l.paintTip()
+		}
+		return
+	}
+	box := l.tipSize(tip)
+	slot := size.Width / float32(n)
+	left := slot*float32(l.hover+1) + 2
+	if left+box.Width > size.Width {
+		left = slot*float32(l.hover) - 2 - box.Width
+	}
+	at := fyne.NewPos(max(left, 0), l.plotTop)
+	if slide {
+		l.tipTo(at, box, true, tip)
+		return
+	}
+	if l.tipAnim == nil {
+		l.tipAt, l.tipBox, l.tipShown = at, box, 1
+		l.tipCur, l.tipInkShown = tip, 1
+		l.paintTip()
+	}
+}
+
+// tipPad is the room inside the box around its text.
+const tipPad = float32(8)
+
+// tipSize is the box that holds tip's two lines.
+func (l *columnLayout) tipSize(tip ColumnTip) fyne.Size {
+	title := fyne.MeasureText(tip.Title, l.tipTitle.TextSize, l.tipTitle.TextStyle)
+	line := fyne.Size{}
+	if tip.Line != "" {
+		line = fyne.MeasureText(tip.Line, l.tipLine.TextSize, l.tipLine.TextStyle)
+	}
+	return fyne.NewSize(max(title.Width, line.Width)+tipPad*2, title.Height+line.Height+tipPad*2)
+}
+
+// tipTo runs the box to at and size, shown or not, on the gold hover's timing.
+// Moving from one column's tip to another's, the old text fades out over the
+// first half and the new one fades in over the second, so neither is seen
+// spilling out of a box still sized for the other.
+func (l *columnLayout) tipTo(at fyne.Position, box fyne.Size, on bool, next ColumnTip) {
+	l.stopTip()
+	fromAt, fromBox, fromShown := l.tipAt, l.tipBox, l.tipShown
+	from, fromInk := l.tipCur, l.tipInkShown
+	toShown := float32(1)
+	if !on {
+		toShown = 0
+	} else if fromShown < 0.05 {
+		fromAt, fromBox = at, box
+	}
+	swap := on && fromShown >= 0.05 && next != from
+	if !swap {
+		l.tipCur = next
+		if !on {
+			l.tipCur = from
+		}
+	}
+	step := func(done float32) {
+		mix := func(a, b float32) float32 { return a + (b-a)*done }
+		l.tipAt = fyne.NewPos(mix(fromAt.X, at.X), mix(fromAt.Y, at.Y))
+		l.tipBox = fyne.NewSize(mix(fromBox.Width, box.Width), mix(fromBox.Height, box.Height))
+		l.tipShown = mix(fromShown, toShown)
+		switch {
+		case !swap:
+			// A text half faded when the move began comes back up.
+			l.tipInkShown = fromInk + (1-fromInk)*done
+		case done < 0.5:
+			l.tipCur, l.tipInkShown = from, fromInk*(1-done*2)
+		default:
+			l.tipCur, l.tipInkShown = next, done*2-1
+		}
+		l.paintTip()
+	}
+	if !fyne.CurrentApp().Settings().ShowAnimations() {
+		step(1)
+		return
+	}
+	var anim *fyne.Animation
+	anim = fyne.NewAnimation(widgets.HoverDuration, func(done float32) {
+		if l.tipAnim != anim {
+			return
+		}
+		step(done)
+		if done >= 1 {
+			l.tipAnim = nil
+		}
+	})
+	l.tipAnim = anim
+	anim.Curve = fyne.AnimationEaseOut
+	anim.Start()
+}
+
+func (l *columnLayout) stopTip() {
+	if l.tipAnim != nil {
+		l.tipAnim.Stop()
+		l.tipAnim = nil
+	}
+}
+
+// paintTip draws the box where it stands, as see-through as it is faded, its
+// text cut to the box's width so it never runs past the edge.
+func (l *columnLayout) paintTip() {
+	objects := []fyne.CanvasObject{l.tipBg, l.tipTitle, l.tipLine}
+	if l.tipShown <= 0 {
+		for _, o := range objects {
+			o.Hide()
+		}
+		return
+	}
+	ink := l.tipShown * l.tipInkShown
+	l.tipBg.FillColor = widgets.WithAlpha(theme.Color(theme.ColorNameMenuBackground), l.tipShown)
+	l.tipBg.StrokeColor = widgets.WithAlpha(widgets.LogoGold, l.tipShown)
+	l.tipTitle.Color = widgets.WithAlpha(widgets.LogoGold, ink)
+	l.tipLine.Color = widgets.WithAlpha(l.tipInk, ink)
+	l.tipBg.Move(l.tipAt)
+	l.tipBg.Resize(l.tipBox)
+	room := max(l.tipBox.Width-tipPad*2, 0)
+	fit := func(t *canvas.Text, full string) string {
+		if full == "" {
+			return ""
+		}
+		text := shell.FitText(full, t.TextSize, t.TextStyle, room)
+		if text == "…" {
+			return ""
+		}
+		return text
+	}
+	l.tipTitle.Text = fit(l.tipTitle, l.tipCur.Title)
+	l.tipLine.Text = fit(l.tipLine, l.tipCur.Line)
+	lineHeight := fyne.MeasureText("M", l.tipTitle.TextSize, l.tipTitle.TextStyle).Height
+	l.tipTitle.Move(fyne.NewPos(l.tipAt.X+tipPad, l.tipAt.Y+tipPad))
+	l.tipTitle.Resize(l.tipTitle.MinSize())
+	l.tipLine.Move(fyne.NewPos(l.tipAt.X+tipPad, l.tipAt.Y+tipPad+lineHeight))
+	l.tipLine.Resize(l.tipLine.MinSize())
+	l.tipBg.Show()
+	l.tipTitle.Show()
+	if l.tipLine.Text != "" {
+		l.tipLine.Show()
+	} else {
+		l.tipLine.Hide()
+	}
+	for _, o := range objects {
+		o.Refresh()
+	}
 }
 
 func (l *columnLayout) Layout(_ []fyne.CanvasObject, size fyne.Size) {

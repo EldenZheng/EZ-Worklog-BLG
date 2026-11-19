@@ -13,6 +13,8 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/widgets"
 )
 
 // Every popup opens and closes the same way. Opening, it rises the last few
@@ -31,11 +33,15 @@ import (
 // after showing and placing a widget.PopUp. tests/popup_motion_test.go fails on
 // code that opens or closes one some other way.
 
-// Closing mirrors opening: as long, as far, on the same curve, so neither
-// reads as the slower of the two.
+// Closing mirrors opening: as long, as far, on the same curve. A popup closed by
+// one of its own buttons first holds still while that button shrinks, then
+// closes the same way, the button springing back as the popup goes.
 const (
-	popupOpenTime  = 340 * time.Millisecond
+	popupOpenTime  = 600 * time.Millisecond
 	popupCloseTime = popupOpenTime
+	// popupPressHold is how long a popup closed by its own button stands
+	// before it goes: the time a pressed button takes to shrink.
+	popupPressHold = time.Duration(float64(widgets.ButtonPressDuration) * widgets.ButtonPressCompression)
 	popupRise      = float32(28)
 	popupSink      = popupRise
 )
@@ -65,9 +71,10 @@ type popupMotion struct {
 }
 
 var (
-	motions       = map[*widget.PopUp]*popupMotion{}
-	dialogPopups  = map[dialog.Dialog]*widget.PopUp{}
-	closingLayers = map[fyne.Canvas]*fyne.Container{}
+	motions             = map[*widget.PopUp]*popupMotion{}
+	dialogPopups        = map[dialog.Dialog]*widget.PopUp{}
+	closingLayers       = map[fyne.Canvas]*fyne.Container{}
+	pressedPopupButtons = map[*widget.PopUp]fyne.CanvasObject{}
 )
 
 func animationsOn() bool { return fyne.CurrentApp().Settings().ShowAnimations() }
@@ -95,7 +102,7 @@ func ShowStockDialog(d dialog.Dialog, win fyne.Window, dismiss ...string) {
 func AnimateStockDialog(win fyne.Window, dismiss ...string) {
 	c := win.Canvas()
 	popup := topPopUp(c)
-	if popup == nil || AnimateOpening(c) == nil {
+	if popup == nil {
 		return
 	}
 	names := map[string]bool{}
@@ -108,6 +115,24 @@ func AnimateStockDialog(win fyne.Window, dismiss ...string) {
 		}
 		press := b.OnTapped
 		b.OnTapped = func() { closeAround(c, popup, press) }
+	})
+	AnimateOpening(c)
+}
+
+// A dismissal runs immediately, before the native button animation paints its
+// first frame. Remember which action was pressed so the closing picture can
+// finish that button's feedback without delaying writes or the next popup.
+func trackPopupPresses(popup *widget.PopUp) {
+	eachPopupButton(popup, func(button *widget.Button, control fyne.CanvasObject) {
+		if button.OnTapped == nil {
+			return
+		}
+		action := button.OnTapped
+		button.OnTapped = func() {
+			pressedPopupButtons[popup] = control
+			defer delete(pressedPopupButtons, popup)
+			action()
+		}
 	})
 }
 
@@ -151,6 +176,7 @@ func AnimateOpening(c fyne.Canvas) *fyne.Animation {
 	if popup == nil {
 		return nil
 	}
+	trackPopupPresses(popup)
 	final := popup.Position()
 	blur, shade := overlayBackdrop(top)
 	m := &popupMotion{}
@@ -160,11 +186,13 @@ func AnimateOpening(c fyne.Canvas) *fyne.Animation {
 	if shade != nil {
 		m.shade, m.modal = color.NRGBAModel.Convert(shade.FillColor).(color.NRGBA), true
 	}
+	// The blur keeps its radius and fades in from sharp (see setBlurClear).
+	// Ramping the radius instead stepped between kernels of 1, 3 and 5
+	// samples, and the page behind seemed to pulse as the popup rose.
 	step := func(p float32) {
 		popup.Move(final.AddXY(0, popupRise*(1-p)))
 		if blur != nil {
-			blur.Radius = max(0.5, m.blurRadius*p) // a blur needs a radius above zero
-			blur.Refresh()
+			setBlurClear(blur, 1-p)
 		}
 		if shade != nil {
 			shade.FillColor = fadeTo(m.shade, p)
@@ -293,6 +321,7 @@ func closeAround(c fyne.Canvas, popup *widget.PopUp, hide func()) *fyne.Animatio
 	}
 	pos, size := popup.Position(), popup.Size()
 	picture := capturePopUp(c, pos, size)
+	press := captureClosingPress(c, pos, picture, pressedPopupButtons[popup])
 	hide()
 	if picture == nil || popup.Visible() {
 		return nil // nothing to show, or it did not close after all
@@ -302,6 +331,9 @@ func closeAround(c fyne.Canvas, popup *widget.PopUp, hide func()) *fyne.Animatio
 	ghost.Resize(size)
 	ghost.Move(pos)
 	parts := []fyne.CanvasObject{ghost}
+	if press != nil {
+		parts = append(parts, press.image)
+	}
 	var blur *canvas.Blur
 	var shade *canvas.Rectangle
 	if m.modal {
@@ -309,34 +341,125 @@ func closeAround(c fyne.Canvas, popup *widget.PopUp, hide func()) *fyne.Animatio
 		shade = canvas.NewRectangle(m.shade)
 		blur.Resize(layer.Size())
 		shade.Resize(layer.Size())
-		parts = []fyne.CanvasObject{blur, shade, ghost}
+		parts = append([]fyne.CanvasObject{blur, shade}, parts...)
 	}
 	layer.Objects = append(layer.Objects, parts...)
 	layer.Refresh()
-	anim := fyne.NewAnimation(popupCloseTime, func(p float32) {
-		ghost.Move(pos.AddXY(0, popupSink*p))
-		ghost.Translucency = float64(p)
+	// fade is how far the popup has sunk and faded, 0 to 1.
+	step := func(fade float32) {
+		ghost.Move(pos.AddXY(0, popupSink*fade))
+		ghost.Translucency = float64(fade)
 		ghost.Refresh()
 		if blur != nil {
-			blur.Radius = max(0.5, m.blurRadius*(1-p))
-			blur.Refresh()
-			shade.FillColor = fadeTo(m.shade, 1-p)
+			// The same radius throughout, fading back to sharp, as on opening.
+			setBlurClear(blur, fade)
+			shade.FillColor = fadeTo(m.shade, 1-fade)
 			shade.Refresh()
 		}
-		if p == 1 {
+		if fade == 1 {
 			kept := layer.Objects[:0]
 			for _, o := range layer.Objects {
-				if o != ghost && o != blur && o != shade {
+				if o != ghost && o != blur && o != shade && (press == nil || o != press.image) {
 					kept = append(kept, o)
 				}
 			}
 			layer.Objects = kept
 			layer.Refresh()
 		}
-	})
+	}
+	if press != nil && press.shrunk < 1 {
+		// The button shrank under the pointer before the click was let go, so
+		// the press has been seen: the popup goes at once, as it always does,
+		// and the button springs back on the way. Steady, because closing
+		// usually redraws the page behind and holds up the first frames.
+		feedback := widgets.NewSteady(popupCloseTime, func(p float32) {
+			fade, q := easeOutCubic(p), 1-p
+			back := press.shrunk + (1-press.shrunk)*(1-q*q*q)
+			press.paint(pos.AddXY(0, popupSink*fade), back/press.shrunk, fade)
+			step(fade)
+		})
+		feedback.Start()
+		return feedback.Animation()
+	}
+	if press != nil {
+		// Closed from the keyboard, the button has not moved yet. The popup
+		// holds, solid, for as long as a button takes to shrink, so the press
+		// is seen; then it sinks and fades, the button's return riding down
+		// with it.
+		hold := float32(popupPressHold) / float32(popupPressHold+popupCloseTime)
+		feedback := widgets.NewSteady(popupPressHold+popupCloseTime, func(p float32) {
+			if p < hold {
+				press.paint(pos, widgets.ButtonPressScale(1, widgets.ButtonPressCompression*p/hold), 0)
+				return
+			}
+			out := (p - hold) / (1 - hold)
+			fade := easeOutCubic(out)
+			scale := widgets.ButtonPressScale(1, widgets.ButtonPressCompression+(1-widgets.ButtonPressCompression)*out)
+			press.paint(pos.AddXY(0, popupSink*fade), scale, fade)
+			step(fade)
+		})
+		feedback.Start()
+		return feedback.Animation()
+	}
+	anim := fyne.NewAnimation(popupCloseTime, step)
 	anim.Curve = easeOutCubic
 	anim.Start()
 	return anim
+}
+
+type closingButtonPress struct {
+	image *canvas.Image
+	pos   fyne.Position // relative to the popup's picture
+	size  fyne.Size
+	// shrunk is how far the button was already shrunk in the picture: under 1
+	// when the pointer went down on it, 1 when it was pressed from the keyboard.
+	shrunk float32
+}
+
+// Copy just the clicked button out of the existing closing picture, then fill
+// its original place with the surrounding surface. It can now compress as a
+// separate painted layer while the real popup has already closed safely.
+func captureClosingPress(c fyne.Canvas, popupPos fyne.Position, picture *image.NRGBA, control fyne.CanvasObject) *closingButtonPress {
+	if picture == nil || control == nil {
+		return nil
+	}
+	pos := fyne.CurrentApp().Driver().AbsolutePositionForObject(control)
+	size := control.Size()
+	x0, y0 := c.PixelCoordinateForPosition(pos)
+	x1, y1 := c.PixelCoordinateForPosition(pos.Add(size))
+	px, py := c.PixelCoordinateForPosition(popupPos)
+	area := image.Rect(x0-px, y0-py, x1-px, y1-py)
+	if area.Empty() || !area.In(picture.Bounds()) {
+		return nil
+	}
+	part := image.NewNRGBA(image.Rect(0, 0, area.Dx(), area.Dy()))
+	draw.Draw(part, part.Bounds(), picture, area.Min, draw.Src)
+	surface := picture.At(area.Min.X, area.Min.Y)
+	draw.Draw(picture, area, image.NewUniform(surface), image.Point{}, draw.Src)
+	paint := canvas.NewImageFromImage(part)
+	paint.FillMode = canvas.ImageFillStretch
+	press := &closingButtonPress{image: paint, pos: pos.Subtract(popupPos), size: size, shrunk: 1}
+	// Only the app's own build of Fyne shrinks a button under the pointer and
+	// can say how far.
+	if button := popupButton(control); button != nil {
+		if pressed, ok := any(button).(interface{ WorklogPressScale() float32 }); ok {
+			if s := pressed.WorklogPressScale(); s > 0.5 && s < 0.995 {
+				press.shrunk = s
+			}
+		}
+	}
+	press.paint(popupPos, 1, 0)
+	return press
+}
+
+// paint draws the button's picture at scale about its centre, in a popup that
+// stands at popupPos and has faded by fade.
+func (b *closingButtonPress) paint(popupPos fyne.Position, scale, fade float32) {
+	size := fyne.NewSize(b.size.Width*scale, b.size.Height*scale)
+	b.image.Resize(size)
+	b.image.Move(popupPos.Add(b.pos).AddXY((b.size.Width-size.Width)/2, (b.size.Height-size.Height)/2))
+	b.image.Translucency = float64(fade)
+	b.image.Refresh()
 }
 
 // capturePopUp copies the popup at pos and size out of what c shows now, with
@@ -367,8 +490,18 @@ func captureArea(c fyne.Canvas, pos fyne.Position, size fyne.Size) *image.NRGBA 
 	if area.Empty() || !area.In(shot.Bounds()) {
 		return nil
 	}
+	// What the window shows is solid, whatever alpha the screen's own buffer
+	// is left holding: anything drawn part see-through (a hover fill, a soft
+	// edge, a shadow) lowers it there. Copied as it stands, those parts of the
+	// picture let the page show through, and came out too bright besides.
 	picture := image.NewNRGBA(image.Rect(0, 0, area.Dx(), area.Dy()))
-	draw.Draw(picture, picture.Bounds(), shot, area.Min, draw.Src)
+	for y := 0; y < area.Dy(); y++ {
+		row := picture.Pix[y*picture.Stride:]
+		for x := 0; x < area.Dx(); x++ {
+			r, g, b, _ := shot.At(area.Min.X+x, area.Min.Y+y).RGBA()
+			row[x*4], row[x*4+1], row[x*4+2], row[x*4+3] = uint8(r>>8), uint8(g>>8), uint8(b>>8), 0xff
+		}
+	}
 	return picture
 }
 
@@ -407,18 +540,60 @@ func topPopUp(c fyne.Canvas) *widget.PopUp {
 // eachButton visits the buttons in a popup, through the containers, theme
 // overrides and popups that hold them.
 func eachButton(o fyne.CanvasObject, visit func(*widget.Button)) {
+	eachPopupButton(o, func(button *widget.Button, _ fyne.CanvasObject) { visit(button) })
+}
+
+func eachPopupButton(o fyne.CanvasObject, visit func(*widget.Button, fyne.CanvasObject)) {
+	if b := popupButton(o); b != nil {
+		visit(b, o)
+		return
+	}
 	switch x := o.(type) {
-	case *widget.Button:
-		visit(x)
 	case *fyne.Container:
 		for _, child := range x.Objects {
-			eachButton(child, visit)
+			eachPopupButton(child, visit)
 		}
 	case *container.ThemeOverride:
-		eachButton(x.Content, visit)
+		eachPopupButton(x.Content, visit)
+	case *container.Scroll:
+		// A popup too tall for the window scrolls (FitPopup), buttons and all.
+		eachPopupButton(x.Content, visit)
 	case *widget.PopUp:
-		eachButton(x.Content, visit)
+		eachPopupButton(x.Content, visit)
+	default:
+		if content := overlayContent(o); content != nil {
+			eachPopupButton(content, visit)
+		}
 	}
+}
+
+// Extended buttons retain their original handlers while sharing this policy.
+func popupButton(o fyne.CanvasObject) *widget.Button {
+	if button, ok := o.(*widget.Button); ok {
+		return button
+	}
+	v := reflect.ValueOf(o)
+	if v.Kind() != reflect.Pointer || v.IsNil() || v.Elem().Kind() != reflect.Struct {
+		return nil
+	}
+	field := v.Elem().FieldByName("Button")
+	if field.IsValid() && field.CanAddr() && field.Addr().CanInterface() {
+		button, _ := field.Addr().Interface().(*widget.Button)
+		return button
+	}
+	return nil
+}
+
+// setBlurClear fades b toward the sharp page: 0 is the full blur, 1 none. The
+// app's own build of Fyne adds Clear to the blur (tools/patchfyne); a stock
+// Fyne has no such field, and its blur stays as it is.
+func setBlurClear(b *canvas.Blur, clear float32) {
+	f := reflect.ValueOf(b).Elem().FieldByName("Clear")
+	if !f.IsValid() || !f.CanSet() || f.Kind() != reflect.Float32 {
+		return
+	}
+	f.SetFloat(float64(clear))
+	b.Refresh()
 }
 
 // overlayBackdrop finds the blur and the shade a modal popup lays over the

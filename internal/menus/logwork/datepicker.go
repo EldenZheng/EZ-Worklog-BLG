@@ -39,6 +39,11 @@ type WorklogDatePicker struct {
 	// readout under the field can follow it.
 	OnChanged func(string)
 
+	// Matches, when set, says where the entry being edited goes (rowPlace)
+	// and which saved row it is, if any. Days already holding another
+	// unpushed entry going there are edged in gold.
+	Matches func() (place, exclude string)
+
 	body  *fyne.Container
 	title *widget.Label
 	Grid  *fyne.Container
@@ -245,6 +250,7 @@ func (p *WorklogDatePicker) Refresh() {
 		supportByDay = p.ui.SupportPlaceholdersByDay(from, to, items)
 	}
 	planned := p.plannedByDay(items)
+	matched := p.matchedDays()
 
 	t, err := time.Parse("2006-01", p.Month)
 	if err != nil {
@@ -263,7 +269,7 @@ func (p *WorklogDatePicker) Refresh() {
 	}
 	for day := 1; day <= daysIn; day++ {
 		ds := fmt.Sprintf("%s-%s", p.Month, shell.Pad2(day))
-		grid.Add(p.dayCell(ds, day, byDay[ds], drafts[ds], planned[ds], supportByDay[ds]))
+		grid.Add(p.dayCell(ds, day, byDay[ds], drafts[ds], planned[ds], matched[ds], supportByDay[ds]))
 	}
 	if p.CalendarOpen() {
 		// The blank weekday slots already occupy the grid's leading columns.
@@ -312,6 +318,29 @@ func (p *WorklogDatePicker) plannedByDay(items []backend.WorklogItem) map[string
 	return out
 }
 
+// matchedDays are the days of the month on show already holding an unpushed
+// entry that goes where the one being edited goes.
+func (p *WorklogDatePicker) matchedDays() map[string]bool {
+	out := map[string]bool{}
+	if p.Matches == nil {
+		return out
+	}
+	place, exclude := p.Matches()
+	if place == "" {
+		return out
+	}
+	rows, err := p.ui.Store.ReadRows()
+	if err != nil {
+		return out
+	}
+	for _, r := range rows {
+		if r["pushed_at"] == "" && strings.HasPrefix(r["date"], p.Month) && (exclude == "" || r["id"] != exclude) && rowPlace(r) == place {
+			out[r["date"]] = true
+		}
+	}
+	return out
+}
+
 // pickerCellMinHeight is a floor, not a size: the date, its score and what it
 // still owes, with enough room left that a day is a comfortable target for the
 // pointer.
@@ -339,7 +368,7 @@ func DayOwedLine(mins, draft int) string {
 
 // dayCell is one day in the picker: the date, what it holds against the target,
 // and the wash that says which kind of day it is.
-func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, draft, planned int, supportMinutes ...int) fyne.CanvasObject {
+func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, draft, planned int, matched bool, supportMinutes ...int) fyne.CanvasObject {
 	support := 0
 	if len(supportMinutes) > 0 {
 		support = supportMinutes[0]
@@ -386,8 +415,11 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 	border.CornerRadius = shell.CellCornerRadius
 	border.StrokeWidth = 1
 	border.StrokeColor = theme.Color(theme.ColorNameInputBorder)
-	if ds == p.date {
-		border.StrokeColor = theme.Color(theme.ColorNamePrimary)
+	chosen := ds == p.date
+	if chosen || matched {
+		// The day picked, and any day already holding an entry for the same
+		// issue: edged in gold. The day picked has a gold tick too.
+		border.StrokeColor = widgets.LogoGold
 		border.StrokeWidth = 2
 	}
 	floor := canvas.NewRectangle(color.Transparent)
@@ -399,7 +431,26 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 	stack := container.NewStack(floor, wash,
 		shell.VMeterFillPlanned(p.ui.Cfg, byOrg, draft, planned, backend.Target, shell.CellCornerRadius, support), border,
 		container.NewPadded(container.NewBorder(nil, bar, nil, nil, container.NewVBox(body...))))
-	return shell.NewTappable(stack, func() {
+	if chosen {
+		tick := container.NewThemeOverride(widget.NewIcon(theme.ConfirmIcon()),
+			widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+		corner := container.NewGridWrap(fyne.NewSquareSize(theme.CaptionTextSize()+2), tick)
+		stack.Add(container.New(layout.NewCustomPaddedLayout(2, 0, 0, 2),
+			container.NewBorder(container.NewHBox(layout.NewSpacer(), corner), nil, nil, nil)))
+	}
+	// Under the pointer a day's edge brightens, fading in and out gently. Not
+	// gold: gold says the day is picked or already holds this issue.
+	hover := func(on bool) {
+		if chosen || matched {
+			return
+		}
+		if on {
+			shell.FadeEdge(border, shell.BlendColor(theme.Color(theme.ColorNameInputBorder), theme.Color(theme.ColorNameForeground), 0.45), 2)
+		} else {
+			shell.FadeEdge(border, theme.Color(theme.ColorNameInputBorder), 1)
+		}
+	}
+	cell := shell.NewTappable(stack, func() {
 		p.date = ds
 		p.Entry.SetText(ds)
 		p.Refresh()
@@ -407,6 +458,8 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 		// Picking a day is the end of what the calendar was opened for.
 		p.closeCalendar()
 	})
+	cell.OnHover = hover
+	return cell
 }
 
 // dayFillReadout is the line under the picker: how full the chosen day already

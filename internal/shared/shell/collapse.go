@@ -14,10 +14,9 @@ import (
 	"worklog/internal/shared/widgets"
 )
 
-// foldSlideTime is how long a fold takes to open or shut: the time one piece of
-// an arrival takes to uncover, so a section folding open moves as the Status
-// day panel's pieces do.
-const foldSlideTime = arriveEach
+// foldSlideTime is how long a fold takes to open or shut: the gold hover's
+// time, so folding moves at the same pace as the hovers around it.
+const foldSlideTime = widgets.HoverDuration
 
 // Fold shows the top share of its content, cut off below, so a section can
 // slide open and shut. It is a Scrollable only because Fyne clips nothing
@@ -277,7 +276,7 @@ type Morph struct {
 	move     *fyne.Animation
 	// old is a picture of what it showed before the change, sliding out by
 	// oldShift; nil when there is none.
-	old      *canvas.Image
+	old      fyne.CanvasObject
 	oldShift float32
 }
 
@@ -305,15 +304,30 @@ func (m *Morph) Snapshot() {
 	if picture == nil {
 		return
 	}
-	m.old = canvas.NewImageFromImage(picture)
-	m.old.FillMode = canvas.ImageFillStretch
-	m.old.Resize(m.Size())
+	old := canvas.NewImageFromImage(picture)
+	old.FillMode = canvas.ImageFillStretch
+	old.Resize(m.Size())
+	m.old = old
 }
 
 func NewMorph(content fyne.CanvasObject) *Morph {
 	m := &Morph{Content: content, height: -1}
 	m.ExtendBaseWidget(m)
 	return m
+}
+
+// Swap slides the actual outgoing view away while the replacement slides in.
+// Unlike Snapshot it also works when a tall view extends beyond the window.
+func (m *Morph) Swap(content fyne.CanvasObject, dir int, relayout func(final bool)) {
+	if m.move != nil {
+		m.move.Stop()
+	}
+	if m.height < 0 {
+		m.height = m.Size().Height
+	}
+	m.old, m.Content = m.Content, content
+	m.Change(dir, relayout)
+	m.Refresh()
 }
 
 // Change animates from the height shown now to the content's new height, with
@@ -330,7 +344,7 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 	}
 	slide := float32(morphSlide)
 	if m.old != nil {
-		slide = m.Size().Width // the new form pushes the old one out
+		slide = max(m.Size().Width, morphSlide) // the new view pushes the old one out
 	}
 	if dir == 0 {
 		m.old = nil

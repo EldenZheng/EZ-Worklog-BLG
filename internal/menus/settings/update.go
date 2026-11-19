@@ -4,12 +4,14 @@ import (
 	"fmt"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // QuitForUpdate closes the app once the updated copy has been started. A
@@ -23,17 +25,19 @@ func updatePanel(ui *shell.UI) fyne.CanvasObject {
 	u := &ui.Update
 	u.Status = widget.NewLabel("")
 	u.Status.Wrapping = fyne.TextWrapWord
-	u.Check = widget.NewButtonWithIcon("Check for updates", theme.ViewRefreshIcon(), func() {
+	u.Check = settingsIconButton("Check for updates", theme.ViewRefreshIcon(), func() {
 		CheckForUpdates(ui, true)
 	})
-	u.Install = widget.NewButtonWithIcon("Update", theme.DownloadIcon(), func() { InstallUpdate(ui) })
+	u.Install = settingsIconButton("Update", theme.DownloadIcon(), func() { InstallUpdate(ui) })
 	u.InstallView = shell.ConfirmButton(u.Install)
 	version := widget.NewLabel("Version " + backend.Version)
 	version.Wrapping = fyne.TextWrapBreak
 	showUpdateState(ui)
+	title := canvas.NewText("Updates", widgets.LogoGold)
+	title.TextSize, title.TextStyle.Bold = theme.TextSize()+4, true
 	return container.NewVBox(
-		container.NewThemeOverride(widget.NewSeparator(), sidebarLineTheme{Theme: theme.Current()}),
-		shell.Bold("Updates"),
+		container.NewThemeOverride(widget.NewSeparator(), chunkySettingsTheme{Theme: theme.Current()}),
+		title,
 		version,
 		u.Status,
 		u.InstallView,

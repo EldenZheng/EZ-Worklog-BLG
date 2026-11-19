@@ -378,7 +378,7 @@ func TestLiveSprintConfiguredFilterReadOnly(t *testing.T) {
 	t.Logf("Custom project filter returned %d issues", len(b.Items))
 }
 
-func TestHiddenDoneKeepsOnlyCurrentSprintDone(t *testing.T) {
+func TestHiddenDoneKeepsCurrentAndPreviousSprintDone(t *testing.T) {
 	f := backend.SprintField{Name: "Sprint"}
 	f.Configuration.CompletedIterations = []backend.SprintIteration{{ID: "old", StartDate: "2026-10-19", Duration: 14}}
 	f.Configuration.Iterations = []backend.SprintIteration{{ID: "now", StartDate: "2026-11-02", Duration: 14}, {ID: "next", StartDate: "2026-11-16", Duration: 14}}
@@ -389,9 +389,10 @@ func TestHiddenDoneKeepsOnlyCurrentSprintDone(t *testing.T) {
 	}{
 		{backend.SprintItem{Status: "Done", SprintID: "now"}, false},
 		{backend.SprintItem{Status: " done ", SprintID: "now"}, false},
-		{backend.SprintItem{Status: "Done", SprintID: "old"}, true},
+		{backend.SprintItem{Status: "Done", SprintID: "old"}, false},
 		{backend.SprintItem{Status: "Done", SprintID: "next"}, true},
 		{backend.SprintItem{Status: "Done"}, true},
+		{backend.SprintItem{Status: "Done", SprintID: "unknown"}, true},
 		{backend.SprintItem{Status: "In Progress", SprintID: "old"}, false},
 		{backend.SprintItem{Status: "Created"}, false},
 	}
@@ -400,8 +401,8 @@ func TestHiddenDoneKeepsOnlyCurrentSprintDone(t *testing.T) {
 			t.Errorf("HiddenDone(%+v) = %v, want %v", c.it, got, c.want)
 		}
 	}
-	if !b.HiddenDone(backend.SprintItem{Status: "Done", SprintID: "now"}, "2027-01-01") {
-		t.Error("Done shown with no sprint running")
+	if b.HiddenDone(backend.SprintItem{Status: "Done", SprintID: "now"}, "2027-01-01") {
+		t.Error("previous Done work should remain available between sprints")
 	}
 }
 
@@ -415,6 +416,9 @@ func TestCurrentDoneFilterOverridesStatusTerms(t *testing.T) {
 	for in, want := range cases {
 		if got := backend.CurrentDoneFilter(in); got != want {
 			t.Errorf("CurrentDoneFilter(%q) = %q, want %q", in, got, want)
+		}
+		if got := backend.DoneFilter(in); got != strings.TrimSuffix(want, " sprint:@current") {
+			t.Errorf("DoneFilter(%q) = %q", in, got)
 		}
 	}
 }

@@ -253,7 +253,7 @@ func TestUntickedCurrencyDropdownDoesNotOpen(t *testing.T) {
 	}
 }
 
-// The sidebar's line is grey and the main panel's lines are gold.
+// Settings section headings and divider lines share the gold accent.
 func TestSettingsLineColours(t *testing.T) {
 	stubRate(t, 1)
 	f := openCurrencySettings(t, backend.Config{Currency: "RM", DisplayCurrency: "USD"})
@@ -280,7 +280,7 @@ func TestSettingsLineColours(t *testing.T) {
 			}
 		}
 	})
-	if greys != 1 || golds < 3 {
+	if greys != 0 || golds < 7 {
 		t.Fatalf("greys = %d, golds = %d", greys, golds)
 	}
 }

@@ -11,7 +11,6 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
-	"worklog/internal/shared/widgets"
 )
 
 // ---- the project order, set by dragging either menu's legend ----
@@ -186,7 +185,7 @@ func (k *KanbanUI) ProjectLegend(calendar bool) fyne.CanvasObject {
 	}
 	for _, b := range k.OrderedBoards() {
 		chip := &ProjectChip{K: k, Board: b, Chip: k.projectTappable(b, calendar), row: row}
-		chip.Chip.Look = widgets.GrabCursor{}
+		chip.Chip.Grab = true
 		chip.ExtendBaseWidget(chip)
 		row.chips = append(row.chips, chip)
 		box.Add(chip)

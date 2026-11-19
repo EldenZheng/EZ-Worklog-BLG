@@ -46,17 +46,20 @@ func TestOrgFilterFadesOnlyButtonAndCancelsCleanly(t *testing.T) {
 	// This test changes tabs, not window widths. Keep the established layout
 	// without starting another deferred resize while the test driver swaps tabs.
 	ui.Win.Content().(*fyne.Container).Layout = layout.NewStackLayout()
-	driver := &cascadeFrameDriver{Driver: base.Driver()}
+	driver := &fadeOnlyDriver{cascadeFrameDriver{Driver: base.Driver()}}
 	fyne.SetCurrentApp(&motionTestApp{App: base, driver: driver})
 	defer fyne.SetCurrentApp(base)
 	layer := ui.Win.Content().(*fyne.Container).Objects[1].(*fyne.Container)
 
 	button := tapKey(t, ui.RepBox, "exampleorg")
-	if ui.OrgShown("exampleorg") || driver.animation == nil || len(layer.Objects) != 1 {
+	if ui.OrgShown("exampleorg") || driver.animation == nil || len(fadePictures(layer)) != 1 {
 		t.Fatal("the report filter should apply immediately and leave a fading picture")
 	}
+	if _, covered := layer.Objects[len(layer.Objects)-1].(*canvas.Image); covered {
+		t.Fatal("the tap's ripple should play over the fading picture, not under it")
+	}
 	first := driver.animation
-	old := layer.Objects[0].(*canvas.Image)
+	old := fadePictures(layer)[0]
 	if old.Size() != button.Size() {
 		t.Fatalf("only the button should fade: picture %v, button %v", old.Size(), button.Size())
 	}
@@ -66,28 +69,51 @@ func TestOrgFilterFadesOnlyButtonAndCancelsCleanly(t *testing.T) {
 	}
 	tapKey(t, ui.RepBox, "exampleorg")
 	second := driver.animation
-	if !ui.OrgShown("exampleorg") || second == first || len(layer.Objects) != 1 || layer.Objects[0] == old {
+	if !ui.OrgShown("exampleorg") || second == first || len(fadePictures(layer)) != 1 || fadePictures(layer)[0] == old {
 		t.Fatal("a second tap should restore the org and replace the previous fade")
 	}
 	first.Tick(1)
-	if len(layer.Objects) != 1 {
+	if len(fadePictures(layer)) != 1 {
 		t.Fatal("a cancelled animation must not remove the next fade")
 	}
 	second.Tick(1)
-	if len(layer.Objects) != 0 {
+	if len(fadePictures(layer)) != 0 {
 		t.Fatal("a completed fade must leave no picture behind")
 	}
 	ui.ToggleOrg(shell.DraftsKey)
-	if len(layer.Objects) != 0 {
+	if len(fadePictures(layer)) != 0 {
 		t.Fatal("a programmatic filter change should not fade the page")
 	}
 	tapKey(t, ui.RepBox, "exampleorg")
 	third := driver.animation
 	ui.Tabs.SelectIndex(1)
 	third.Tick(.25)
-	if len(layer.Objects) != 0 {
+	if len(fadePictures(layer)) != 0 {
 		t.Fatal("switching tabs must clear the previous page's fade")
 	}
+}
+
+// fadeOnlyDriver keeps the fade's motion, not the ripple's started beside
+// it. Both take as long; the ripple eases out, far along by half time, where
+// the fade eases in and out and is half way.
+type fadeOnlyDriver struct{ cascadeFrameDriver }
+
+func (d *fadeOnlyDriver) StartAnimation(a *fyne.Animation) {
+	if a.Curve == nil || a.Curve(.5) < .8 {
+		d.animation = a
+	}
+}
+
+// fadePictures are the filter fades on the window's top layer, leaving out
+// the ripple the tap plays beside them.
+func fadePictures(layer *fyne.Container) []*canvas.Image {
+	var out []*canvas.Image
+	for _, o := range layer.Objects {
+		if img, ok := o.(*canvas.Image); ok {
+			out = append(out, img)
+		}
+	}
+	return out
 }
 
 // The Report tab opens on the period today is being worked into. A period runs

@@ -171,7 +171,7 @@ func (v *view) milestonesPanel() fyne.CanvasObject {
 		// The name gives way to the due date, cut short with an ellipsis at
 		// whatever width is left, rather than running under it.
 		name := boldText(m.Name, pal.ink)
-		name.TextSize = theme.TextSize() + 3
+		name.TextSize = theme.CaptionTextSize() + 2
 		fitted := container.New(&fitHeading{text: name, full: m.Name}, name)
 		figure := caption(fmt.Sprintf("%d of %d  ·  %s", m.Done, m.Total(), share(m.Done, m.Total())), pal.ink)
 		figure.TextStyle = fyne.TextStyle{Bold: true}
@@ -312,7 +312,9 @@ func (v *view) issueList() section {
 	p, pal := v.p, v.pal
 	rows := container.NewVBox()
 	count := container.NewHBox()
-	header := container.New(widgets.NewFluidRow(listWeights()...))
+	// header holds the column names, under one gold highlight that travels
+	// from name to name with the pointer.
+	header := container.NewStack()
 	viewBody := container.NewVBox(header, widget.NewSeparator(), rows)
 	slide := shell.NewMorph(viewBody)
 	slide.Duration = 600 * time.Millisecond
@@ -324,7 +326,8 @@ func (v *view) issueList() section {
 	}
 	var fill func()
 	drawHeader := func() {
-		header.Objects = nil
+		names := container.New(widgets.NewFluidRow(listWeights()...))
+		var cells []*shell.Tappable
 		for _, c := range listColumns {
 			ink, sorted := pal.soft, c.name == p.sortBy
 			if sorted {
@@ -342,7 +345,7 @@ func (v *view) issueList() section {
 				cell.Add(container.NewThemeOverride(arrow, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold}))
 			}
 			column := c.name
-			header.Add(shell.NewCardTappable(container.New(layout.NewCustomPaddedLayout(0, 0, theme.Padding(), 0), cell), func() {
+			tap := shell.NewCardTappable(container.New(layout.NewCustomPaddedLayout(0, 0, theme.Padding(), 0), cell), func() {
 				// A column sorts ascending, then descending, then back to Sprint order.
 				switch {
 				case p.sortBy != column:
@@ -353,8 +356,11 @@ func (v *view) issueList() section {
 					p.sortBy, p.sortDesc = "Sprint", false
 				}
 				fill()
-			}))
+			})
+			names.Add(tap)
+			cells = append(cells, tap)
 		}
+		header.Objects = []fyne.CanvasObject{shell.HoverRows(names, cells)}
 		header.Refresh()
 	}
 	fill = func() {
@@ -427,16 +433,17 @@ func (v *view) issueList() section {
 		if gantt == p.listGantt {
 			return
 		}
-		if p.listOpen {
-			slide.Snapshot()
-		}
 		p.listGantt = gantt
+		// Keep the outgoing rows intact until they have slid off screen.
+		header = container.NewStack()
+		rows = container.NewVBox()
 		fill()
+		next := container.NewVBox(header, widget.NewSeparator(), rows)
 		direction := 1
 		if !gantt {
 			direction = -1
 		}
-		slide.Change(direction, func(final bool) {
+		slide.Swap(next, direction, func(final bool) {
 			if p.scroll != nil {
 				shell.Reflow(final, p.scroll, p.scroll.Content)
 			}
@@ -447,12 +454,12 @@ func (v *view) issueList() section {
 	})
 	fill()
 
-	controls := container.NewBorder(nil, nil, nil,
-		container.NewHBox(mode, shell.WideSelect(state), export), search)
+	controls := container.NewBorder(nil, nil, mode,
+		container.NewHBox(shell.WideSelect(state), export), search)
 	body := container.NewVBox(shell.VGap(theme.Padding()), controls,
 		shell.VGap(theme.Padding()), slide)
 
-	return p.foldSection("Issues", &p.listOpen, count, body)
+	return p.foldSection("Issue List/Gantt Chart", &p.listOpen, count, body)
 }
 
 // milestoneGroup is the issues of one milestone in the issue list.

@@ -344,6 +344,8 @@ func FetchIssueInfos(refs []string, progress ...func(FetchProgress)) (map[string
 // Status and Assignees are carried for the week export, which is meant to read
 // like the board's own TSV download; nothing else on the tabs uses them.
 type WorklogItem struct {
+	ID          string `json:",omitempty"`
+	Body        string `json:",omitempty"`
 	Date        string
 	Minutes     int
 	Owner       string
@@ -435,12 +437,12 @@ query($login:String!,$number:Int!,$filter:String!,$after:String){
  owner:OWNER(login:$login){
   projectV2(number:$number){
    items(first:100,after:$after,query:$filter){
-    nodes{
+    nodes{id
      content{
       __typename
-      ... on Issue { title url parent { title url } assignees(first:10){ nodes{ login } } }
-      ... on PullRequest { title url }
-      ... on DraftIssue { title }
+      ... on Issue { title url body parent { title url } assignees(first:10){ nodes{ login } } }
+      ... on PullRequest { title url body }
+      ... on DraftIssue { title body }
      }
      fieldValues(first:50){ nodes{
       __typename
@@ -457,6 +459,7 @@ query($login:String!,$number:Int!,$filter:String!,$after:String){
 }`
 
 type ProjectItemContent struct {
+	Body   string `json:"body"`
 	Title  string `json:"title"`
 	URL    string `json:"url"`
 	Parent *struct {
@@ -476,6 +479,7 @@ type projectWorklogsResponse struct {
 			Project *struct {
 				Items struct {
 					Nodes []struct {
+						ID          string              `json:"id"`
 						Content     *ProjectItemContent `json:"content"`
 						FieldValues struct {
 							Nodes []PvFieldValue `json:"nodes"`
@@ -550,6 +554,7 @@ func WorklogProjectFilter(owner, fromDate, toDate string) string {
 func WorklogFromNode(content *ProjectItemContent, values []PvFieldValue) (WorklogItem, bool) {
 	it := WorklogItem{}
 	if content != nil {
+		it.Body = content.Body
 		it.Title, it.URL = content.Title, content.URL
 		if content.Parent != nil {
 			it.ParentTitle, it.ParentURL = content.Parent.Title, content.Parent.URL
@@ -558,17 +563,27 @@ func WorklogFromNode(content *ProjectItemContent, values []PvFieldValue) (Worklo
 			it.Assignees = append(it.Assignees, a.Login)
 		}
 	}
-	for _, fv := range values {
+	// Read deprecated values first, then let populated current fields win,
+	// independent of the order returned by GitHub.
+	ordered := make([]PvFieldValue, 0, len(values))
+	for _, deprecated := range []bool{true, false} {
+		for _, fv := range values {
+			if deprecatedWorklogField(fv.Field.Name) == deprecated {
+				ordered = append(ordered, fv)
+			}
+		}
+	}
+	for _, fv := range ordered {
 		switch {
-		case nameHas(fv.Field.Name, "worklog", "owner"):
+		case nameHas(fv.Field.Name, "worklog", "owner") && strings.TrimSpace(fv.Text) != "":
 			it.Owner = fv.Text
-		case nameHas(fv.Field.Name, "worklog", "date"):
+		case nameHas(fv.Field.Name, "worklog", "date") && fv.Date != "":
 			it.Date = fv.Date
 		case nameHas(fv.Field.Name, "worklog", "min"):
 			if fv.Number != nil {
 				it.Minutes = int(*fv.Number)
 			}
-		case nameHas(fv.Field.Name, "worklog", "remark"):
+		case nameHas(fv.Field.Name, "worklog", "remark") && strings.TrimSpace(fv.Text) != "":
 			it.Remarks = fv.Text
 		// Status is the board's own column, not a Worklog field, so it is
 		// matched on its own name rather than through the worklog prefix.
@@ -697,6 +712,11 @@ func fetchOneProject(projectURL, owner, filter string) ([]WorklogItem, error) {
 		return nil, err
 	}
 	rootField := map[string]string{"orgs": "organization", "users": "user"}[ref.OwnerKind]
+	fields, err := fetchWorklogFields(ref, rootField)
+	if err != nil {
+		return nil, err
+	}
+	filter = worklogFilterForFields(filter, fields)
 	query := strings.Replace(projectWorklogsQuery, "OWNER", rootField, 1)
 
 	var items []WorklogItem
@@ -725,6 +745,7 @@ func fetchOneProject(projectURL, owner, filter string) ([]WorklogItem, error) {
 		page := resp.Data.Owner.Project.Items
 		for _, node := range page.Nodes {
 			it, ok := WorklogFromNode(node.Content, node.FieldValues.Nodes)
+			it.ID = node.ID
 			if !ok || !strings.EqualFold(strings.TrimSpace(it.Owner), owner) {
 				continue
 			}
@@ -1535,7 +1556,7 @@ func BuildRemarks(commits []Commit) string {
 	}
 	// Deliberately uncapped. Dropping bullets here lost real work silently; the
 	// editor shows a live character counter, refuses to push over remarkCap, and
-	// offers "Compact with AI", so trimming is the author's call, not ours.
+	// offers local compaction, so trimming is the author's call, not ours.
 	return strings.Join(lines, "\n")
 }
 
@@ -1857,7 +1878,7 @@ func pickProject(items []projectItem) *projectItem {
 	var best *projectItem
 	for i := range items {
 		for _, f := range items[i].Project.Fields.Nodes {
-			if strings.HasPrefix(strings.ToLower(f.Name), "worklog") {
+			if nameHas(f.Name, "worklog") {
 				return &items[i]
 			}
 		}
@@ -1869,6 +1890,7 @@ func pickProject(items []projectItem) *projectItem {
 }
 
 func findField(fields []field, musts ...string) *field {
+	var fallback *field
 	for i := range fields {
 		n := strings.ToLower(fields[i].Name)
 		ok := true
@@ -1879,10 +1901,16 @@ func findField(fields []field, musts ...string) *field {
 			}
 		}
 		if ok {
+			if deprecatedWorklogField(fields[i].Name) {
+				if fallback == nil {
+					fallback = &fields[i]
+				}
+				continue
+			}
 			return &fields[i]
 		}
 	}
-	return nil
+	return fallback
 }
 
 func setFields(projectID, itemID string, fields []field, wdate, owner string, mins int, remarks string) (done, missing []string) {

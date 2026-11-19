@@ -64,15 +64,27 @@ type PlannerDragCard struct {
 	Day       *PlannerDayHover
 	// OnTap, when set, runs on a click in place of opening the issue.
 	OnTap func()
+	press *CardPress
+	held  bool // the button is down on it
 }
 
+// A Sprint Calendar bubble presses as Log Work's tiles do (see CardPress).
 func (c *PlannerDragCard) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(c.Content)
+	if c.press == nil {
+		c.press = NewCardPress(c, func() fyne.CanvasObject { return c.Content })
+	}
+	return c.press.Wrap(widget.NewSimpleRenderer(c.Content))
 }
 
-func (c *PlannerDragCard) Cursor() desktop.Cursor { return widgets.GrabCursor{} }
+func (c *PlannerDragCard) MouseDown(e *desktop.MouseEvent) { c.held = true; c.press.Down(e) }
+func (c *PlannerDragCard) MouseUp(*desktop.MouseEvent)     { c.PressReleased() }
+func (c *PlannerDragCard) PressReleased()                  { c.held = false; c.press.Up() }
+
+// Cursor is the pointing hand, and the grabbing hand while it is held.
+func (c *PlannerDragCard) Cursor() desktop.Cursor { return CardCursor(c.held || c.lifted) }
 
 func (c *PlannerDragCard) Tapped(*fyne.PointEvent) {
+	c.press.Play()
 	if c.OnTap != nil {
 		c.OnTap()
 		return
@@ -86,6 +98,7 @@ func (c *PlannerDragCard) Dragged(e *fyne.DragEvent) {
 		return
 	}
 	if !c.lifted {
+		c.press.Cancel() // the ghost carries it now
 		c.lifted = true
 		k.CalendarDrag = c
 		b, it, _ := k.BoardItem(c.Candidate)
@@ -229,9 +242,7 @@ func (c *PlannerDragCard) HighlightDates(at *fyne.Position) {
 	}
 	for _, target := range k.Dates {
 		_, valid := backend.PlannerSlot(k.Plan, c.Candidate, c.Index, target.Date)
-		target.Frame.FillColor = target.Base
-		target.Frame.StrokeWidth = target.StrokeWidth
-		target.Frame.StrokeColor = target.StrokeColor
+		fill, stroke, width := target.Base, target.StrokeColor, target.StrokeWidth
 		if valid {
 			// A day already green stays green; blue fills only an empty one.
 			blank := true
@@ -240,20 +251,19 @@ func (c *PlannerDragCard) HighlightDates(at *fyne.Position) {
 				blank = a == 0
 			}
 			if blank {
-				target.Frame.FillColor = widgets.WithAlpha(PlannerAvailableBlue, 0.13)
+				fill = widgets.WithAlpha(PlannerAvailableBlue, 0.13)
 			}
-			target.Frame.StrokeColor = PlannerAvailableBlue
-			target.Frame.StrokeWidth = 2
+			stroke, width = PlannerAvailableBlue, 2
 			if at != nil && pointIn(target.Object, *at) && pointIn(k.CalendarClip, *at) {
 				c.Hover = target
 				if blank {
-					target.Frame.FillColor = widgets.WithAlpha(PlannerAvailableBlue, 0.25)
+					fill = widgets.WithAlpha(PlannerAvailableBlue, 0.25)
 				}
-				target.Frame.StrokeColor = widgets.LogoGold
-				target.Frame.StrokeWidth = 4
+				stroke, width = widgets.LogoGold, 4
 			}
 		}
-		target.Frame.Refresh()
+		// The outline fades in and out rather than snapping.
+		FadeFrame(target.Frame, fill, stroke, width)
 	}
 }
 
@@ -293,10 +303,7 @@ func (c *PlannerDragCard) MouseOut() {
 
 func (c *PlannerDragCard) ResetDates() {
 	for _, t := range c.K.Dates {
-		t.Frame.FillColor = t.Base
-		t.Frame.StrokeWidth = t.StrokeWidth
-		t.Frame.StrokeColor = t.StrokeColor
-		t.Frame.Refresh()
+		FadeFrame(t.Frame, t.Base, t.StrokeColor, t.StrokeWidth)
 	}
 }
 
@@ -304,7 +311,7 @@ func (c *PlannerDragCard) DragEnd() {
 	if !c.lifted {
 		return
 	}
-	c.lifted = false
+	c.lifted, c.held = false, false
 	ReleaseBubble()
 	k := c.K
 	if k.CalendarDrag == c {
@@ -321,10 +328,7 @@ func (c *PlannerDragCard) DragEnd() {
 	slot, daySlot := k.TraySlot, k.DaySlot
 	k.TraySlot, k.DaySlot = KanbanSlot{}, KanbanSlot{}
 	for _, t := range k.Dates {
-		t.Frame.FillColor = t.Base
-		t.Frame.StrokeWidth = t.StrokeWidth
-		t.Frame.StrokeColor = t.StrokeColor
-		t.Frame.Refresh()
+		FadeFrame(t.Frame, t.Base, t.StrokeColor, t.StrokeWidth)
 	}
 	target := c.Hover
 	c.Hover = nil

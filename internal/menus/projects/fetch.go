@@ -18,6 +18,10 @@ type Item struct {
 	URL    string
 	Repo   string // owner/repo
 	Closed bool
+	// ClosedOnGitHub is GitHub's own state. Closed can differ from it: a
+	// closed issue whose board Status says the work is still going (In
+	// progress, Pending test, Server update required…) counts as open.
+	ClosedOnGitHub bool
 	// NotPlanned is closed without being done (not planned, or a duplicate):
 	// it leaves the project's scope rather than counting as finished.
 	NotPlanned bool
@@ -44,6 +48,27 @@ type Item struct {
 	Parent       string // the pasted issue it belongs to, owner/repo#number
 	Blockers     []Dependency
 	BlockerCount int
+}
+
+// SettleClosed works out Closed from GitHub's state and the board Status:
+// the Status wins. A closed issue stays closed when its Status is one that
+// ends work (Done, Duplicated, Request denied…), when it has none, or when
+// GitHub closed it as not planned; any other Status means the work is still
+// going, and the issue counts as open.
+func (it *Item) SettleClosed() {
+	it.Closed = it.ClosedOnGitHub && (it.NotPlanned || it.Status == "" || ClosingStatus(it.Status))
+}
+
+// ClosingStatus says whether a board Status is one an issue ends on.
+func ClosingStatus(name string) bool {
+	l := strings.ToLower(name)
+	for _, w := range []string{"done", "closed", "complete", "finished", "duplicate", "denied", "reject",
+		"won't", "wont", "cancel", "invalid", "not planned", "obsolete", "released", "shipped", "deployed", "resolved"} {
+		if strings.Contains(l, w) {
+			return true
+		}
+	}
+	return false
 }
 
 // Dependency is an actual GitHub blocked-by relationship, not an inferred order.
@@ -226,11 +251,11 @@ func fetchParent(ref string) Parent {
 		for _, n := range issue.SubIssues.Nodes {
 			item := Item{
 				Number: n.Number, Title: n.Title, URL: n.URL, Repo: n.Repository.NameWithOwner,
-				Closed:  n.State != "" && n.State != "OPEN",
-				Created: parseTime(n.CreatedAt), ClosedAt: parseTime(n.ClosedAt),
+				ClosedOnGitHub: n.State != "" && n.State != "OPEN",
+				Created:        parseTime(n.CreatedAt), ClosedAt: parseTime(n.ClosedAt),
 				Parent: ref,
 			}
-			item.NotPlanned = item.Closed && (n.StateReason == "NOT_PLANNED" || n.StateReason == "DUPLICATE")
+			item.NotPlanned = item.ClosedOnGitHub && (n.StateReason == "NOT_PLANNED" || n.StateReason == "DUPLICATE")
 			item.Blockers, item.BlockerCount = n.BlockedBy.Nodes, n.BlockedBy.TotalCount
 			for _, a := range n.Assignees.Nodes {
 				if a.Login != "" {
@@ -285,6 +310,7 @@ func fetchParent(ref string) Parent {
 					}
 				}
 			}
+			item.SettleClosed()
 			parent.Items = append(parent.Items, item)
 		}
 		info := issue.SubIssues.PageInfo

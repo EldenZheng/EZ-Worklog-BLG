@@ -63,12 +63,11 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// the "which day" question the same way — with the month grid painted by
 	// how full each day already is.
 	mDate := NewWorklogDatePicker(ui, shell.Today())
-	// Description is a textarea now — meeting write-ups run to several lines
-	// and the old single-line field truncated visibly at the caret. Only shown
-	// for meetings; the other kinds title themselves and keep it off screen.
-	mDesc := widget.NewMultiLineEntry()
-	mDesc.SetMinRowsVisible(3)
-	mDesc.SetPlaceHolder("What was it? (meeting notes)")
+	// Meetings have an editable title; their notes use the text editor below.
+	mDesc := widget.NewEntry()
+	mDesc.SetPlaceHolder("Meeting title (e.g. Sprint planning)")
+	mRecording := widget.NewEntry()
+	mRecording.SetPlaceHolder("https://… (meeting recording)")
 	mMin := widget.NewEntry()
 	mMin.SetPlaceHolder("minutes")
 	mMsg := widget.NewLabel("")
@@ -78,41 +77,28 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	mText := CommitTextEditor(ui, "", "", mMsg)
 	mText.desc.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
 	mText.growWithText(4, func() { shell.Relayout(ui.LogBody) })
+	recordingRow := meetingRecordingField(mRecording, mText)
+	recordingRow.Hide()
 
-	// Mode selector — the same one the row editor grows. Shown for Worklog and a
-	// single Code Review, where the user is filing against an existing issue.
-	// Independent has a fixed creation flow; Meeting and Bulk Review always use
-	// their daily issue, and Commits carries its own mode per group.
-	mMode := shell.NewGoldSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
-	if strings.EqualFold(ui.Cfg.DefaultMode, "issue") {
-		mMode.SetSelected("The issue itself")
-	} else {
-		mMode.SetSelected("Worklog sub-issue")
-	}
-	mModeVal := func() string {
-		if mMode.Selected == "The issue itself" {
-			return "issue"
-		}
-		return "subissue"
-	}
-	// The "Push as" pair rides alongside the action buttons on the same line —
-	// it lives on the row a push is committed from, not stacked above it — so a
-	// wrapped VBox would sit awkwardly at the foot of the tab. Held in one box
-	// so both pieces show or hide together. mMode is wrapped in a fixed-width
-	// grid because widget.Select's own MinSize was tight enough to render
-	// "Worklog sub-issue" as "Worklog su…".
-	modeBox := container.New(layout.NewGridWrapLayout(fyne.NewSize(190, mMode.MinSize().Height)), mMode)
-	mPushAs := container.NewHBox(
-		widget.NewLabelWithStyle("Push as", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		modeBox,
-	)
-	mPushAs.Hide()
+	mModeVal := func() string { return "subissue" }
 
 	// "Worklog": an issue that already exists.
 	mIssue := widget.NewEntry()
 	mIssue.SetPlaceHolder(IssuePlaceholder)
 	otherRow := shell.Labeled("Issue link", mIssue)
 	otherRow.Hide()
+	// The calendar edges in gold the days already holding an entry for the
+	// same issue, or the day's bulk review.
+	mDate.Matches = func() (string, string) {
+		switch kind {
+		case backend.KindBulkReview:
+			return rowPlace(backend.Row{"type": kind}), ""
+		case backend.KindOther:
+			ref, _ := issueFieldRef(mIssue.Text)
+			return rowPlace(backend.Row{"issue": ref}), ""
+		}
+		return "", ""
+	}
 
 	// A single code review starts from the thing actually in hand: its PR, in
 	// any spelling. The linked issue is resolved from GitHub's metadata or the
@@ -269,7 +255,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// Description sits on its own row so a textarea has room to breathe. Hidden
 	// for the two kinds that title themselves ("Worklog: <date>") since the
 	// field would only ever repeat the date they already picked.
-	descRow := shell.Labeled("Description", mDesc)
+	descRow := shell.Labeled("Meeting title", mDesc)
 	descRow.Hide()
 
 	// autoDescFor is the generated title non-meeting entries wear. Code Review
@@ -351,9 +337,13 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		switch kind {
 		case backend.KindMeeting:
-			// No issue yet on purpose: the day's meeting issue is found or
-			// created at push time, so logging two meetings on one day lands
-			// both on the same issue instead of opening a second.
+			row["meeting_title"] = backend.OrDefault(desc, "Meeting: "+date)
+			row["description"] = row["meeting_title"]
+			row["meeting_recording"] = strings.TrimSpace(mRecording.Text)
+			if _, err := backend.MeetingEntryBody(row); err != nil {
+				mMsg.SetText(err.Error())
+				return
+			}
 			row["mode"] = "issue"
 		case backend.KindOther:
 			ref, err := backend.IssueRefFromAny(mIssue.Text)
@@ -395,6 +385,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 
 		resetForm := func() {
 			mDesc.SetText("")
+			mRecording.SetText("")
 			mMin.SetText("")
 			mText.clear()
 			mTitle.SetText("")
@@ -505,10 +496,8 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 
 	saveBtn := widget.NewButton("Save draft", func() { mSave(false) })
 	pushBtn := widget.NewButton("Save & push", func() { mSave(true) })
-	// Push-as sits at the left, actions at the right — the mode is the last
-	// choice made before the button that acts on it, so they sit together on
-	// one line rather than the mode stacked above.
-	actionRow := container.NewBorder(nil, nil, mPushAs, container.NewHBox(saveBtn, shell.GitHubButton(pushBtn)))
+	// New worklogs always create sub-issues, so only the actions are needed.
+	actionRow := container.NewHBox(layout.NewSpacer(), saveBtn, shell.GitHubButton(pushBtn))
 
 	// Date on its own row so the picker's month can drop under it without
 	// fighting Minutes for width; Minutes rides alongside as a narrower field.
@@ -525,6 +514,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		dateRow,
 		dayReadout,
 		descRow,
+		recordingRow,
 		otherRow, singleReviewRow, codeReviewRow, indepRow,
 		remarksRow,
 		actionRow, mMsg,
@@ -581,6 +571,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		// Only the fields each kind needs, so the form never asks for an
 		// issue link and a new issue's title at the same time.
 		shell.ShowIf(descRow, kind == backend.KindMeeting)
+		shell.ShowIf(recordingRow, kind == backend.KindMeeting)
 		// The ratio layout hands the hidden Minutes share back to Date.
 		shell.ShowIf(minutesField, kind != backend.KindBulkReview)
 		shell.ShowIf(otherRow, kind == backend.KindOther)
@@ -588,7 +579,6 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		shell.ShowIf(codeReviewRow, kind == backend.KindBulkReview)
 		shell.ShowIf(indepRow, kind == backend.KindIndependent)
 		shell.ShowIf(remarksRow, kind != backend.KindBulkReview)
-		shell.ShowIf(mPushAs, kind == backend.KindOther || kind == backend.KindCodeReview)
 		if kind == backend.KindBulkReview {
 			mMin.Disable()
 			if items, err := bulkReviewItems(); err == nil {
@@ -604,7 +594,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		switch kind {
 		case backend.KindMeeting:
-			mMsg.SetText("Files under " + backend.MeetingTitle(ui.Cfg, backend.OrDefault(mDate.ISO(), shell.Today())) + ".")
+			mMsg.SetText("Creates a meeting issue with your title, notes and recording link.")
 		case backend.KindBulkReview:
 			mMsg.SetText(bulkReviewFilingHint(backend.OrDefault(mDate.ISO(), shell.Today())))
 		case backend.KindCodeReview, backend.KindOther, backend.KindIndependent:
@@ -632,7 +622,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		switch kind {
 		case backend.KindMeeting:
-			mMsg.SetText("Files under " + backend.MeetingTitle(ui.Cfg, backend.OrDefault(iso, shell.Today())) + ".")
+			mMsg.SetText("Creates a meeting issue with your title, notes and recording link.")
 		case backend.KindBulkReview:
 			mMsg.SetText(bulkReviewFilingHint(backend.OrDefault(iso, shell.Today())))
 		case backend.KindCodeReview, backend.KindOther, backend.KindIndependent:
@@ -1177,7 +1167,8 @@ func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasOb
 	skip.Importance = widget.LowImportance
 	// The title gets the full width. The secondary action has its own short
 	// row so it cannot squeeze every line of a long title into a narrow column.
-	actionRow := container.NewHBox(layout.NewSpacer(), skip)
+	// Its hover fades in and out as the saved cards' Delete does.
+	actionRow := container.NewHBox(layout.NewSpacer(), shell.FadeHover(skip))
 	alignedFooter := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), footer)
 	body := container.NewBorder(nil, container.NewVBox(alignedFooter, actionRow), nil, nil, titleLbl)
 
@@ -1188,7 +1179,11 @@ func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasOb
 	// between cells, so the tile fills the one it is given.
 	accent := shell.OrgColor(ui.Cfg, shell.OrgOf(g.Issue))
 	bubble := shell.NewStripeBubble(accent, body)
-	return shell.NewBubbleTappable(bubble, func() { OpenGroupEditor(ui, g) })
+	// The tile presses as a button does, ignored or not: it shrinks under the
+	// pointer and springs back as its editor opens.
+	tile := shell.NewBubbleTappable(bubble, func() { OpenGroupEditor(ui, g) })
+	tile.Press = true
+	return tile
 }
 
 // ShortIssueLabel drops the org from a ref. Every repo in view belongs to the
@@ -1314,9 +1309,9 @@ func (f editorForm) All() fyne.CanvasObject {
 }
 
 // remarksEditor builds the remarks box both editors share: a multi-line entry
-// that fills the foot of the popup, a live count against remarkCap, and the AI
+// that fills the foot of the popup, a live count against remarkCap, and a local
 // compaction button. The count hangs off OnChanged rather than being poked by
-// every caller, so text written from code — a rebuilt set of remarks, an AI
+// every caller, so text written from code — a rebuilt set of remarks, a compacted
 // result — updates it too. The middle return is the whole pane, caption and
 // box, ready to be handed the bottom of the popup.
 func remarksEditor(ui *shell.UI, text string, msg *widget.Label) (*widget.Entry, fyne.CanvasObject, *widget.Button) {
@@ -1335,19 +1330,11 @@ func remarksEditor(ui *shell.UI, text string, msg *widget.Label) (*widget.Entry,
 	remE.SetText(text)
 	update() // empty text is not a change, so OnChanged never fired
 
-	aiBtn := widget.NewButton("Compact with AI", func() {
+	aiBtn := widget.NewButton("Compact remarks", func() {
 		before := len(remE.Text)
-		text := remE.Text
-		msg.SetText("Compacting…")
-		var out string
-		ui.Async(func() error {
-			o, err := backend.AiCompact(ui.Cfg, text)
-			out = o
-			return err
-		}, func() {
-			remE.SetText(out)
-			msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", before, len(out)))
-		})
+		out := backend.CompactLocally(strings.Split(remE.Text, "\n"))
+		remE.SetText(out)
+		msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", before, len(out)))
 	})
 	// Border, not VBox: the caption keeps its own line and the box takes every
 	// pixel under it, however tall the pane turns out to be.
@@ -1457,12 +1444,8 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 	separateSlot := container.NewStack()
 	descHead := container.NewHBox(descCaption, descCount, separateSlot)
 	descPane := container.NewBorder(descHead, nil, nil, nil, descE)
-	// Beside, not under: the pane is the foot of the popup, and halving its
-	// width costs less than halving a height already shared with the fields.
-	// The host swaps between the lone box and the pair rather than hiding a
-	// grid column, which would still hold its half of the width.
-	pair := container.NewGridWithColumns(2)
-	host := container.NewStack(descPane)
+	host := newCommitTextPane(descPane, remPane)
+	initializing := true
 
 	update := func() {
 		if t.Split() {
@@ -1481,18 +1464,7 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 			shell.ShowIf(t.Separate, offer)
 			descHead.Refresh()
 		}
-		want := fyne.CanvasObject(descPane)
-		if t.Split() {
-			want = pair
-		}
-		if len(host.Objects) != 1 || host.Objects[0] != want {
-			pair.Objects = nil
-			if t.Split() {
-				pair.Objects = []fyne.CanvasObject{descPane, remPane}
-			}
-			host.Objects = []fyne.CanvasObject{want}
-			host.Refresh()
-		}
+		host.setSplit(t.Split(), !initializing)
 	}
 	t.Separate.OnChanged = func(on bool) {
 		// The remarks box starts from the description cut to fit, a bullet
@@ -1502,7 +1474,7 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 		}
 		update()
 	}
-	separateSlot.Add(shell.GoldChoice(t.Separate))
+	separateSlot.Add(shell.GoldTickChoice(t.Separate))
 	descE.OnChanged = func(string) { update() }
 	remE.OnChanged = func(string) { update() }
 	if strings.TrimSpace(body) != "" {
@@ -1513,26 +1485,17 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 		descE.SetText(remarks)
 	}
 	update()
+	initializing = false
 
-	// Split, the AI writes the remarks from the description and leaves the
-	// description alone; otherwise it compacts the one box as before.
-	t.aiBtn = widget.NewButton("Compact with AI", func() {
-		src := descE.Text
-		dst := descE
+	// Compaction stays local; a split keeps the full description intact.
+	t.aiBtn = widget.NewButton("Compact remarks", func() {
+		src, dst := descE.Text, descE
 		if t.Split() {
 			dst = remE
 		}
-		before := len(src)
-		msg.SetText("Compacting…")
-		var out string
-		ui.Async(func() error {
-			o, err := backend.AiCompact(ui.Cfg, src)
-			out = o
-			return err
-		}, func() {
-			dst.SetText(out)
-			msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", before, len(out)))
-		})
+		out := backend.CompactLocally(strings.Split(src, "\n"))
+		dst.SetText(out)
+		msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", len(src), len(out)))
 	})
 
 	t.pane = host
@@ -1651,6 +1614,16 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	issE := widget.NewEntry()
 	issE.SetText(r["issue"])
 	issE.SetPlaceHolder(IssuePlaceholder)
+	dateE.Matches = func() (string, string) {
+		probe := backend.Row{}
+		for k, v := range r {
+			probe[k] = v
+		}
+		if ref, err := issueFieldRef(issE.Text); err == nil {
+			probe["issue"] = ref
+		}
+		return rowPlace(probe), r["id"]
+	}
 	parentRepoE := widget.NewEntry()
 	parentRepoE.SetText(r["parent_repo"])
 	parentRepoE.SetPlaceHolder("exampleorg/repository")
@@ -1659,6 +1632,9 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	parentTitleE.SetPlaceHolder("Title for the standalone task")
 	descE := widget.NewEntry()
 	descE.SetText(RowTitle(ui, r))
+	recordingE := widget.NewEntry()
+	recordingE.SetPlaceHolder("https://… (meeting recording)")
+	recordingE.SetText(r["meeting_recording"])
 
 	msg := widget.NewLabel("")
 	// Older rows carry their work in description with no remarks yet. Seed
@@ -1667,20 +1643,12 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	text := CommitTextEditor(ui, backend.OrDefault(r["remarks"], r["description"]), r["issue_body"], msg)
 	remPane, aiBtn := text.pane, text.aiBtn
 
-	modeSel := shell.NewGoldSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
-	if r["mode"] == "issue" {
-		modeSel.SetSelected("The issue itself")
-	} else {
-		modeSel.SetSelected("Worklog sub-issue")
-	}
 	modeVal := func() string {
-		if createsOwnIssue {
-			if isIndependent {
-				return "subissue"
-			}
+		if createsOwnIssue && !isIndependent {
 			return "issue"
 		}
-		if modeSel.Selected == "The issue itself" {
+		// Re-pushing an old direct entry must retain its existing GitHub item.
+		if r["pushed_at"] != "" && r["mode"] == "issue" {
 			return "issue"
 		}
 		return "subissue"
@@ -1714,6 +1682,14 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			"issue":       issue,
 			"owner":       strings.TrimSpace(ownE.Text),
 			"remarks":     remarks, "issue_body": issueBody, "mode": modeVal(),
+		}
+		if r["type"] == backend.KindMeeting {
+			patch["meeting_title"] = backend.OrDefault(strings.TrimSpace(descE.Text), "Meeting: "+date)
+			patch["meeting_recording"] = strings.TrimSpace(recordingE.Text)
+			if _, err := backend.MeetingEntryBody(patch); err != nil {
+				msg.SetText(err.Error())
+				return
+			}
 		}
 		// A title saved for the old issue would go on naming this one.
 		if issue != r["issue"] {
@@ -1843,19 +1819,22 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			shell.Labeled("Issue", issE))
 	}
 	fields := container.NewVBox(fieldRow, dayFillReadout(ui, dateE, minE, r["id"]))
+	descriptionField := shell.Labeled("Description (kept locally, not pushed)", descE)
+	if r["type"] == backend.KindMeeting {
+		descE.SetPlaceHolder("Meeting title (e.g. Sprint planning)")
+		descriptionField = shell.Labeled("Meeting title", descE)
+		fields.Add(meetingRecordingField(recordingE, text))
+	}
 	// Caption beside the dropdown rather than stacked over it: the bar shares a
 	// line with Back, and a two-row label would drag that whole line taller.
 	actionItems := []fyne.CanvasObject{aiBtn, saveBtn, shell.GitHubButton(pushBtn)}
-	if !createsOwnIssue {
-		actionItems = append([]fyne.CanvasObject{
-			widget.NewLabel("Push as"), shell.WideSelect(modeSel)}, actionItems...)
-	}
+
 	actions := container.NewHBox(actionItems...)
 	return editorForm{
 		Body: container.NewVBox(append(notes,
 			header,
 			fields,
-			shell.Labeled("Description (kept locally, not pushed)", descE))...),
+			descriptionField)...),
 		remarks: remPane,
 		actions: actions,
 		msg:     msg,
@@ -1888,17 +1867,14 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 	issE := widget.NewEntry()
 	issE.SetText(g.Issue)
 	issE.SetPlaceHolder(IssuePlaceholder)
+	dateE.Matches = func() (string, string) {
+		ref, _ := issueFieldRef(issE.Text)
+		return rowPlace(backend.Row{"issue": ref}), ""
+	}
 
 	msg := widget.NewLabel("")
 	text := CommitTextEditor(ui, g.Remarks, "", msg)
 	remE, remPane, aiBtn := text.desc, text.pane, text.aiBtn
-
-	modeSel := shell.NewGoldSelect([]string{"Worklog sub-issue", "The issue itself"}, nil)
-	if ui.Cfg.DefaultMode == "issue" {
-		modeSel.SetSelected("The issue itself")
-	} else {
-		modeSel.SetSelected("Worklog sub-issue")
-	}
 
 	pickedCommits := func() []backend.Commit {
 		var picked []backend.Commit
@@ -1909,12 +1885,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		}
 		return picked
 	}
-	modeVal := func() string {
-		if modeSel.Selected == "The issue itself" {
-			return "issue"
-		}
-		return "subissue"
-	}
+	modeVal := func() string { return "subissue" }
 
 	doSave := func(push bool) {
 		picked := pickedCommits()
@@ -2055,7 +2026,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		dayFillReadout(ui, dateE, minE, ""),
 	)
 	actions := container.NewHBox(
-		widget.NewLabel("Push as"), shell.WideSelect(modeSel), aiBtn, saveBtn, shell.GitHubButton(pushBtn),
+		aiBtn, saveBtn, shell.GitHubButton(pushBtn),
 	)
 	return editorForm{
 		Body: container.NewVBox(

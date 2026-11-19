@@ -90,6 +90,9 @@ func (t *Tappable) MouseOut() {
 }
 
 func (t *Tappable) Cursor() desktop.Cursor {
+	if t.Grab {
+		return CardCursor(t.held)
+	}
 	if t.Look != nil {
 		return t.Look
 	}
@@ -240,6 +243,9 @@ func (ui *UI) ProgressBarParts(slot, identity string, parts []MeterPart, height 
 		}
 		if strings.HasPrefix(slot, "planner/") {
 			owner = PlannerTabName
+		}
+		if strings.HasPrefix(slot, "settings/") {
+			owner = SettingsTabName
 		}
 		if slot == "detail" {
 			owner = StatusTabName

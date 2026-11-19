@@ -135,9 +135,35 @@ type Bucket struct {
 	Items      []Item
 	// Current marks the sprint running today.
 	Current bool
+	// Start and Days place a sprint in time; zero for a priority, for no
+	// sprint, and for a sprint the board gives no dates.
+	Start time.Time
+	Days  int
 }
 
 func (b Bucket) Total() int { return b.Done + b.Open }
+
+// Range is the sprint's first to last day, "3 – 14 Nov" or "28 Oct – 8 Nov",
+// with the year where it is not this one; "" when the sprint has no dates.
+func (b Bucket) Range(now time.Time) string {
+	if b.Start.IsZero() {
+		return ""
+	}
+	last := b.Start.AddDate(0, 0, max(b.Days, 1)-1)
+	end := last.Format("2 Jan")
+	if last.Year() != now.Year() {
+		end += last.Format(" 2006")
+	}
+	switch {
+	case last.Equal(b.Start):
+		return end
+	case b.Start.Month() == last.Month() && b.Start.Year() == last.Year():
+		return fmt.Sprintf("%d – %s", b.Start.Day(), end)
+	case b.Start.Year() != last.Year():
+		return b.Start.Format("2 Jan 2006") + " – " + end
+	}
+	return b.Start.Format("2 Jan") + " – " + end
+}
 
 // Credit is the issues finished each week, split by who finished them: the
 // issue's first assignee. The busiest few have a name each and the rest are
@@ -492,6 +518,7 @@ func sprintBuckets(items []Item, now time.Time) []Bucket {
 		if name != noSprint {
 			start := starts[name]
 			b.Current = !start.IsZero() && !now.Before(start) && now.Before(start.AddDate(0, 0, max(days[name], 1)))
+			b.Start, b.Days = start, days[name]
 		}
 		out = append(out, *b)
 	}

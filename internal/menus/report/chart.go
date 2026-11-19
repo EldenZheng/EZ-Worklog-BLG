@@ -177,6 +177,12 @@ func (c *DayChart) moveHover() {
 
 func (c *DayChart) Tapped(e *fyne.PointEvent) {
 	if i := c.SlotAt(e.Position.X); i >= 0 && c.OnSelect != nil {
+		// The day clicked ripples across its gold hover.
+		hovered := c.Hovered
+		c.Hovered = i
+		pos, size := c.hoverFrame()
+		c.Hovered = hovered
+		shell.RippleIn(c, pos, size, e.AbsolutePosition)
 		c.OnSelect(c.Days[i].Date)
 	}
 }

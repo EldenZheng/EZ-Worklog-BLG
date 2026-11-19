@@ -2,12 +2,48 @@ package tests
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"fyne.io/fyne/v2"
 	"worklog/internal/menus/projects"
 	"worklog/internal/shared/backend"
 )
+
+func TestProjectsIgnoreLegacySelectionAndKeepOnlySessionChoice(t *testing.T) {
+	store := backend.NewStore(tempDir(t))
+	path := filepath.Join(store.Dir, "projects.json")
+	if err := os.WriteFile(path, []byte(`{"selected":"b","projects":[{"id":"a","name":"Left"},{"id":"b","name":"Right"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := projects.Load(store)
+	if err != nil || loaded.Selected != "" || loaded.Current() == nil || loaded.Current().ID != "a" {
+		t.Fatal("a previous selection must not override the leftmost project", loaded, err)
+	}
+	loaded.Selected = "b"
+	if loaded.Current().ID != "b" {
+		t.Fatal("choosing another project must still work during the session")
+	}
+	if err := projects.Save(store, loaded); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = projects.Load(store)
+	if err != nil || loaded.Current() == nil || loaded.Current().ID != "a" {
+		t.Fatal("reopening must return to the leftmost project", loaded, err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if _, saved := fields["selected"]; saved {
+		t.Fatal("the project choice must not be written to disk")
+	}
+}
 
 func TestParentIssueChecksSurviveReload(t *testing.T) {
 	store := backend.NewStore(tempDir(t))

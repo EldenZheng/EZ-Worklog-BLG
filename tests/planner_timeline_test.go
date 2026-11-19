@@ -148,6 +148,7 @@ func TestSprintCalendarSidebarAndDropColorsWithTopProgressMeters(t *testing.T) {
 		t.Fatal("issues are not in a left sidebar")
 	}
 	tray.MouseIn(nil)
+	shell.SettleFades() // the outlines fade; look at where they settle
 	var target *shell.PlannerDateTarget
 	for _, date := range k.Dates {
 		if date.Date == c.Sprint.StartDate {
@@ -159,10 +160,12 @@ func TestSprintCalendarSidebarAndDropColorsWithTopProgressMeters(t *testing.T) {
 	}
 	at := fyne.CurrentApp().Driver().AbsolutePositionForObject(target.Object).Add(fyne.NewPos(10, 80))
 	tray.HighlightDates(&at)
+	shell.SettleFades()
 	if target.Frame.StrokeColor != widgets.LogoGold || target.Frame.FillColor != widgets.WithAlpha(shell.PlannerAvailableBlue, 0.25) {
 		t.Fatal("active target needs gold outline over light blue")
 	}
 	tray.MouseOut()
+	shell.SettleFades()
 	if target.Frame.FillColor != target.Base {
 		t.Fatal("hover wash did not reset")
 	}

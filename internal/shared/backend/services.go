@@ -1,78 +1,12 @@
 package backend
 
 import (
-	"bytes"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
 	"time"
 )
-
-// ---- AI compaction (Anthropic) ----
-
-const aiPromptTmpl = "Rewrite this work log so it fits within %d characters.\n" +
-	"Rules: keep every distinct piece of work as its own '- ' bullet; never merge two " +
-	"different tasks into one bullet; never invent work that isn't listed; shorten wording " +
-	"and drop commit hashes if needed. Reply with the rewritten log only, no preamble.\n\n%s"
-
-func AiCompact(cfg Config, text string) (string, error) {
-	key := strings.TrimSpace(cfg.AnthropicAPIKey)
-	if key == "" {
-		return "", GhErr("Add an Anthropic API key in Settings to use AI compaction.")
-	}
-	model := cfg.AnthropicModel
-	if model == "" {
-		model = "claude-sonnet-4-6"
-	}
-	payload := map[string]any{
-		"model":      model,
-		"max_tokens": 1200,
-		"messages": []map[string]string{
-			{"role": "user", "content": fmt.Sprintf(aiPromptTmpl, RemarkCap, text)},
-		},
-	}
-	body, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "https://api.anthropic.com/v1/messages", bytes.NewReader(body))
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("x-api-key", key)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", GhErr("Anthropic API error: %v", err)
-	}
-	defer resp.Body.Close()
-	raw, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != 200 {
-		return "", GhErr("Anthropic API error: %s", strings.TrimSpace(string(raw)))
-	}
-	var data struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-	}
-	if err := json.Unmarshal(raw, &data); err != nil {
-		return "", GhErr("Anthropic API error: %v", err)
-	}
-	var sb strings.Builder
-	for _, b := range data.Content {
-		if b.Type == "text" {
-			sb.WriteString(b.Text)
-		}
-	}
-	out := strings.TrimSpace(sb.String())
-	if out == "" {
-		return "", GhErr("The model returned nothing.")
-	}
-	if len(out) > RemarkCap {
-		out = CompactLocally(strings.Split(out, "\n"))
-	}
-	return out, nil
-}
 
 // ---- currency ----
 

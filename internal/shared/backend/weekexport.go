@@ -39,7 +39,13 @@ func WeekBoardLinks(cfg Config, owner, fromDate, toDate string) []string {
 			continue
 		}
 		q := u.Query()
-		q.Set("filterQuery", WorklogProjectFilter(strings.TrimSpace(owner), fromDate, toDate))
+		filter := WorklogProjectFilter(strings.TrimSpace(owner), fromDate, toDate)
+		if ref, err := ParseProjectRef(raw); err == nil {
+			if fields, ok := knownWorklogFields.Load(worklogFieldsKey(ref)); ok {
+				filter = worklogFilterForFields(filter, fields.([]field))
+			}
+		}
+		q.Set("filterQuery", filter)
 		u.RawQuery = q.Encode()
 		out = append(out, u.String())
 	}

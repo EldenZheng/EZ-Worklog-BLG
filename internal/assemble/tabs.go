@@ -34,4 +34,8 @@ func BuildAllTabs(ui *shell.UI) {
 		container.NewTabItem(shell.PlannerTabName, kanban.BuildPlannerTab(ui)),
 		container.NewTabItem(shell.ProjectsTabName, projects.BuildProjectsTab(ui)),
 	)
+	// Kanban and the Sprint Calendar share one redraw, which skips whichever
+	// of the two is out of sight; opening it draws what it missed.
+	ui.Tabs.WhenShown(shell.KanbanTabName, func() { kanban.CatchUp(ui.Kanban) })
+	ui.Tabs.WhenShown(shell.PlannerTabName, func() { kanban.CatchUp(ui.Kanban) })
 }

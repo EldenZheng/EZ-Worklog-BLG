@@ -2,6 +2,7 @@ package tests
 
 import (
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 	"testing"
 	"time"
@@ -51,6 +52,10 @@ func TestProjectIssuesGanttToggleKeepsSearchAndState(t *testing.T) {
 		})
 		return found
 	}
+	if transition == nil {
+		t.Fatal("the view toggle needs a sliding host")
+	}
+	outgoing := transition.Content
 	mode.SetSelected("Gantt")
 	if transition == nil || len(driver.anims) == 0 {
 		t.Fatal("the view toggle should start a sliding transition")
@@ -63,8 +68,12 @@ func TestProjectIssuesGanttToggleKeepsSearchAndState(t *testing.T) {
 	if transition.Content.Position().X <= 0 {
 		t.Fatal("Gantt should slide in from the right")
 	}
+	objects := test.WidgetRenderer(transition).Objects()
+	if len(objects) != 2 || objects[1] != outgoing || outgoing.Position().X >= 0 {
+		t.Fatal("the actual outgoing issue view must move left while Gantt moves in")
+	}
 	slide.Tick(1)
-	if transition.Content.Position().X != 0 {
+	if transition.Content.Position().X != 0 || len(test.WidgetRenderer(transition).Objects()) != 1 {
 		t.Fatal("the view must settle in place")
 	}
 	if chart() == nil || len(chart().Ranges) != 1 || chart().Ranges[0].Item.Number != 4 {
@@ -78,7 +87,14 @@ func TestProjectIssuesGanttToggleKeepsSearchAndState(t *testing.T) {
 	if chart() == nil || len(chart().Ranges) != 1 {
 		t.Fatal("clearing a search must restore the matching timeline")
 	}
+	outgoing = transition.Content
 	mode.SetSelected("Issues")
+	slide = driver.anims[len(driver.anims)-1]
+	slide.Tick(.5)
+	if transition.Content.Position().X >= 0 || outgoing.Position().X <= 0 {
+		t.Fatal("returning to Issues must reverse the motion")
+	}
+	slide.Tick(1)
 	if chart() != nil || !contains(labels(page), "#4  Payment") {
 		t.Fatal("switching back must preserve the same issue search")
 	}

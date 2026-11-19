@@ -38,6 +38,13 @@ type KanbanUI struct {
 	CalendarLegendClip     fyne.CanvasObject
 	// CompletedOpen unfolds the finished sprints in the sidebar; folded by default.
 	CompletedOpen bool
+	// BoardStale and CalendarStale say a redraw skipped that page while it was
+	// out of sight; it is drawn when next shown.
+	BoardStale, CalendarStale bool
+	// ColumnsOpen lists the status columns showing every card, not only the
+	// first few; ColumnsOpenFor is the selection it was opened under.
+	ColumnsOpen    map[string]bool
+	ColumnsOpenFor string
 	// CardsShown is which cards the board last showed (filter, sprint,
 	// search); when it changes the cards arrive top to bottom.
 	CardsShown string
@@ -104,10 +111,17 @@ type KanbanUI struct {
 	ProjectOff                 map[string]bool
 	SourceVersion              int
 	CalendarSprint             string
-	ExtraStatuses              map[string]bool
-	StatusChoices              *widget.CheckGroup
-	StatusChoiceView           fyne.CanvasObject
-	TypeChoiceView             fyne.CanvasObject
+	// requested is the sprints EnsureSelectionLoaded has asked for since the
+	// last full load.
+	requested map[string]bool
+	// searchAsked is the search (and load) EnsureSearchCounts last counted;
+	// searchTimer waits for the search to settle first.
+	searchTimer      *time.Timer
+	searchAsked      string
+	ExtraStatuses    map[string]bool
+	StatusChoices    *widget.CheckGroup
+	StatusChoiceView fyne.CanvasObject
+	TypeChoiceView   fyne.CanvasObject
 }
 
 func (k *KanbanUI) Save(p backend.SprintPlan) bool {
@@ -127,7 +141,7 @@ func (k *KanbanUI) Save(p backend.SprintPlan) bool {
 	return true
 }
 
-func (k *KanbanUI) Load(force bool) { k.load(force, "", false) }
+func (k *KanbanUI) Load(force bool) { k.load(force, nil, false) }
 
 // RefreshSprint refreshes one sprint; an empty key selects unscheduled items.
 func (k *KanbanUI) RefreshSprint(key string) {
@@ -135,10 +149,117 @@ func (k *KanbanUI) RefreshSprint(key string) {
 		k.SetMessage("Wait for the current GitHub operation, then refresh this sprint.")
 		return
 	}
-	k.load(true, key, true)
+	k.load(true, []string{key}, true)
 }
 
-func (k *KanbanUI) load(force bool, sprintKey string, scoped bool) {
+// selectionKeys are the sprints (by SprintKey, "" for no sprint) that what is
+// selected now shows: Kanban's sprint, filter or all of them, and the Sprint
+// Calendar's sprint. It is read off the UI thread, so it works from a copy of
+// the selection.
+func (k *KanbanUI) selectionKeys() func(backend.SprintBoard) []string {
+	return k.selected(k.CalendarSprint)
+}
+
+// kanbanKeys are the sprints Kanban's own selection shows.
+func (k *KanbanUI) kanbanKeys() func(backend.SprintBoard) []string { return k.selected("") }
+
+func (k *KanbanUI) selected(calendar string) func(backend.SprintBoard) []string {
+	filter, sprint, today := k.Filter, k.Sprint, Today()
+	return func(b backend.SprintBoard) []string {
+		var keys []string
+		if cur := b.Current(today); cur.ID != "" {
+			keys = append(keys, backend.SprintKey(cur))
+		}
+		switch filter {
+		case "sprint":
+			keys = append(keys, sprint)
+		case "none":
+			keys = append(keys, "")
+		case "all":
+			keys = append(keys, "")
+			for _, s := range b.Iterations() {
+				keys = append(keys, backend.SprintKey(s))
+			}
+		}
+		if calendar != "" && calendar != "current" {
+			keys = append(keys, calendar)
+		}
+		return keys
+	}
+}
+
+// startKeys are the sprints a full load fetches: those selected, the sprints
+// either side of the current one (the sidebar keeps the last one in view, and
+// the calendar runs into the next), and whatever was fetched before, kept
+// fresh.
+func (k *KanbanUI) startKeys() func(backend.SprintBoard) []string {
+	selected, today := k.selectionKeys(), Today()
+	before := map[string][]string{}
+	for _, b := range k.Plan.Boards {
+		for _, s := range b.Iterations() {
+			if b.Loaded != nil && b.Loaded[s.ID] {
+				before[b.URL] = append(before[b.URL], backend.SprintKey(s))
+			}
+		}
+		if b.Loaded != nil && b.Loaded[""] {
+			before[b.URL] = append(before[b.URL], "")
+		}
+	}
+	return func(b backend.SprintBoard) []string {
+		keys := selected(b)
+		previous, next := b.NeighbourSprints(today)
+		for _, s := range []backend.SprintIteration{previous, next} {
+			if s.ID != "" {
+				keys = append(keys, backend.SprintKey(s))
+			}
+		}
+		for url, loaded := range before {
+			if backend.SameSprintProject(url, b.URL) {
+				keys = append(keys, loaded...)
+			}
+		}
+		return keys
+	}
+}
+
+// EnsureSelectionLoaded fetches the sprints the selection shows that are not on
+// the boards yet: opening a sprint fetches it. Each is asked for once per full
+// load, so a sprint GitHub will not give is not asked for again and again.
+func (k *KanbanUI) EnsureSelectionLoaded() {
+	if k.Loading || k.Busy || len(k.Queue) > 0 || len(k.Plan.Boards) == 0 {
+		return
+	}
+	keys := k.selectionKeys()
+	var missing []string
+	for _, b := range k.Plan.Boards {
+		if !k.VisibleBoard(b) {
+			continue
+		}
+		for _, key := range keys(b) {
+			id := ""
+			if key != "" {
+				if id = b.SprintByKey(key).ID; id == "" {
+					continue
+				}
+			}
+			if !b.SprintLoaded(id) && !k.requested[key] {
+				if k.requested == nil {
+					k.requested = map[string]bool{}
+				}
+				k.requested[key] = true
+				missing = append(missing, key)
+			}
+		}
+	}
+	if len(missing) > 0 {
+		k.load(true, missing, true)
+	}
+}
+
+// load fetches the boards. A full load reads each board's sprints and their
+// counts and fetches the sprints in view (see startKeys); a scoped one fetches
+// just the sprints keys names, on the boards already here.
+func (k *KanbanUI) load(force bool, keys []string, scoped bool) {
 	if k.Busy || len(k.Queue) > 0 {
 		// Never refresh under queued writes: the fresh boards would race
 		// them. Refresh once the queue is empty instead.
@@ -152,26 +273,27 @@ func (k *KanbanUI) load(force bool, sprintKey string, scoped bool) {
 	}
 	k.Loading = true
 	k.SyncActivity()
-	k.SetMessage("Loading configured project boards… You can use the saved local calendar while loading.")
+	if scoped {
+		k.SetMessage("Loading the sprint from GitHub…")
+	} else {
+		k.requested = nil
+		k.SetMessage("Loading configured project boards… You can use the saved local calendar while loading.")
+	}
 	previousBoards := append([]backend.SprintBoard{}, k.Plan.Boards...)
 	sources := append([]backend.KanbanSource{}, backend.KanbanSources(k.Ui.Cfg)...)
 	version := k.SourceVersion
-	boards := make([]backend.SprintBoard, 0, 2)
-	var errors []string
+	want := k.startKeys()
+	results := make([]*backend.SprintBoard, len(sources))
+	failures := make([]string, len(sources))
 	// Async rather than a bare goroutine, so the tests can run it in step:
 	// the save at the end writes the planner file, and one landing after its
 	// test had finished wrote into a folder already being deleted.
 	// The bar counts requests: each board's details and pages of items, and
 	// the further pages and passes it finds it needs as it reads.
-	var counted sync.Mutex
+	var counted, inline sync.Mutex
 	progress := backend.FetchProgress{Total: len(sources) * backend.SprintBoardSteps}
 	if scoped {
-		progress.Total = 0
-		for _, b := range previousBoards {
-			if sprintKey == "" || b.SprintByKey(sprintKey).ID != "" {
-				progress.Total++
-			}
-		}
+		progress.Total = 0 // each sprint counts itself in as it starts
 	}
 	k.LoadProgress = progress
 	step := func(done, more int) {
@@ -187,53 +309,86 @@ func (k *KanbanUI) load(force bool, sprintKey string, scoped bool) {
 			}
 		}
 		if RunAsyncInline {
+			// The sprints are fetched side by side: one update at a time.
+			inline.Lock()
+			defer inline.Unlock()
 			apply()
 		} else {
 			fyne.Do(apply)
 		}
 	}
+	// Tests that run loads in step want each request on this goroutine.
+	backend.SequentialFetch = RunAsyncInline
 	k.Ui.Async(func() error {
-		for _, source := range sources {
-			u := source.URL
-			var b backend.SprintBoard
-			var err error
-			if !scoped {
-				b, err = backend.FetchSprintBoardTracked(u, source.Filter, step)
-			} else {
-				found := false
-				for _, old := range previousBoards {
-					if backend.SameSprintProject(old.URL, u) {
-						found = true
-						if sprintKey != "" && old.SprintByKey(sprintKey).ID == "" {
-							b = old
-						} else {
-							old.Filter = source.Filter
-							b, err = backend.RefreshSprint(old, sprintKey, step)
-						}
+		// The boards load side by side.
+		var wg sync.WaitGroup
+		for i, source := range sources {
+			wg.Add(1)
+			load := func(i int, source backend.KanbanSource) {
+				defer wg.Done()
+				var old *backend.SprintBoard
+				for j := range previousBoards {
+					if backend.SameSprintProject(previousBoards[j].URL, source.URL) {
+						old = &previousBoards[j]
 						break
 					}
 				}
-				if !found {
-					continue
-				}
-			}
-			if err != nil {
-				errors = append(errors, u+": "+err.Error())
-				for _, old := range previousBoards {
-					if backend.SameSprintProject(old.URL, u) {
-						boards = append(boards, old)
+				var b backend.SprintBoard
+				var err error
+				if !scoped {
+					b, err = backend.FetchSprintBoardLazy(source.URL, source.Filter, want, step)
+				} else {
+					if old == nil {
+						return
+					}
+					b = *old
+					b.Filter = source.Filter
+					// A board that is not fetched a sprint at a time has every
+					// sprint already; refreshing one asks GitHub again.
+					if b.Loaded == nil && len(keys) == 1 {
+						if keys[0] == "" || b.SprintByKey(keys[0]).ID != "" {
+							b, err = backend.RefreshSprint(b, keys[0], step)
+						}
+					} else {
+						b, err = backend.RefreshSprints(b, keys, step)
 					}
 				}
+				if err != nil {
+					failures[i] = source.URL + ": " + err.Error()
+					// A board that could not be read at all keeps what it had;
+					// one that read some of its sprints keeps those.
+					if b.ID == "" || b.Loaded == nil {
+						if old != nil {
+							results[i] = old
+						}
+						return
+					}
+				}
+				results[i] = &b
+			}
+			if RunAsyncInline {
+				load(i, source)
 			} else {
-				boards = append(boards, b)
+				go load(i, source)
 			}
 		}
+		wg.Wait()
 		return nil
 	}, func() {
 		k.Loading = false
 		if version != k.SourceVersion {
 			k.Load(true)
 			return
+		}
+		boards := make([]backend.SprintBoard, 0, len(sources))
+		var errors []string
+		for i := range sources {
+			if results[i] != nil {
+				boards = append(boards, *results[i])
+			}
+			if failures[i] != "" {
+				errors = append(errors, failures[i])
+			}
 		}
 		if !scoped {
 			k.Loaded = len(errors) == 0
@@ -355,15 +510,29 @@ type SprintDragCard struct {
 	Item    backend.SprintItem
 	Content fyne.CanvasObject
 	lifted  bool
+	press   *CardPress
+	held    bool // the button is down on it
 }
 
+// A Kanban card presses as Log Work's tiles do (see CardPress).
 func (c *SprintDragCard) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(c.Content)
+	if c.press == nil {
+		c.press = NewCardPress(c, func() fyne.CanvasObject { return c.Content })
+	}
+	return c.press.Wrap(widget.NewSimpleRenderer(c.Content))
 }
 
-func (c *SprintDragCard) Cursor() desktop.Cursor { return widgets.GrabCursor{} }
+func (c *SprintDragCard) MouseDown(e *desktop.MouseEvent) { c.held = true; c.press.Down(e) }
+func (c *SprintDragCard) MouseUp(*desktop.MouseEvent)     { c.PressReleased() }
+func (c *SprintDragCard) PressReleased()                  { c.held = false; c.press.Up() }
 
-func (c *SprintDragCard) Tapped(*fyne.PointEvent) { Hooks.KanbanUIEditor(c.K, c.Board, c.Item) }
+// Cursor is the pointing hand, and the grabbing hand while it is held.
+func (c *SprintDragCard) Cursor() desktop.Cursor { return CardCursor(c.held || c.lifted) }
+
+func (c *SprintDragCard) Tapped(*fyne.PointEvent) {
+	c.press.Play()
+	Hooks.KanbanUIEditor(c.K, c.Board, c.Item)
+}
 
 func (c *SprintDragCard) Dragged(e *fyne.DragEvent) {
 	k := c.K
@@ -373,6 +542,7 @@ func (c *SprintDragCard) Dragged(e *fyne.DragEvent) {
 		return
 	}
 	if !c.lifted {
+		c.press.Cancel() // the ghost carries it now
 		c.lifted = true
 		k.Dragging = true
 		ghost := DragGhost(c.Item.Title, backend.SprintEstimate(c.Item, k.Plan.Tasks[c.Item.Key(c.Board.ID)]), k.Accent(c.Board, c.Item))
@@ -415,7 +585,7 @@ func (c *SprintDragCard) DragEnd() {
 	if !c.lifted {
 		return
 	}
-	c.lifted = false
+	c.lifted, c.held = false, false
 	ReleaseBubble()
 	k := c.K
 	k.Dragging = false
@@ -622,6 +792,9 @@ type CombinedSprint struct {
 	Key    string
 	Sprint backend.SprintIteration
 	Count  int
+	// Matches is how many answer Kanban's search, -1 while GitHub is still
+	// counting a sprint not fetched yet. It is Count with no search.
+	Matches int
 }
 
 func (k *KanbanUI) VisibleBoard(b backend.SprintBoard) bool { return !k.ProjectOff[b.ID] }
@@ -632,13 +805,10 @@ func (k *KanbanUI) CombinedSprints(kanban ...bool) []CombinedSprint {
 		if !k.VisibleBoard(b) {
 			continue
 		}
+		counted := func(it backend.SprintItem) bool { return len(kanban) == 0 || !kanban[0] || k.VisibleItemType(it) }
 		for _, s := range b.Iterations() {
-			count := 0
-			for _, it := range b.Items {
-				if it.SprintID == s.ID && (len(kanban) == 0 || !kanban[0] || k.VisibleItemType(it)) {
-					count++
-				}
-			}
+			// A sprint not fetched yet gives GitHub's count.
+			count := b.SprintCount(s.ID, counted)
 			if count == 0 {
 				continue
 			}
@@ -647,6 +817,13 @@ func (k *KanbanUI) CombinedSprints(kanban ...bool) []CombinedSprint {
 				groups[key] = &CombinedSprint{Key: key, Sprint: s}
 			}
 			groups[key].Count += count
+			switch matches := k.SprintMatches(b, s.ID, counted); {
+			case groups[key].Matches < 0:
+			case matches < 0:
+				groups[key].Matches = -1
+			default:
+				groups[key].Matches += matches
+			}
 		}
 	}
 	var result []CombinedSprint

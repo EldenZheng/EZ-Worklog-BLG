@@ -39,12 +39,15 @@ func TestReadmePlannerDemoFrames(t *testing.T) {
 	plan := seedPlannerDemo(t, ui)
 	assemble.BuildAllTabs(ui)
 	w.SetContent(ui.Tabs)
+	// Board snapshots are held in memory; SaveSprintPlan persists only local
+	// planning choices. Restore the fictional boards after building the menus.
+	ui.Kanban.Plan = plan
 	ui.Kanban.Loaded = true
 	ui.Tabs.SelectIndex(7)
 	kanban.Draw(ui.Kanban)
 	recordKanbanDemo(t, ui, w, filepath.Join(frames, "kanban"), out)
 	// Each recording starts from the same fictional board, independently.
-	ui.Kanban.Save(plan)
+	ui.Kanban.Save(seedPlannerDemo(t, ui))
 	ui.Kanban.Filter = "current"
 	ui.Kanban.ProjectOff = nil
 	ui.Tabs.SelectIndex(8)
@@ -286,6 +289,26 @@ func recordPlannerDemo(t *testing.T, ui *shell.UI, w fyne.Window, dir, out strin
 		t.Fatal("support checkbox missing")
 	}
 	rec.glide(rec.shot(), centreOf(support), 250)
+	// A short, separate walkthrough makes the display-only turquoise support
+	// segment readable without replaying the whole planning demonstration.
+	supportRec := newFrameRecorder(t, w, filepath.Join(filepath.Dir(dir), "support"), centreOf(support))
+	supportRec.stay(supportRec.shot(), 1800, false)
+	support.SetChecked(true)
+	supportRec.stay(supportRec.shot(), 2800, true)
+	// A redraw replaces the checkbox; find the current control before unticking.
+	walkCanvas(k.CalendarBody, func(o fyne.CanvasObject) {
+		if check, ok := o.(*widget.Check); ok && strings.Contains(check.Text, "+180") {
+			support = check
+		}
+	})
+	support.SetChecked(false)
+	supportRec.stay(supportRec.shot(), 1800, true)
+	supportRec.finish([4]float32{0, 0, w.Canvas().Size().Width, w.Canvas().Size().Height})
+	walkCanvas(k.CalendarBody, func(o fyne.CanvasObject) {
+		if check, ok := o.(*widget.Check); ok && strings.Contains(check.Text, "+180") {
+			support = check
+		}
+	})
 	support.SetChecked(true)
 	rec.stay(rec.shot(), 1600, true)
 	// Show that the same calendar can switch to Month and back to Week.
@@ -306,10 +329,13 @@ func recordPlannerDemo(t *testing.T, ui *shell.UI, w fyne.Window, dir, out strin
 		view.Choose(index)
 		rec.stay(rec.shot(), 1800, true)
 	}
-	// Hover reveals the per-day trash control; Cancel keeps every local block.
+	// Hover the date header to reveal its Delete; block faces have their own.
 	card := demoPlannerCard(t, k, "invoice", 1)
-	card.MouseIn(nil)
-	if card.Day == nil || !card.Day.Clear.Visible() {
+	if card.Day == nil {
+		t.Fatal("scheduled card's day missing")
+	}
+	card.Day.MouseIn(nil)
+	if !card.Day.Clear.Visible() {
 		t.Fatal("per-day clear was not revealed on hover")
 	}
 	rec.glide(rec.shot(), centreOf(card.Day.Clear), 450)

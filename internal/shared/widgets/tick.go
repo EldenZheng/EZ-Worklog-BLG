@@ -201,6 +201,9 @@ type TickCheck struct {
 	// OnChanged hears the new state as soon as the box is clicked; the tick
 	// goes on drawing after it.
 	OnChanged func(bool)
+	// OnTapAt, if set, hears where a click on the box landed (window
+	// coordinates), before OnChanged, for a ripple across the row it is in.
+	OnTapAt func(at fyne.Position)
 }
 
 // NewTickCheck is a TickCheck ticked or not, drawn in ink (gold when nil)
@@ -208,7 +211,7 @@ type TickCheck struct {
 func NewTickCheck(checked bool, ink color.Color, changed func(bool)) *TickCheck {
 	t := &TickCheck{motion: NewTickMotion(ink), OnChanged: changed}
 	t.motion.Border = t.motion.ink
-	t.check = &hoverCheck{}
+	t.check = &hoverCheck{owner: t}
 	t.check.Checked = checked
 	t.check.ExtendBaseWidget(t.check)
 	t.check.OnChanged = func(on bool) {
@@ -280,7 +283,19 @@ func (r *tickCheckRenderer) Destroy()                     { r.t.motion.Stop() }
 type hoverCheck struct {
 	widget.Check
 	parent func(on bool)
+	owner  *TickCheck
 }
+
+func (c *hoverCheck) Tapped(e *fyne.PointEvent) {
+	if c.owner != nil && c.owner.OnTapAt != nil && e != nil && !c.Disabled() {
+		c.owner.OnTapAt(e.AbsolutePosition)
+	}
+	c.Check.Tapped(e)
+}
+
+// Toggle ticks or unticks the box as a click on it would: with its motion,
+// and OnChanged told.
+func (t *TickCheck) Toggle() { t.check.SetChecked(!t.check.Checked) }
 
 func (c *hoverCheck) MouseIn(e *desktop.MouseEvent) {
 	c.Check.MouseIn(e)

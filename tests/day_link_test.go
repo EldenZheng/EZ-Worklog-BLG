@@ -1,11 +1,15 @@
 package tests
 
 import (
+	"image/color"
 	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/assemble"
 	"worklog/internal/menus/kanban"
@@ -13,6 +17,7 @@ import (
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // dayLinkIn finds the heading that starts with text and the block laid over it.
@@ -105,5 +110,64 @@ func TestSprintCalendarDateKeepsTheDayLit(t *testing.T) {
 	link.MouseOut()
 	if hover.ClearFade.Shown() {
 		t.Fatal("Delete should go when the pointer leaves the date")
+	}
+}
+
+// Under the pointer a day's heading turns gold, so it reads as a link; today's,
+// gold at rest, turns white. Off it, each goes back.
+func TestDayHeadingInkUnderThePointer(t *testing.T) {
+	a := test.NewApp()
+	d := &collectDriver{Driver: a.Driver()}
+	fyne.SetCurrentApp(&motionTestApp{App: a, driver: d})
+	defer func() { fyne.SetCurrentApp(a); a.Quit() }()
+	ui := &shell.UI{}
+	variant := fyne.CurrentApp().Settings().ThemeVariant()
+	ink := func(o fyne.CanvasObject) color.Color {
+		return o.(*container.ThemeOverride).Theme.Color(theme.ColorNameForeground, variant)
+	}
+	for _, today := range []bool{false, true} {
+		label := widget.NewLabel("Day")
+		var heading fyne.CanvasObject = label
+		date, lit := "2020-01-06", color.Color(widgets.LogoGold)
+		if today {
+			date, lit = shell.Today(), color.White
+			heading = container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+		}
+		var hovered bool
+		row := ui.DayLink(date, label, heading, func(_ fyne.CanvasObject, on bool) { hovered = on }).(*fyne.Container)
+		rest := ink(row.Objects[0])
+		link := row.Objects[1].(*shell.Tappable)
+		link.MouseIn(nil)
+		enter := d.anims[len(d.anims)-1]
+		if enter.Duration != widgets.HoverDuration || !hovered || !sameColor(ink(row.Objects[0]), rest) {
+			t.Fatal("hover should start a fade while notifying its day immediately")
+		}
+		enter.Tick(.5)
+		middle := ink(row.Objects[0])
+		if !sameColor(middle, shell.MixColor(rest, lit, .5)) {
+			t.Fatal("the heading should blend toward its hover colour")
+		}
+		link.MouseOut()
+		leave := d.anims[len(d.anims)-1]
+		enter.Tick(1)
+		if hovered || !sameColor(ink(row.Objects[0]), middle) {
+			t.Fatal("leaving mid-fade should preserve the current colour and ignore stale frames")
+		}
+		leave.Tick(.5)
+		if !sameColor(ink(row.Objects[0]), shell.MixColor(rest, lit, .25)) {
+			t.Fatal("leaving should fade back from the current frame")
+		}
+		link.MouseIn(nil)
+		enter = d.anims[len(d.anims)-1]
+		leave.Tick(1)
+		enter.Tick(1)
+		if !sameColor(ink(row.Objects[0]), lit) {
+			t.Fatal("hover should end gold, or white for today")
+		}
+		link.MouseOut()
+		d.anims[len(d.anims)-1].Tick(1)
+		if !sameColor(ink(row.Objects[0]), rest) {
+			t.Fatal("leaving should restore the heading's original colour")
+		}
 	}
 }

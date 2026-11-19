@@ -85,6 +85,10 @@ func GoldChoice(control fyne.CanvasObject) fyne.CanvasObject {
 	return container.NewThemeOverride(widgets.AnimatedChoice(control), RadioTheme{Theme: theme.Current()})
 }
 
+func GoldTickChoice(check *widget.Check) fyne.CanvasObject {
+	return container.NewThemeOverride(widgets.AnimatedTickChoice(check), RadioTheme{Theme: theme.Current()})
+}
+
 func (t PillTheme) Size(name fyne.ThemeSizeName) float32 {
 	switch name {
 	case theme.SizeNameButtonRadius:
@@ -107,6 +111,12 @@ func SavedTag(text string) fyne.CanvasObject {
 // CodeReviewTag identifies a single review wherever its work is displayed.
 func CodeReviewTag() fyne.CanvasObject {
 	return OutlineTag("Code review", PlannerPlanColor)
+}
+
+var MissingMeetingRecordingMaroon = color.NRGBA{R: 0xA6, G: 0x4B, B: 0x60, A: 0xff}
+
+func MissingMeetingRecordingTag() fyne.CanvasObject {
+	return OutlineTag("Missing Meeting Recording", MissingMeetingRecordingMaroon)
 }
 
 // OutlineTag is a compact caption with coloured ink and a rounded outline.
@@ -141,6 +151,17 @@ type pillTabs struct {
 	// badge wraps the gear and says when a newer release is waiting.
 	badge    *updateBadge
 	settings int
+	// shown runs when the tab of that name is brought up (see WhenShown).
+	shown map[string]func()
+}
+
+// WhenShown runs fn each time the tab called name is brought up, for a page
+// that skips redraws while it is out of sight and catches up on its return.
+func (t *pillTabs) WhenShown(name string, fn func()) {
+	if t.shown == nil {
+		t.shown = map[string]func(){}
+	}
+	t.shown[name] = fn
 }
 
 func NewPillTabs(items ...*container.TabItem) *pillTabs {
@@ -274,6 +295,9 @@ func (t *pillTabs) SelectIndex(index int) {
 	item.Content.Show()
 	t.page.Refresh()
 	t.styleButton(index)
+	if fn := t.shown[item.Text]; fn != nil {
+		fn()
+	}
 	if t.OnSelected != nil {
 		t.OnSelected(item)
 	}

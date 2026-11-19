@@ -106,6 +106,7 @@ type PlannerTimedFace struct {
 	glow                               shell.Glow
 	lit, over                          bool
 	marked                             bool          // edged in gold for its tray card
+	mark                               shell.Glow    // how far into its gold edge it has faded
 	top                                float32       // the inset above and below the text, set by Layout
 	icon                               fyne.Resource // issue or PR mark; nil for the meeting
 	inside                             int
@@ -154,11 +155,11 @@ func (f *PlannerTimedFace) paint() {
 	f.bg.FillColor = shell.MixColor(shell.BubbleFill(f.accent, false), shell.BubbleFill(f.accent, true), level)
 	f.bg.StrokeColor = shell.MixColor(shell.BubbleStroke(f.accent, false), shell.BubbleStroke(f.accent, true), level)
 	f.bg.StrokeWidth = 1
-	if f.marked {
+	if m := f.mark.Level(); m > 0 {
 		// Gold through and through, so the issue's blocks stand out at a glance.
-		f.bg.FillColor = shell.BlendColor(f.bg.FillColor, widgets.LogoGold, 0.6)
-		f.bg.StrokeColor = widgets.LogoGold
-		f.bg.StrokeWidth = 2
+		f.bg.FillColor = shell.BlendColor(f.bg.FillColor, widgets.LogoGold, 0.6*m)
+		f.bg.StrokeColor = shell.MixColor(f.bg.StrokeColor, widgets.LogoGold, m)
+		f.bg.StrokeWidth = 1 + m
 	}
 	f.stripe.FillColor = shell.MixColor(color.Transparent, f.accent, level)
 	f.placeStripe(level)
@@ -222,7 +223,13 @@ func (f *PlannerTimedFace) SetMarked(on bool) {
 		return
 	}
 	f.marked = on
-	f.paint()
+	// The gold edge fades in and out rather than snapping.
+	f.mark.Duration = shell.SlowFade
+	target := float32(0)
+	if on {
+		target = 1
+	}
+	f.mark.To(target, func(float32) { f.paint() })
 }
 
 func newPlannerTimedFace(title, project, issueURL string, minutes int, accent color.Color, icon fyne.Resource) *PlannerTimedFace {

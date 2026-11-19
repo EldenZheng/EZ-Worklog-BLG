@@ -22,6 +22,11 @@ RECORDINGS = {
     "drag": "drag-drop.gif",
     "kanban": "kanban.gif",
     "planner": "sprint-calendar.gif",
+    "projects": "projects.gif",
+    "project-gantt": "project-gantt.gif",
+    "support": "weekday-support.gif",
+    "settings-storage": "settings-storage.gif",
+    "meeting-worklog": "meeting-worklog.gif",
 }
 
 
@@ -122,3 +127,9 @@ if __name__ == "__main__":
         print(f"{dst}: {dst.stat().st_size:,} bytes")
     if "popup" in crops:
         stills(args.screenshots, crops["popup"])
+    if "project-gantt" in crops:
+        path = args.screenshots / "13-project-gantt.png"
+        meta = path.with_suffix(".json")
+        crop = tuple(round(v) for v in json.loads(meta.read_text()))
+        Image.open(path).convert("RGB").crop(crop).save(path)
+        meta.unlink()

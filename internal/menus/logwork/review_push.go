@@ -33,8 +33,12 @@ func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.
 			return nil
 		}
 		body := strings.TrimSpace(backend.OrDefault(r["remarks"], r["description"]))
+		if r["type"] == backend.KindMeeting && (r["meeting_title"] != "" || r["meeting_recording"] != "") {
+			res, pushErr = backend.PushMeetingEntry(ui.Cfg, r, progress)
+			return nil
+		}
 		res, pushErr = backend.PushEntry(ui.Cfg, r["issue"], r["date"], r["owner"],
-			r.Minutes(), body, r["issue_body"], backend.OrDefault(r["mode"], "issue"), r["issue_url"],
+			r.Minutes(), body, r["issue_body"], backend.RowPushMode(r), r["issue_url"],
 			backend.SubTitleBaseFor(r), progress)
 		return nil
 	}, func() {

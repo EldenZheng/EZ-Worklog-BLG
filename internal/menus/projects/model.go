@@ -77,11 +77,11 @@ type WeekCounts struct {
 	Progress int `json:"progress"`
 }
 
-// Saved is data\projects.json: the projects in tab order, and the one last
-// open.
+// Saved keeps projects in tab order. The current choice lasts only this session;
+// reopening the app always starts with the leftmost project.
 type Saved struct {
 	Projects []Project `json:"projects"`
-	Selected string    `json:"selected,omitempty"`
+	Selected string    `json:"-"`
 }
 
 // Find returns the project with this ID, or nil.
@@ -94,7 +94,7 @@ func (s *Saved) Find(id string) *Project {
 	return nil
 }
 
-// Current is the project last open, or the first one when that is gone.
+// Current is the project open this session, or the first one before a choice.
 func (s *Saved) Current() *Project {
 	if p := s.Find(s.Selected); p != nil {
 		return p
@@ -136,6 +136,10 @@ func Save(store *backend.Store, s Saved) error {
 	if err != nil {
 		return err
 	}
+	return saveProjectBytesLocked(store, raw)
+}
+
+func saveProjectBytesLocked(store *backend.Store, raw []byte) error {
 	file, err := os.CreateTemp(store.Dir, ".projects-*")
 	if err != nil {
 		return err
@@ -154,6 +158,40 @@ func Save(store *backend.Store, s Saved) error {
 		return err
 	}
 	return nil
+}
+
+// ClearReportHistory preserves project definitions, exclusions and unknown
+// fields; only the locally recorded weekly figures are removed.
+func ClearReportHistory(store *backend.Store) error {
+	fileLock.Lock()
+	defer fileLock.Unlock()
+	raw, err := os.ReadFile(savedPath(store))
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return err
+	}
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(fields["projects"], &entries); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		delete(entry, "history")
+	}
+	fields["projects"], err = json.Marshal(entries)
+	if err != nil {
+		return err
+	}
+	raw, err = json.MarshalIndent(fields, "", "  ")
+	if err != nil {
+		return err
+	}
+	return saveProjectBytesLocked(store, raw)
 }
 
 func newID() string {

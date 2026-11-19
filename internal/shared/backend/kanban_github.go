@@ -61,6 +61,16 @@ type SprintBoard struct {
 	ID, Title, URL, Filter string
 	Fields                 []SprintField
 	Items                  []SprintItem
+	// Loaded, when set, names the sprints whose items have been fetched, by
+	// sprint ID ("" for the items in no sprint). Nil means every item is here.
+	// Counts is how many items each sprint has on GitHub, so a sprint not
+	// fetched yet can still say how many it holds.
+	Loaded map[string]bool `json:"-"`
+	Counts map[string]int  `json:"-"`
+	// SearchCounts is Counts for the search SearchFor: how many items in each
+	// sprint not fetched yet answer it.
+	SearchCounts map[string]int `json:"-"`
+	SearchFor    string         `json:"-"`
 }
 
 func (b SprintBoard) Field(name string) SprintField {
@@ -86,16 +96,19 @@ func (b SprintBoard) Current(date string) SprintIteration {
 	return SprintIteration{}
 }
 
-// HiddenDone reports a Done item outside the sprint running on date. The
-// board shows Done work for the current sprint only, whatever the source
-// filter says: older (or unscheduled) Done work is history, and holding it
-// would only grow memory.
+// HiddenDone keeps Done work for current and previous sprints. Unscheduled
+// items, unknown iterations and sprints that have not started stay hidden.
 func (b SprintBoard) HiddenDone(it SprintItem, date string) bool {
 	if !strings.EqualFold(strings.TrimSpace(it.Status), "Done") {
 		return false
 	}
-	current := b.Current(date)
-	return current.ID == "" || it.SprintID != current.ID
+	for _, sprint := range b.Iterations() {
+		if sprint.ID != "" && sprint.ID == it.SprintID {
+			_, err := time.Parse("2006-01-02", sprint.StartDate)
+			return err != nil || sprint.Duration <= 0 || sprint.StartDate > date
+		}
+	}
+	return true
 }
 
 // CurrentDoneFilter turns a source filter into one that finds the current
@@ -103,6 +116,12 @@ func (b SprintBoard) HiddenDone(it SprintItem, date string) bool {
 // (-status:Done, is:open). Status, state and sprint terms are replaced; the
 // rest (assignee, repo, label…) still narrows the result.
 func CurrentDoneFilter(filter string) string {
+	return DoneFilter(filter) + " sprint:@current"
+}
+
+// DoneFilter retains ownership/repository/label constraints while allowing
+// closed Done work from all started sprints, even with an is:open source filter.
+func DoneFilter(filter string) string {
 	var kept []string
 	for _, term := range filterTerms(filter) {
 		key := strings.ToLower(strings.TrimPrefix(term, "-"))
@@ -118,7 +137,7 @@ func CurrentDoneFilter(filter string) string {
 		}
 		kept = append(kept, term)
 	}
-	return strings.TrimSpace(strings.Join(append(kept, "status:Done", "sprint:@current"), " "))
+	return strings.TrimSpace(strings.Join(append(kept, "status:Done"), " "))
 }
 
 // filterTerms splits a project filter on spaces outside double quotes.
@@ -186,6 +205,37 @@ func FetchSprintBoardTracked(rawURL, filter string, step func(done, more int)) (
 	if step == nil {
 		step = func(int, int) {}
 	}
+	b, err := fetchSprintMeta(rawURL, filter, step)
+	if err != nil {
+		return b, err
+	}
+	today := WorkDate(time.Now())
+	seen := map[string]bool{}
+	keep := func(it SprintItem) {
+		if !seen[it.ID] && !b.HiddenDone(it, today) {
+			seen[it.ID] = true
+			b.Items = append(b.Items, it)
+		}
+	}
+	if err = fetchSprintItems(b.ID, b.Filter, keep, step); err != nil {
+		return b, err
+	}
+	for _, sprint := range b.Iterations() {
+		if b.HiddenDone(SprintItem{Status: "Done", SprintID: sprint.ID}, today) {
+			continue
+		}
+		step(0, 1) // one additional pass for current and previous finished work
+		if err = fetchSprintItems(b.ID, DoneFilter(b.Filter), keep, step); err != nil {
+			return b, err
+		}
+		break
+	}
+	return b, nil
+}
+
+// fetchSprintMeta reads a board's details: its title, fields and sprints, but
+// none of its items.
+func fetchSprintMeta(rawURL, filter string, step func(done, more int)) (SprintBoard, error) {
 	b := SprintBoard{URL: rawURL}
 	ref, err := ParseProjectRef(rawURL)
 	if err != nil {
@@ -214,23 +264,6 @@ func FetchSprintBoardTracked(rawURL, filter string, step func(done, more int)) (
 		return b, fmt.Errorf("project unavailable: %s", rawURL)
 	}
 	b.ID, b.Title, b.Filter, b.Fields = p.ID, p.Title, filter, p.Fields.Nodes
-	today := WorkDate(time.Now())
-	seen := map[string]bool{}
-	keep := func(it SprintItem) {
-		if !seen[it.ID] && !b.HiddenDone(it, today) {
-			seen[it.ID] = true
-			b.Items = append(b.Items, it)
-		}
-	}
-	if err = fetchSprintItems(b.ID, b.Filter, keep, step); err != nil {
-		return b, err
-	}
-	if b.Current(today).ID != "" {
-		step(0, 1) // a second pass, for the current sprint's finished work
-		if err = fetchSprintItems(b.ID, CurrentDoneFilter(b.Filter), keep, step); err != nil {
-			return b, err
-		}
-	}
 	return b, nil
 }
 
@@ -241,6 +274,19 @@ func RefreshSprint(b SprintBoard, key string, step func(int, int)) (SprintBoard,
 	if key != "" && sprint.ID == "" {
 		return b, fmt.Errorf("sprint is no longer available")
 	}
+	if step == nil {
+		step = func(int, int) {}
+	}
+	fresh, err := fetchSprintScope(b, key, sprint, step)
+	if err != nil {
+		return b, err
+	}
+	return mergeSprint(b, sprint.ID, fresh), nil
+}
+
+// sprintScope is the board's filter narrowed to one sprint (or to the items in
+// none, for an empty key), and the scope term it ends with.
+func sprintScope(b SprintBoard, key string, sprint SprintIteration) (filter, scope string) {
 	var terms []string
 	for _, term := range filterTerms(b.Filter) {
 		field, value, _ := strings.Cut(strings.ToLower(strings.TrimPrefix(term, "-")), ":")
@@ -249,38 +295,69 @@ func RefreshSprint(b SprintBoard, key string, step func(int, int)) (SprintBoard,
 		}
 		terms = append(terms, term)
 	}
-	scope := "no:sprint"
+	scope = "no:sprint"
 	if key != "" {
 		scope = "sprint:" + strconv.Quote(sprint.Title)
 	}
-	filter := strings.TrimSpace(strings.Join(terms, " ") + " " + scope)
-	if step == nil {
-		step = func(int, int) {}
+	return strings.TrimSpace(strings.Join(terms, " ") + " " + scope), scope
+}
+
+// fetchSprintScope fetches one sprint's items: those the filter finds, and,
+// once the sprint has started, its Done ones too.
+func fetchSprintScope(b SprintBoard, key string, sprint SprintIteration, step func(int, int)) ([]SprintItem, error) {
+	filter, scope := sprintScope(b, key, sprint)
+	today := WorkDate(time.Now())
+	// What the filter finds and, once the sprint has started, its Done items:
+	// two searches, run side by side, then put together in that order.
+	searches := []string{filter}
+	if key != "" && !b.HiddenDone(SprintItem{Status: "Done", SprintID: sprint.ID}, today) {
+		step(0, 1)
+		searches = append(searches, DoneFilter(b.Filter)+" "+scope)
 	}
+	found := make([][]SprintItem, len(searches))
+	errs := make([]error, len(searches))
+	eachAtOnce(len(searches), len(searches), func(i int) {
+		errs[i] = fetchSprintItems(b.ID, searches[i], func(it SprintItem) { found[i] = append(found[i], it) }, step)
+	})
 	var fresh []SprintItem
 	seen := map[string]bool{}
-	keep := func(it SprintItem) {
-		if it.SprintID == sprint.ID && !seen[it.ID] && !b.HiddenDone(it, WorkDate(time.Now())) {
-			seen[it.ID] = true
-			fresh = append(fresh, it)
+	for i := range searches {
+		if errs[i] != nil {
+			return nil, errs[i]
+		}
+		for _, it := range found[i] {
+			if it.SprintID == sprint.ID && !seen[it.ID] && !b.HiddenDone(it, today) {
+				seen[it.ID] = true
+				fresh = append(fresh, it)
+			}
 		}
 	}
-	if err := fetchSprintItems(b.ID, filter, keep, step); err != nil {
-		return b, err
+	return fresh, nil
+}
+
+// mergeSprint puts one sprint's freshly fetched items in place of the ones the
+// board held for it, and marks that sprint fetched.
+func mergeSprint(b SprintBoard, id string, fresh []SprintItem) SprintBoard {
+	seen := map[string]bool{}
+	for _, it := range fresh {
+		seen[it.ID] = true
 	}
-	if sprint.Contains(WorkDate(time.Now())) {
-		step(0, 1)
-		if err := fetchSprintItems(b.ID, CurrentDoneFilter(b.Filter), keep, step); err != nil {
-			return b, err
-		}
-	}
+	items := append([]SprintItem{}, fresh...)
 	for _, it := range b.Items {
-		if it.SprintID != sprint.ID && !seen[it.ID] {
-			fresh = append(fresh, it)
+		if it.SprintID != id && !seen[it.ID] {
+			items = append(items, it)
 		}
 	}
-	b.Items = fresh
-	return b, nil
+	b.Items = items
+	if b.Loaded != nil {
+		loaded := make(map[string]bool, len(b.Loaded)+1)
+		for k, v := range b.Loaded {
+			loaded[k] = v
+		}
+		loaded[id] = true
+		b.Loaded = loaded
+	}
+	return b
 }
 
 // fetchSprintItems pages through the project items matching filter and hands

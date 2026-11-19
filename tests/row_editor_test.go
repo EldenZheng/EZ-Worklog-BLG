@@ -43,6 +43,9 @@ func walk(o fyne.CanvasObject, fn func(fyne.CanvasObject)) {
 		walk(v.Body, fn)
 	case *logwork.DragTile:
 		walk(v.Content, fn)
+	case *logwork.CommitTextPane:
+		walk(v.Description, fn)
+		walk(v.Remarks, fn)
 	case *shell.HoverButton:
 		fn(&v.Button)
 	case *widget.Card:
@@ -243,7 +246,7 @@ func TestPopupKeepsTheActionsBesideBack(t *testing.T) {
 	back := widget.NewButton("Back", func() {})
 	shell := logwork.PopupShell(back, logwork.RowEditor(ui, made[0], func() {}, func() {}))
 
-	for _, want := range []string{"Back", "Save", "Save & push", "Compact with AI"} {
+	for _, want := range []string{"Back", "Save", "Save & push", "Compact remarks"} {
 		if !contains(buttonNames(shell), want) {
 			t.Fatalf("%q is missing from the popup: %v", want, buttonNames(shell))
 		}
@@ -264,9 +267,8 @@ func TestPopupKeepsTheActionsBesideBack(t *testing.T) {
 			t.Fatalf("%q scrolls with the form: %v", name, buttonNames(scroll.Content))
 		}
 	}
-	// The mode dropdown rides up with them.
-	if !contains(labels(shell), "Push as") {
-		t.Fatalf("the push mode picker should be on the bar: %v", labels(shell))
+	if contains(labels(shell), "Push as") {
+		t.Fatalf("push mode is fixed and should not need a picker: %v", labels(shell))
 	}
 }
 
@@ -400,15 +402,16 @@ func TestOtherKeepsIssueBackedEditorControls(t *testing.T) {
 		"id": "1", "date": shell.Today(), "type": backend.KindOther,
 		"issue": "exampleorg/repo#8",
 	}, func() {}, func() {}).All()
-	if !contains(labels(form), "Push as") {
-		t.Fatal("Other is visually independent but still needs its Push-as control")
+	if contains(labels(form), "Push as") {
+		t.Fatal("Worklogs always create sub-issues and should not offer a mode picker")
 	}
 	if entryByPlaceholder(form, logwork.IssuePlaceholder) == nil {
 		t.Fatal("Other still points at an existing issue and needs its issue-ref field")
 	}
 }
 
-// Every row in the waiting list carries an edit button, and it opens a popup.
+// Every row in the waiting list opens the editor in a popup: a tile in the list
+// from its edit button, a card on its day in the week strip from a click.
 func TestEntryTableRowOpensTheEditor(t *testing.T) {
 	ui := editorUI(t)
 	defer fyne.CurrentApp().Quit()
@@ -423,18 +426,21 @@ func TestEntryTableRowOpensTheEditor(t *testing.T) {
 
 	// A waiting entry dated today stands on its day in the week strip; one dated
 	// outside the week on show is in the list below. Either way it can be edited.
-	var edit *widget.Button
+	var open func()
 	walk(container.NewVBox(ui.WeekBox, ui.RecentBox), func(c fyne.CanvasObject) {
 		if b, ok := c.(*widget.Button); ok && b.Icon == theme.DocumentCreateIcon() {
-			edit = b
+			open = b.OnTapped
+		}
+		if card, ok := c.(*logwork.DragTile); ok && card.OnTap != nil {
+			open = func() { card.Tapped(&fyne.PointEvent{}) }
 		}
 	})
-	if edit == nil {
+	if open == nil {
 		t.Fatal("the waiting list offers no way to edit a row")
 	}
-	edit.OnTapped()
+	open()
 	if ui.Win.Canvas().Overlays().Top() == nil {
-		t.Fatal("the edit button opened nothing")
+		t.Fatal("editing the row opened nothing")
 	}
 }
 

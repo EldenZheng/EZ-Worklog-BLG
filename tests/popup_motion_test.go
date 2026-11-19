@@ -37,12 +37,23 @@ func TestPopupsOpenRisingIntoPlace(t *testing.T) {
 	popup := overlayField(top, "Content").(fyne.CanvasObject)
 	backdrop := overlayField(top, "Background").(*fyne.Container)
 	var shade *canvas.Rectangle
+	var blur *canvas.Blur
 	for _, o := range backdrop.Objects {
-		if r, ok := o.(*canvas.Rectangle); ok {
-			shade = r
+		switch x := o.(type) {
+		case *canvas.Rectangle:
+			shade = x
+		case *canvas.Blur:
+			blur = x
 		}
 	}
 	final, full := popup.Position(), shade.FillColor
+	radius := blur.Radius
+	// The app's Fyne lets a blur fade (tools/patchfyne); its radius never
+	// moves, since stepping it made the page behind pulse.
+	clear := reflect.ValueOf(blur).Elem().FieldByName("Clear")
+	if !clear.IsValid() {
+		t.Fatal("the blur has no Clear: build against the patched Fyne")
+	}
 	if _, _, _, alpha := full.RGBA(); alpha == 0 {
 		t.Fatal("the backdrop should end visible")
 	}
@@ -58,7 +69,17 @@ func TestPopupsOpenRisingIntoPlace(t *testing.T) {
 	if _, _, _, alpha := shade.FillColor.RGBA(); alpha != 0 {
 		t.Fatal("the backdrop should start clear")
 	}
+	if clear.Float() != 1 || blur.Radius != radius {
+		t.Fatalf("the blur should start faded out at its own radius: clear %v, radius %v of %v", clear.Float(), blur.Radius, radius)
+	}
+	anim.Tick(0.5)
+	if c := clear.Float(); c <= 0 || c >= 1 || blur.Radius != radius {
+		t.Fatalf("half way, the blur should be part faded at the same radius: clear %v, radius %v", c, blur.Radius)
+	}
 	anim.Tick(1)
+	if clear.Float() != 0 {
+		t.Fatal("the blur should end at full strength")
+	}
 	if popup.Position() != final || color.NRGBAModel.Convert(shade.FillColor) != color.NRGBAModel.Convert(full) {
 		t.Fatal("the popup should end in place over the full backdrop")
 	}

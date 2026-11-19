@@ -126,8 +126,12 @@ func SetAssignee(it Item, who string) error {
 func (s Snapshot) Patch(url string, change func(*Item)) {
 	for p := range s.Parents {
 		for i := range s.Parents[p].Items {
-			if s.Parents[p].Items[i].URL == url {
-				change(&s.Parents[p].Items[i])
+			if it := &s.Parents[p].Items[i]; it.URL == url {
+				change(it)
+				// A new Status can open a closed issue again, or close it.
+				if it.ClosedOnGitHub {
+					it.SettleClosed()
+				}
 			}
 		}
 	}

@@ -43,6 +43,33 @@ var controls = []control{
 type replacement struct{ original, replaced, review string }
 
 var buttonChanges = []replacement{
+	// Button geometry is animated inside its renderer, keeping the widget's
+	// layout and hit area fixed for every role, native dialog and extended button.
+	{"b.tapAnim = newButtonTapAnimation(tapBG, b, th)\n\tb.tapAnim.Curve = fyne.AnimationEaseOut",
+		"// The shared press animation is attached after the renderer is ready.",
+		"the button press animation setup"},
+	{"r.applyTheme()\n\treturn r",
+		"r.applyTheme()\n\tb.tapAnim = newWorklogButtonPressAnimation(r)\n\treturn r",
+		"the button press renderer"},
+	{"func (b *Button) tapAnimation() {",
+		"func (b *Button) worklogStockTapAnimation() {",
+		"the button press animation entry point"},
+	{"layout     fyne.Layout\n}",
+		"layout     fyne.Layout\n\tpress worklogPress\n\thover worklogHover\n}",
+		"the button press state"},
+	{"hovered, focused bool", "hovered, focused bool\n\tworklogHoverFade bool", "the optional button hover fade"},
+	{"bg.FillColor = bgColor", "r.worklogSetBackground(bgColor)", "the button hover paint"},
+	// An icon that turns up later resets the renderer's objects; the press
+	// picture stays on top of them.
+	{"r.SetObjects([]fyne.CanvasObject{r.background, r.tapBG, r.label, r.icon})",
+		"r.SetObjects(r.press.over([]fyne.CanvasObject{r.background, r.tapBG, r.label, r.icon}))",
+		"the button press picture"},
+	{"func (r *buttonRenderer) Layout(size fyne.Size) {",
+		"func (r *buttonRenderer) worklogUnscaledLayout(size fyne.Size) {",
+		"the button press layout"},
+	{"if !r.button.isAnimating {\n\t\t// if we are animating let the animation control the tapBG size\n\t\tr.tapBG.Resize(size)\n\t}",
+		"r.tapBG.Resize(size)",
+		"the button press surface geometry"},
 	// Standard gold buttons need dark labels and icons; primary blue actions and
 	// low-importance icon controls keep their own colours.
 	{"default:\n\t\t\tbackground = theme.ColorNameButton",
@@ -107,6 +134,9 @@ func run(stage string) error {
 		return err
 	}
 	if err := patchWheel(module.Dir, dependency); err != nil {
+		return err
+	}
+	if err := patchBlur(module.Dir, dependency); err != nil {
 		return err
 	}
 	if err := copyPatchFiles("_fynepatch", dependency); err != nil {
@@ -180,6 +210,16 @@ func patchWheel(source, dependency string) error {
 		return fmt.Errorf("review the mouse wheel patch for this Fyne version")
 	}
 	code = strings.ReplaceAll(code, original, "func (w *window) fyneProcessMouseScrolled(xoff float64, yoff float64) {")
+	// A control that shrinks while the pointer is held on it is told when the
+	// pointer is let go somewhere else: Fyne sends the release only to whatever
+	// is under the pointer then, and the control would stay shrunk.
+	const release = "\tcase release:\n\t\tw.mouseButton &= ^button\n\t}"
+	if strings.Count(code, release) != 1 {
+		return fmt.Errorf("review the press release patch for this Fyne version")
+	}
+	code = strings.Replace(code, release, "\tcase release:\n\t\tw.mouseButton &= ^button\n"+
+		"\t\tif held, ok := w.mousePressed.(interface{ PressReleased() }); ok && w.mousePressed != co {\n"+
+		"\t\t\theld.PressReleased()\n\t\t}\n\t}", 1)
 	return writePatched(dependency, file, code)
 }
 
@@ -256,6 +296,52 @@ func writeBuildMod(stage, dependency string) error {
 	edit := exec.Command("go", "mod", "edit", "-modfile", buildMod, "-replace=fyne.io/fyne/v2="+dependency)
 	if out, err := edit.CombinedOutput(); err != nil {
 		return fmt.Errorf("cannot configure the private Fyne build: %w: %s", err, out)
+	}
+	return nil
+}
+
+// blurChanges let a blur fade: Clear blends the blurred picture back toward the
+// sharp one, 0 the full blur and 1 none. Fyne's own blur can only change its
+// radius, and its kernel changes size with each whole pixel of radius, so a
+// popup's backdrop stepped from blurred to sharp instead of easing.
+var blurChanges = []struct{ file, original, replaced string }{
+	{"canvas/blur.go", "\tCornerRadius float32\n}",
+		"\tCornerRadius float32\n\n\t// Clear fades the blur out: 0 is the full blur, 1 none.\n\tClear float32\n}"},
+	{"internal/painter/gl/draw.go",
+		"\tp.SetUniform1f(p.blurProgram, \"sampleScale\", sampleScale)\n",
+		"\tp.SetUniform1f(p.blurProgram, \"sampleScale\", sampleScale)\n" +
+			"\tp.SetUniform1f(p.blurProgram, \"clear\", fyne.Min(fyne.Max(b.Clear, 0), 1))\n"},
+	{"internal/painter/gl/shaders/blur.frag", "uniform float sampleScale;\n",
+		"uniform float sampleScale;\nuniform float clear;\n"},
+	{"internal/painter/gl/shaders/blur.frag", "mix(texture2D(tex, fragTexCoord), sum, alpha);",
+		"mix(texture2D(tex, fragTexCoord), sum, alpha * (1.0 - clear));"},
+	{"internal/painter/gl/shaders/blur_es.frag", "uniform float sampleScale;\n",
+		"uniform float sampleScale;\nuniform float clear;\n"},
+	{"internal/painter/gl/shaders/blur_es.frag", "mix(texture2D(tex, fragTexCoord), sum, alpha);",
+		"mix(texture2D(tex, fragTexCoord), sum, alpha * (1.0 - clear));"},
+}
+
+func patchBlur(source, dependency string) error {
+	files := map[string]string{}
+	var order []string
+	for _, c := range blurChanges {
+		code, seen := files[c.file]
+		if !seen {
+			var err error
+			if code, err = readSource(source, c.file); err != nil {
+				return err
+			}
+			order = append(order, c.file)
+		}
+		if strings.Count(code, c.original) != 1 {
+			return fmt.Errorf("review the blur fade patch in %s for this Fyne version", c.file)
+		}
+		files[c.file] = strings.Replace(code, c.original, c.replaced, 1)
+	}
+	for _, file := range order {
+		if err := writePatched(dependency, file, files[file]); err != nil {
+			return err
+		}
 	}
 	return nil
 }

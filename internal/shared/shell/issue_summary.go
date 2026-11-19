@@ -73,12 +73,23 @@ func IssueSummaryCardForRows(cfg backend.Config, issue, title, amount string, ro
 			break
 		}
 	}
+	var entryTag fyne.CanvasObject
 	if singleReview {
+		entryTag = CodeReviewTag()
+	} else {
+		for _, row := range rows {
+			if backend.MissingMeetingRecording(row) {
+				entryTag = MissingMeetingRecordingTag()
+				break
+			}
+		}
+	}
+	if entryTag != nil {
 		full := fyne.MeasureText(ref, theme.TextSize(), meta.TextStyle).Width + 2*theme.InnerPadding() + 1
 		if ref != "" {
 			full += 16 + theme.Padding()
 		}
-		refLine = container.New(&widgets.RefTagLayout{Full: full}, refLine, CodeReviewTag())
+		refLine = container.New(&widgets.RefTagLayout{Full: full}, refLine, entryTag)
 	}
 	footer := container.New(widgets.NewSidesLayout(refLine, badge, 0), refLine, badge)
 	var onTap func()

@@ -15,6 +15,12 @@ if [ "${1:-}" = "--test" ]; then
 fi
 output="${1:-../Worklog}"
 
+# Apple's compiler otherwise inherits the runner's macOS version, making a
+# release built on a new Mac refuse older systems. Go 1.26 supports macOS 12.
+if [ "$(go env GOOS)" = "darwin" ]; then
+    export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
+fi
+
 version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
 go run ./tools/patchfyne
 build_mod=.build/cursors/worklog.mod

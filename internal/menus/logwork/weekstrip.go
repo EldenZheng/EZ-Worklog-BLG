@@ -163,15 +163,15 @@ func DrawWeekStrip(ui *shell.UI) {
 		ui.WeekStart = start
 		DrawWeekStrip(ui)
 	}
-	prev := widget.NewButtonWithIcon("", theme.NavigateBackIcon(), func() {
-		walkTo(shell.ShiftWeek(ui.WeekStart, -1))
-	})
-	next := widget.NewButtonWithIcon("", theme.NavigateNextIcon(), func() {
-		walkTo(shell.ShiftWeek(ui.WeekStart, 1))
-	})
-	here := widget.NewButton("This week", func() { walkTo(backend.WeekStartOf(shell.Today())) })
+	h := weekHeadFor(ui)
+	prev, next, here, mail, refresh := h.prev, h.next, h.here, h.mail, h.refresh
+	prev.OnTapped = func() { walkTo(shell.ShiftWeek(ui.WeekStart, -1)) }
+	next.OnTapped = func() { walkTo(shell.ShiftWeek(ui.WeekStart, 1)) }
+	here.OnTapped = func() { walkTo(backend.WeekStartOf(shell.Today())) }
 	if ui.WeekStart == backend.WeekStartOf(shell.Today()) {
 		here.Disable()
+	} else {
+		here.Enable()
 	}
 	title := widget.NewLabelWithStyle(shell.WeekRangeLabel(ui.WeekStart),
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
@@ -197,17 +197,13 @@ func DrawWeekStrip(ui *shell.UI) {
 	// The same export as Log List, on the tab the week is actually worked from:
 	// having to change tabs to send the week you are looking at is a step for
 	// nothing. Both buttons run the same code on the same shared week.
-	mail := widget.NewButtonWithIcon("Export week for email", theme.MailComposeIcon(), func() {
-		ExportWeekForEmail(ui, days, byDay, state)
-	})
+	mail.OnTapped = func() { ExportWeekForEmail(ui, days, byDay, state) }
 
 	// Refresh reloads the project data behind the week strip — the boards, the
 	// day fills, the score line — and only that. The commit sweep has its own
 	// refresh in the pane above, and a second machine's push shows up on the
 	// board without waiting for the commit list to be rescanned.
-	refresh := widget.NewButtonWithIcon("Refresh calendar", theme.ViewRefreshIcon(), func() {
-		ui.RefreshTodayScore()
-	})
+	refresh.OnTapped = func() { ui.RefreshTodayScore() }
 
 	headLeft := container.NewHBox(prev, title, next, here)
 	if ui.LogLegend != nil {
@@ -257,6 +253,29 @@ func DrawWeekStrip(ui *shell.UI) {
 	// The boards and the week read by issue live on Log List now. They follow the
 	// same week as this strip, so walking the arrows here moves both.
 	shell.Hooks.DrawLogList(ui)
+}
+
+// weekHead is the buttons at the head of the week strip. Each of them redraws
+// the strip, and a button built again by its own click is a new one, at rest:
+// the one that was pressed is gone before it has shrunk. So they are built once
+// and every draw puts the same ones back, with what they do set for that draw.
+type weekHead struct{ prev, next, here, mail, refresh *widget.Button }
+
+var weekHeads = map[*shell.UI]*weekHead{}
+
+func weekHeadFor(ui *shell.UI) *weekHead {
+	h := weekHeads[ui]
+	if h == nil {
+		h = &weekHead{
+			prev:    widget.NewButtonWithIcon("", theme.NavigateBackIcon(), nil),
+			next:    widget.NewButtonWithIcon("", theme.NavigateNextIcon(), nil),
+			here:    widget.NewButton("This week", nil),
+			mail:    widget.NewButtonWithIcon("Export week for email", theme.MailComposeIcon(), nil),
+			refresh: widget.NewButtonWithIcon("Refresh calendar", theme.ViewRefreshIcon(), nil),
+		}
+		weekHeads[ui] = h
+	}
+	return h
 }
 
 // WeekBoardsPanel keeps the week's links in a gold bubble at the foot of Log List.
@@ -478,16 +497,16 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		caption,
 	}
 
-	if placeholder > 0 {
-		support := shell.WeekCaption(fmt.Sprintf("+%dm support", placeholder))
-		support.Color = shell.WeekdaySupportColor()
-		body = append(body, support)
-	}
 	// What is still waiting is the card itself, standing on the day it will be
 	// pushed with — every one of them, however long that makes the column. The
 	// list above is for the entries that belong to some other week.
+	dup := duplicateRows(drafts)
 	for _, r := range drafts {
-		body = append(body, newDragTile(ui, r, DayRowCard(ui, r, func() { DrawRecent(ui) })))
+		refresh := func() { DrawRecent(ui) }
+		card := newDragTile(ui, r, dayRowCard(ui, r, refresh, dup[r["id"]]))
+		// A click opens the entry in the editor Saved locally opens it in.
+		card.OnTap = func() { openRowEditor(ui, r, refresh) }
+		body = append(body, card)
 	}
 
 	// The frame is kept to hand so a drop target can be lit without rebuilding
@@ -524,6 +543,12 @@ func DayScoreLine(mins int) string {
 // carries the same three actions in the same row as the tile in the list, so
 // the two read as the same card wherever it happens to be standing.
 func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
+	return dayRowCard(ui, r, refresh, false)
+}
+
+// dayRowCard is DayRowCard, tagged when another entry on the same day goes to
+// the same issue (or is another bulk review).
+func dayRowCard(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.CanvasObject {
 	accent := shell.RowAccentColor(ui.Cfg, r)
 	// One line, elided at the width the column actually has.
 	//
@@ -556,25 +581,33 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 	}
 	where.Wrapping = fyne.TextWrapBreak
 	var whereLine fyne.CanvasObject = where
-	if backend.RowIsSingleCodeReview(r) {
+	if backend.RowIsSingleCodeReview(r) || backend.MissingMeetingRecording(r) {
 		// The label's own right padding is the gap before the tag. One extra
 		// pixel keeps rounding from wrapping a reference that fits.
 		full := fyne.MeasureText(where.Text, theme.TextSize(), where.TextStyle).Width + 2*theme.InnerPadding() + 1
-		whereLine = container.New(&RefTagLayout{Full: full}, where, shell.CodeReviewTag())
+		tag := shell.CodeReviewTag()
+		if backend.MissingMeetingRecording(r) {
+			tag = shell.MissingMeetingRecordingTag()
+		}
+		whereLine = container.New(&RefTagLayout{Full: full}, where, tag)
 	}
 
-	push, edit, del := rowActions(ui, r, refresh)
+	// A click on the card opens it in the editor (see DragTile.OnTap), so it
+	// carries no Edit; its Delete icon shows only while the card is lit,
+	// fading in and out with the light.
+	push, _, _ := rowActions(ui, r, refresh)
 	actionItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
-	if shell.RowPartlySaved(r) {
-		actionItems = append(actionItems, shell.SavedTag("partly saved"))
-	}
-	if ui.IssueHasPending(r["issue"]) {
-		actionItems = append(actionItems, shell.SavedTag("commits remaining"))
-	}
-	actionItems = append(actionItems, container.NewHBox(widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del)))
+	actionItems = append(actionItems, rowTags(ui, r, duplicate, true)...)
+	// The Delete icon's own hover fades as gently as the icon itself.
+	del := shell.NewFadeIconButton(theme.DeleteIcon(), func() { ConfirmDelete(ui, r, refresh) })
+	fade := shell.NewFader(del)
+	actionItems = append(actionItems, fade.View)
 	body := container.NewVBox(title, mins, whereLine, container.New(&cardActionsLayout{}, actionItems...))
 
-	return shell.OrgBubble(accent, body)
+	area := shell.HoverBubble(accent, body)
+	del.SetHoverParent(area.Bubble().ChildHover) // the card stays lit while on its Delete
+	area.Bubble().OnLight = fade.FadeTo
+	return area
 }
 
 // RefTagLayout stands a tag right after a reference. The objects are the
@@ -602,21 +635,69 @@ func newDayColumn(ui *shell.UI, date string, body fyne.CanvasObject, frame *canv
 // actually being dragged — otherwise every passing mouse would look like a drop.
 func MarkDropTargets(ui *shell.UI) {
 	for ds, col := range ui.WeekCols {
+		// The day under the card, its own day included, is edged, the edge
+		// fading in and out: green while the drop leaves it under the target,
+		// gold once the drop takes it to the target or past.
+		markMatches(ui, col)
 		if ui.DragRow != nil && ds == ui.HoverDay {
-			col.Frame.StrokeColor = theme.Color(theme.ColorNamePrimary)
-			col.Frame.StrokeWidth = 2
-			col.Frame.Refresh()
-			col.StartPulse(ui.DragRow.Minutes())
+			shell.FadeEdge(col.Frame, dropEdge(col, ui.DragRow), 2)
+			adding := ui.DragRow.Minutes()
+			if ui.DragRow["date"] == ds {
+				adding = 0 // over its own day, the card is counted there already
+			}
+			col.StartPulse(adding)
 			continue
 		}
 		col.StopPulse()
 		stroke, width := dayEdge(ds)
-		if col.Frame.StrokeColor == stroke && col.Frame.StrokeWidth == width {
+		shell.FadeEdge(col.Frame, stroke, width)
+	}
+}
+
+// dropEdge is the edge of the day a card is carried over: gold when the day
+// would hold the target once the card lands, green while it would still be
+// short. A card over its own day is counted there already.
+func dropEdge(col *shell.DayColumn, r backend.Row) color.Color {
+	total := col.Mins + col.Waiting + col.Planned
+	if r["date"] != col.Date {
+		total += r.Minutes()
+	}
+	if total >= backend.Target {
+		return widgets.LogoGold
+	}
+	return theme.Color(theme.ColorNameSuccess)
+}
+
+// markMatches lights in gold, while a card is held, every other card going to
+// the same issue (or bulk review) as the one in hand, whatever day it is on,
+// so a drop is seen to make a duplicate before it is made.
+func markMatches(ui *shell.UI, col *shell.DayColumn) {
+	place := ""
+	if ui.DragRow != nil {
+		place = rowPlace(ui.DragRow)
+	}
+	for _, card := range dayCards(col.Body) {
+		area, ok := card.Content.(*shell.HoverArea)
+		if !ok {
 			continue
 		}
-		col.Frame.StrokeColor, col.Frame.StrokeWidth = stroke, width
-		col.Frame.Refresh()
+		area.Bubble().SetMatch(place != "" && card.Row["id"] != ui.DragRow["id"] && rowPlace(card.Row) == place)
 	}
+}
+
+// dayCards are the saved entries standing in a day's column.
+func dayCards(obj fyne.CanvasObject) []*DragTile {
+	switch o := obj.(type) {
+	case *DragTile:
+		return []*DragTile{o}
+	case *fyne.Container:
+		var cards []*DragTile
+		for _, child := range o.Objects {
+			cards = append(cards, dayCards(child)...)
+		}
+		return cards
+	}
+	return nil
 }
 
 // ---- the card in the air ----
@@ -681,6 +762,11 @@ type DragTile struct {
 	Row     backend.Row
 	Content fyne.CanvasObject
 	lifted  bool
+	// OnTap, set before the tile is first shown, runs on a click, and makes
+	// the tile press as a Kanban card does.
+	OnTap func()
+	press *shell.CardPress
+	held  bool // the button is down on it
 }
 
 func newDragTile(ui *shell.UI, r backend.Row, content fyne.CanvasObject) *DragTile {
@@ -690,13 +776,34 @@ func newDragTile(ui *shell.UI, r backend.Row, content fyne.CanvasObject) *DragTi
 }
 
 func (t *DragTile) CreateRenderer() fyne.WidgetRenderer {
-	return widget.NewSimpleRenderer(t.Content)
+	inner := widget.NewSimpleRenderer(t.Content)
+	if t.OnTap == nil {
+		return inner
+	}
+	if t.press == nil {
+		t.press = shell.NewCardPress(t, func() fyne.CanvasObject { return t.Content })
+	}
+	return t.press.Wrap(inner)
 }
 
-func (t *DragTile) Cursor() desktop.Cursor { return widgets.GrabCursor{} }
+// Cursor is the pointing hand, and the grabbing hand while it is held.
+func (t *DragTile) Cursor() desktop.Cursor { return shell.CardCursor(t.held || t.lifted) }
+
+func (t *DragTile) MouseDown(e *desktop.MouseEvent) { t.held = true; t.press.Down(e) }
+func (t *DragTile) MouseUp(*desktop.MouseEvent)     { t.PressReleased() }
+func (t *DragTile) PressReleased()                  { t.held = false; t.press.Up() }
+
+func (t *DragTile) Tapped(*fyne.PointEvent) {
+	if t.OnTap == nil {
+		return
+	}
+	t.press.Play()
+	t.OnTap()
+}
 
 func (t *DragTile) Dragged(e *fyne.DragEvent) {
 	if !t.lifted {
+		t.press.Cancel() // the ghost carries it now
 		t.lifted = true
 		t.ui.DragRow = t.Row
 		showGhost(t.ui, t.Row)
@@ -737,7 +844,7 @@ func (t *DragTile) DragEnd() {
 	if !t.lifted {
 		return
 	}
-	t.lifted = false
+	t.lifted, t.held = false, false
 	shell.ReleaseBubble()
 	hideGhost(t.ui)
 
@@ -790,4 +897,54 @@ func dayEdge(date string) (color.Color, float32) {
 		return widgets.LogoGold, 2
 	}
 	return theme.Color(theme.ColorNameInputBorder), 1
+}
+
+// rowTags are the gold tags a saved entry carries: pushed only in part,
+// commits on its issue still to log (on a day card), and another entry the
+// same day going to the same place.
+func rowTags(ui *shell.UI, r backend.Row, duplicate, pending bool) []fyne.CanvasObject {
+	var tags []fyne.CanvasObject
+	if shell.RowPartlySaved(r) {
+		tags = append(tags, shell.SavedTag("Partially pushed"))
+	}
+	if pending && ui.IssueHasPending(r["issue"]) {
+		tags = append(tags, shell.SavedTag("Commits remaining"))
+	}
+	if duplicate {
+		tags = append(tags, shell.SavedTag("Duplicates same day"))
+	}
+	return tags
+}
+
+// rowPlace is where an entry goes: its issue, or the day's bulk review. Two
+// entries the same day going to one place are duplicates.
+func rowPlace(r backend.Row) string {
+	switch {
+	case r["type"] == backend.KindBulkReview || backend.RowIsBulkCodeReview(r):
+		return "bulk review"
+	case r["issue"] != "":
+		return "issue " + strings.ToLower(r["issue"])
+	}
+	return ""
+}
+
+// duplicateRows marks, by row ID, the entries that share a day with another
+// going to the same place: the same issue, or the day's bulk review.
+func duplicateRows(rows []backend.Row) map[string]bool {
+	byPlace := map[string][]string{}
+	for _, r := range rows {
+		if p := rowPlace(r); p != "" {
+			key := r["date"] + "|" + p
+			byPlace[key] = append(byPlace[key], r["id"])
+		}
+	}
+	dup := map[string]bool{}
+	for _, ids := range byPlace {
+		if len(ids) > 1 {
+			for _, id := range ids {
+				dup[id] = true
+			}
+		}
+	}
+	return dup
 }

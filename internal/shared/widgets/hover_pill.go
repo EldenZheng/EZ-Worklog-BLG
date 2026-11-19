@@ -11,6 +11,16 @@ import (
 // HoverDuration is shared by gold hover transitions throughout the app.
 const HoverDuration = 600 * time.Millisecond
 
+// RippleAt, set by the shell, ripples the part of area at pos (in area) of
+// size gold from at (window coordinates), as a click lands on it.
+var RippleAt func(area fyne.CanvasObject, pos fyne.Position, size fyne.Size, at fyne.Position)
+
+func ripple(area fyne.CanvasObject, pos fyne.Position, size fyne.Size, e *fyne.PointEvent) {
+	if RippleAt != nil && e != nil {
+		RippleAt(area, pos, size, e.AbsolutePosition)
+	}
+}
+
 // HoverPill fades in at the first item, slides between items, and fades out
 // on leaving. Lists, filters and charts share its gold fill and timing.
 type HoverPill struct {

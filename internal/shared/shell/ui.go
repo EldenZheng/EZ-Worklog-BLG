@@ -41,6 +41,20 @@ type Tappable struct {
 	FadeOnTap         bool
 	filterReplacement *Tappable // receives hover/leave when a filter redraw replaces this widget
 	filterHover       *filterHover
+	// Press, set before the card is first shown, makes it shrink under the
+	// pointer and spring back as a button does.
+	Press bool
+	press *CardPress
+	// Ripple makes a tap ripple gold from where it landed. Filters and the
+	// gold hover's rows ripple without it.
+	Ripple bool
+	// Grab, for a card that can be dragged, shows the pointing hand over it
+	// and the grabbing hand while the button is held down on it.
+	Grab bool
+	held bool
+	// RippleClear, if set, is a check box in the card the ripple keeps off,
+	// so it never covers the tick drawing itself.
+	RippleClear fyne.CanvasObject
 }
 
 func NewTappable(content fyne.CanvasObject, onTap func()) *Tappable {
@@ -51,12 +65,24 @@ func NewTappable(content fyne.CanvasObject, onTap func()) *Tappable {
 
 func (t *Tappable) CreateRenderer() fyne.WidgetRenderer {
 	if t.Feedback != nil {
-		return &feedbackRenderer{WidgetRenderer: widget.NewSimpleRenderer(t.Content), feedback: t.Feedback}
+		return t.pressRenderer(&feedbackRenderer{WidgetRenderer: widget.NewSimpleRenderer(t.Content), feedback: t.Feedback})
 	}
-	return widget.NewSimpleRenderer(t.Content)
+	return t.pressRenderer(widget.NewSimpleRenderer(t.Content))
 }
 
 func (t *Tappable) Tapped(e *fyne.PointEvent) {
+	// The ripple starts last, once any fade below has its picture of the
+	// button on the top layer, or that picture would hide it. It is measured
+	// now, before the tap redraws the button.
+	if e != nil && t.ripples() {
+		clear := float32(0)
+		if t.RippleClear != nil {
+			clear = RippleClearOf(t, t.RippleClear)
+		}
+		if start := prepareRippleOnPage(t, clear, e.AbsolutePosition); start != nil {
+			defer start()
+		}
+	}
 	if t.FadeOnTap {
 		fade := beginFilterFade(t)
 		defer fade.play()
@@ -69,6 +95,7 @@ func (t *Tappable) Tapped(e *fyne.PointEvent) {
 	if t.Feedback != nil {
 		t.Feedback.press()
 	}
+	t.playPress()
 	if t.onTap != nil {
 		t.onTap()
 	}
@@ -854,7 +881,7 @@ func (ui *UI) LoadProject(key, fromDate, toDate string, force bool) {
 	// The error is kept on the month, not shown: Status and Report say it
 	// where the month would be.
 	ui.Async(func() error {
-		items, err = backend.FetchProjectWorklogs(ui.Cfg, ui.Cfg.WorklogOwner, fromDate, toDate, progress)
+		items, err = backend.FetchWorklogsWithHistory(ui.Cfg, fromDate, toDate, progress)
 		return nil
 	}, func() {
 		defer finish()
@@ -957,6 +984,17 @@ func (ui *UI) RefreshAfterPush(date string) {
 	if date == "" || len(backend.ProjectURLs(ui.Cfg)) == 0 {
 		return
 	}
+	cfg := ui.Cfg
+	var archiveErr error
+	ui.Async(func() error { archiveErr = backend.RefreshHistoryDate(cfg, date); return nil }, func() {
+		if archiveErr != nil {
+			ui.Errf(fmt.Errorf("the push succeeded, but the history backup could not be refreshed: %w", archiveErr))
+		}
+		ui.refreshPushedRanges(date)
+	})
+}
+
+func (ui *UI) refreshPushedRanges(date string) {
 	ui.EnsureProjectCache()
 	for key, loading := range ui.ProjLoading {
 		if _, _, ok := keyCovers(key, date); loading && ok {

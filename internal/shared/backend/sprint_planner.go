@@ -20,7 +20,11 @@ import (
 // boards are cached at all, so a failed first load cannot wipe every estimate.
 func PruneSprintPlan(p SprintPlan, date string) (SprintPlan, bool) {
 	onBoard := map[string]bool{}
+	// Only boards holding every item can say an issue has left them: one
+	// fetched a sprint at a time lacks the sprints not opened yet.
+	complete := len(p.Boards) > 0
 	for _, b := range p.Boards {
+		complete = complete && b.Complete()
 		for _, it := range b.Items {
 			onBoard[it.Key(b.ID)] = true
 		}
@@ -44,14 +48,14 @@ func PruneSprintPlan(p SprintPlan, date string) (SprintPlan, bool) {
 		case !hasMeta:
 			changed = true
 			continue
-		case len(p.Boards) > 0 && !onBoard[key]:
+		case complete && !onBoard[key]:
 			changed = true
 			continue
 		}
 		tasks[key] = t
 	}
 	p.Tasks = tasks
-	if len(p.Boards) > 0 && len(p.TrayOrder) > 0 {
+	if complete && len(p.TrayOrder) > 0 {
 		var order []string
 		for _, key := range p.TrayOrder {
 			if onBoard[key] {

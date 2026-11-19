@@ -24,6 +24,7 @@ import (
 func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	toast := newSettingsToast()
 	var redrawBubbles func()
+	var refreshStorage func()
 	user := widget.NewEntry()
 	user.SetPlaceHolder("auto-detected from gh — leave blank")
 	owner := widget.NewEntry()
@@ -57,12 +58,9 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	back := widget.NewEntry()
 	cleanup := widget.NewEntry()
 	cleanup.SetPlaceHolder("Blank keeps everything")
-	mode := shell.NewGoldSelect([]string{"Create Worklog sub-issue", "Write on the issue itself"}, nil)
 	// Any number of months, typed in, rather than a few fixed choices.
 	reportRange := widget.NewEntry()
 	reportRange.SetPlaceHolder("1")
-	key := widget.NewPasswordEntry()
-	key.SetPlaceHolder("sk-ant-...")
 	// One board per org, one per line. Status and Report read the union of
 	// them, so work logged against a second org's project still counts.
 	projURL := widget.NewMultiLineEntry()
@@ -114,12 +112,6 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	if c.CleanupDays > 0 {
 		cleanup.SetText(strconv.Itoa(c.CleanupDays))
 	}
-	if c.DefaultMode == "issue" {
-		mode.SetSelected("Write on the issue itself")
-	} else {
-		mode.SetSelected("Create Worklog sub-issue")
-	}
-	key.SetText(c.AnthropicAPIKey)
 	reportRange.SetText(strconv.Itoa(backend.FinishedReportMonths(c)))
 	projURL.SetText(strings.Join(backend.ProjectURLs(c), "\n"))
 	if !ui.HasCfg {
@@ -215,10 +207,6 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 			}
 			reportN = n
 		}
-		m := "subissue"
-		if mode.Selected == "Write on the issue itself" {
-			m = "issue"
-		}
 		var repoList []string
 		for _, x := range strings.FieldsFunc(repos.Text, func(r rune) bool {
 			return r == '\n' || r == '\r' || r == ','
@@ -255,13 +243,12 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		newCfg.LookbackDays = backN
 		newCfg.CleanupDays = cleanupN
-		newCfg.DefaultMode = m
+		newCfg.DefaultMode = "subissue"
 		// One month is the default, saved as nothing.
 		newCfg.ReportMonths = 0
 		if reportN > 1 {
 			newCfg.ReportMonths = reportN
 		}
-		newCfg.AnthropicAPIKey = strings.TrimSpace(key.Text)
 		// First line stays the main board so an older build of this app, and
 		// anything reading project_url, still finds the one it expects.
 		var projList []string
@@ -276,14 +263,14 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		if len(projList) > 0 {
 			newCfg.ProjectURL, newCfg.ExtraProjectURLs = projList[0], projList[1:]
 		}
-		if newCfg.AnthropicModel == "" {
-			newCfg.AnthropicModel = "claude-sonnet-4-6"
-		}
 		if err := ui.Store.SaveConfig(newCfg); err != nil {
 			ui.Errf(err)
 			return
 		}
 		ui.Cfg = newCfg
+		if refreshStorage != nil {
+			refreshStorage()
+		}
 		if ui.Kanban != nil {
 			shell.Hooks.KanbanUISourcesChanged(ui.Kanban)
 		}
@@ -354,7 +341,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		goldPanel(ui.ProfileBox),
 		sidebarField("GitHub username (optional — auto from gh)", user),
 		sidebarField("Worklog owner", owner),
-		sidebarField("Name on meeting issues (optional)", dispName),
+		sidebarField("Display name (optional)", dispName),
 	)
 
 	// Color chips share the app's org mapping. Their three-dot controls open
@@ -412,7 +399,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		shell.LabeledHint("Board view URLs", "Optional saved views for weekly links. Blank uses the project boards above.", boardViews),
 		shell.LabeledHint("Kanban boards and filters", "Project URLs are read directly; shared view changes do not affect these filters. Applies to Kanban and Sprint Calendar.", kanbanFields),
 		container.NewGridWithColumns(2,
-			shell.LabeledHint("Meeting repository", "Destination for daily meeting issues (owner/repo).", meetingDest),
+			shell.LabeledHint("Meeting repository", "Destination for meeting issues (owner/repo).", meetingDest),
 			shell.LabeledHint("Bulk review repository", "Destination for daily bulk review issues (owner/repo).", reviewDest),
 		),
 	)
@@ -436,27 +423,23 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	)
 	worklogSection := container.NewVBox(
 		settingsTitle("Worklog"),
-		container.NewGridWithColumns(3,
-			shell.LabeledHint("Look back", "Days back the commit sweep scans for unlogged work.", back),
-			shell.LabeledHint("Default push mode", "Sub-issue creates a linked child. Issue writes on the parent itself.", outlinedSelect(mode)),
-			shell.LabeledHint("Anthropic API key", "Enables the AI Compact-remarks button. Leave blank to disable.", key),
-		),
+		shell.LabeledHint("Look back", "Days back the commit sweep scans for unlogged work.", back),
 		shell.LabeledHint("Clean up after (days)", "Forgets ignored commits, and the commit list on pushed entries, after this many days, or the look back if longer. The entries themselves stay. Blank keeps everything.", cleanup),
 	)
 
 	projectsSection := container.NewVBox(
 		settingsTitle("Projects"),
-		container.NewGridWithColumns(3,
-			shell.LabeledHint("Finished report range (months)", "How many months the finished report shows at a time. Its month opens every week since the start.", reportRange),
-		),
+		shell.LabeledHint("Finished report range (months)", "How many months the finished report shows at a time. Its month opens every week since the start.", reportRange),
 	)
 
 	mainInner := container.NewVBox(
 		sourcesSection,
 		layout.NewSpacer(),
 		salarySection,
-		worklogSection,
-		projectsSection,
+		container.NewGridWithColumns(2,
+			container.New(layout.NewCustomPaddedLayout(0, 0, 0, theme.Padding()*3), worklogSection),
+			container.New(layout.NewCustomPaddedLayout(0, 0, theme.Padding()*3, 0), projectsSection),
+		),
 		msg,
 	)
 	// Chunky theme bumps input padding so entries and the dropdown read as
@@ -470,9 +453,10 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// height while the column itself stretches to whatever height ratioRow
 	// hands it. The padding around each column adds a real gap between the
 	// two cards on top of ratioRow's own inter-column spacing.
-	// The update panel stands at the foot of the sidebar, under the identity
-	// fields, wherever the window's height leaves the foot.
-	sidebar := container.NewBorder(nil, updatePanel(ui), nil, nil, sidebarContent)
+	// Identity and Updates stay fixed at the two edges; storage scrolls between.
+	updates := updatePanel(ui)
+	storage, refreshStorage := storagePanel(ui)
+	sidebar := container.NewBorder(sidebarContent, updates, nil, nil, container.NewVScroll(storage))
 	ui.Update.Frame = sidebar
 	body := container.New(widgets.NewFluidRow(0.2, 0.8),
 		container.NewPadded(sidebar),
@@ -497,14 +481,6 @@ func sidebarField(label string, field fyne.CanvasObject) fyne.CanvasObject {
 	caption := widget.NewLabel(label)
 	caption.Wrapping = fyne.TextWrapWord
 	return container.NewVBox(caption, field)
-}
-
-// outlinedSelect wraps a Select in a bordered rectangle so it reads as a form
-// control alongside Entries. Fyne's default Select renderer paints no visible
-// outline on the app's gold theme, which made the "Default push mode" box
-// blend into the panel background beside the neighbouring Entry.
-func outlinedSelect(sel *shell.GoldSelect) fyne.CanvasObject {
-	return outlined(shell.WideSelect(sel))
 }
 
 func outlined(control fyne.CanvasObject) fyne.CanvasObject {
@@ -539,17 +515,6 @@ func (t chunkySettingsTheme) Size(name fyne.ThemeSizeName) float32 {
 func (t chunkySettingsTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	if name == theme.ColorNameSeparator {
 		return widgets.LogoGold
-	}
-	return t.Theme.Color(name, variant)
-}
-
-// sidebarLineTheme makes a line in the sidebar grey: the app's muted text colour,
-// so it stays readable in the light and dark themes alike.
-type sidebarLineTheme struct{ fyne.Theme }
-
-func (t sidebarLineTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
-	if name == theme.ColorNameSeparator {
-		return t.Theme.Color(theme.ColorNamePlaceHolder, variant)
 	}
 	return t.Theme.Color(name, variant)
 }

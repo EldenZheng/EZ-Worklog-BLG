@@ -464,7 +464,7 @@ func TestDayCardDistinguishesIncompletePushFromRemainingCommits(t *testing.T) {
 	withCommitLeft := labels(logwork.DayRowCard(ui, backend.Row{
 		"date": "2026-08-11", "minutes": "30", "issue": ref,
 	}, func() {}))
-	if !contains(withCommitLeft, "commits remaining") || contains(withCommitLeft, "partly saved") {
+	if !contains(withCommitLeft, "Commits remaining") || contains(withCommitLeft, "Partially pushed") {
 		t.Fatalf("unlogged commits should not look like a failed push: %v", withCommitLeft)
 	}
 
@@ -473,7 +473,7 @@ func TestDayCardDistinguishesIncompletePushFromRemainingCommits(t *testing.T) {
 		"issue_url": "https://github.com/exampleorg/repo/issues/8", "item_id": "PVTI_8",
 	}
 	partlySaved := labels(logwork.DayRowCard(ui, partial, func() {}))
-	if !contains(partlySaved, "partly saved") || contains(partlySaved, "commits remaining") {
+	if !contains(partlySaved, "Partially pushed") || contains(partlySaved, "Commits remaining") {
 		t.Fatalf("an incomplete GitHub push should carry the partly-saved tag: %v", partlySaved)
 	}
 	if got := labels(logwork.RowTile(ui, partial, func() {})); !contains(got, "partly saved on GitHub — retry push") {
@@ -584,7 +584,7 @@ func TestBulkReviewIssueRefShowsPartlySavedTag(t *testing.T) {
 		"issue": "exampleorg/sample-general-tasks#10440",
 	}
 	for _, card := range []fyne.CanvasObject{logwork.DayRowCard(ui, row, func() {}), logwork.RowTile(ui, row, func() {})} {
-		if got := labels(card); !contains(got, "partly saved") {
+		if got := labels(card); !contains(got, "Partially pushed") {
 			t.Fatalf("a created daily issue waiting for Worklog fields needs a visible tag: %v", got)
 		}
 	}
@@ -762,10 +762,12 @@ func TestDroppingACardMovesItToThatDay(t *testing.T) {
 	}
 	target := ui.WeekCols["2026-08-12"]
 	target.MouseIn(&desktop.MouseEvent{})
-	if target.Frame.StrokeColor != theme.Color(theme.ColorNamePrimary) {
-		t.Fatal("the day under the card should be lit while it is being carried")
+	shell.SettleFades() // the edge fades in; look at where it settles
+	// Green: the card leaves the day short of the target.
+	if target.Frame.StrokeColor != theme.Color(theme.ColorNameSuccess) {
+		t.Fatal("the day under the card should be edged green while the drop leaves it short")
 	}
-	if other := ui.WeekCols["2026-08-13"]; other.Frame.StrokeColor == theme.Color(theme.ColorNamePrimary) {
+	if other := ui.WeekCols["2026-08-13"]; other.Frame.StrokeColor == theme.Color(theme.ColorNameSuccess) {
 		t.Fatal("only the day under the card should be lit")
 	}
 	tile.DragEnd()
@@ -873,6 +875,37 @@ func TestWeekStripWalksTheWeeks(t *testing.T) {
 	}
 }
 
+// The strip's own buttons redraw it. Each must come through the redraw as the
+// same button, or the one that was pressed is thrown away before its press is
+// seen and a fresh one stands in its place.
+func TestWeekStripKeepsItsButtonsThroughARedraw(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	ui.WeekStart = shell.ShiftWeek(backend.WeekStartOf(shell.Today()), -2)
+	logwork.DrawWeekStrip(ui)
+	for _, name := range []string{"This week", "Refresh calendar", "Export week for email"} {
+		before := buttonNamed(ui.WeekBox, name)
+		if before == nil {
+			t.Fatalf("the strip has no %q button", name)
+		}
+		logwork.DrawWeekStrip(ui)
+		if buttonNamed(ui.WeekBox, name) != before {
+			t.Fatalf("%q was built again by the redraw", name)
+		}
+	}
+	home := buttonNamed(ui.WeekBox, "This week")
+	home.OnTapped()
+	if buttonNamed(ui.WeekBox, "This week") != home || !home.Disabled() {
+		t.Fatal("walking home should leave the pressed button standing, now with nothing to do")
+	}
+	// Walked away again, the same button comes back to life.
+	ui.WeekStart = shell.ShiftWeek(backend.WeekStartOf(shell.Today()), -1)
+	logwork.DrawWeekStrip(ui)
+	if buttonNamed(ui.WeekBox, "This week") != home || home.Disabled() {
+		t.Fatal("parked on another week, the way home should be live again")
+	}
+}
+
 // A week that straddles two months reads both of them, or the days either side
 // of the 1st would show as empty when they are not.
 func TestWeekAcrossTwoMonthsReadsBoth(t *testing.T) {
@@ -968,8 +1001,8 @@ func TestDroppingOntoACardLandsOnItsDay(t *testing.T) {
 	}
 }
 
-// The card on a day stays lit while the pointer is on its Push, edit or
-// delete button, not only on the card around them.
+// The card on a day stays lit while the pointer is on its Push or Delete
+// button, not only on the card around them.
 func TestDayCardStaysLitOverItsButtons(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
@@ -982,7 +1015,10 @@ func TestDayCardStaysLitOverItsButtons(t *testing.T) {
 	logwork.DrawRecent(ui)
 
 	var area *shell.HoverArea
-	var buttons []*shell.HoverButton
+	type hoverButton interface {
+		desktop.Hoverable
+	}
+	var buttons []hoverButton
 	walk(ui.WeekCols["2026-08-10"], func(o fyne.CanvasObject) {
 		switch x := o.(type) {
 		case *shell.HoverArea:
@@ -993,12 +1029,16 @@ func TestDayCardStaysLitOverItsButtons(t *testing.T) {
 		t.Fatal("the day's card should be a hover bubble")
 	}
 	walkRendered(area, func(o fyne.CanvasObject) {
-		if b, ok := o.(*shell.HoverButton); ok {
+		switch b := o.(type) {
+		case *shell.HoverButton:
+			buttons = append(buttons, b)
+		case *shell.FadeIconButton:
 			buttons = append(buttons, b)
 		}
 	})
-	if len(buttons) != 3 {
-		t.Fatalf("the card should carry Push, edit and delete, found %d", len(buttons))
+	// A click on the card edits it, so it carries Push and Delete only.
+	if len(buttons) != 2 {
+		t.Fatalf("the card should carry Push and Delete, found %d", len(buttons))
 	}
 	bubble := area.Content.(*shell.StripeBubble)
 	for _, b := range buttons {
@@ -1006,11 +1046,34 @@ func TestDayCardStaysLitOverItsButtons(t *testing.T) {
 		area.MouseOut() // the pointer moves onto the button
 		b.MouseIn(&desktop.MouseEvent{})
 		if !bubble.Lit() {
-			t.Fatalf("the card went dark under its %q button", b.Text)
+			t.Fatalf("the card went dark under its %T button", b)
 		}
 		b.MouseOut()
 		if bubble.Lit() {
 			t.Fatal("the card should go dark once the pointer leaves it")
 		}
 	}
+}
+
+// A card that would take the day to the target edges that day in gold.
+func TestADropThatFillsTheDayIsEdgedGold(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	if _, err := ui.Store.AppendRows([]backend.Row{{
+		"date": "2026-08-10", "minutes": "480", "description": "whole day",
+		"issue": "exampleorg/sample-intranet#42",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	logwork.DrawRecent(ui)
+	tile := dragTilesIn(ui.WeekBox)[0]
+	tile.Dragged(&fyne.DragEvent{Dragged: fyne.NewDelta(4, -60)})
+	target := ui.WeekCols["2026-08-12"]
+	target.MouseIn(&desktop.MouseEvent{})
+	shell.SettleFades()
+	if target.Frame.StrokeColor != widgets.LogoGold {
+		t.Fatal("a drop reaching 480 should edge the day in gold")
+	}
+	ui.DragRow, ui.HoverDay = nil, ""
+	logwork.MarkDropTargets(ui)
 }

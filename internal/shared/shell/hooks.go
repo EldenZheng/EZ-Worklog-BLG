@@ -9,6 +9,8 @@ import (
 // Hooks lets shared code reach functions that live in a menu package
 // without importing it. main wires every hook before the window opens.
 var Hooks struct {
+	ClearProjectHistory               func(*backend.Store) error
+	ReloadProjectHistory              func(*UI)
 	DrawCalendar                      func(*UI)
 	DrawCommitList                    func(*UI)
 	DrawDayPanel                      func(*UI)

@@ -8,6 +8,8 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/shared/widgets"
 )
 
 // OpenDayOnStatus jumps to a day on the Status tab, loading its month if the
@@ -32,10 +34,59 @@ func (ui *UI) OpenDayOnStatus(date string) {
 // day on Status. label is the heading's text, and sets how wide the block is, so
 // the rest of the row stays free; heading is what is drawn. hover, if set, hears
 // the pointer on the block, for a day that has to stay lit under it.
+//
+// Under the pointer the heading's text fades to gold, so it reads as a link;
+// today's, already gold at rest, fades to white instead.
 func (ui *UI) DayLink(date string, label *widget.Label, heading fyne.CanvasObject, hover func(owner fyne.CanvasObject, on bool)) fyne.CanvasObject {
 	link := NewTappable(canvas.NewRectangle(color.Transparent), func() { ui.OpenDayOnStatus(date) })
-	if hover != nil {
-		link.OnHover = func(on bool) { hover(link, on) }
+	// A heading already tinted (today's gold) is retinted in place: an outer
+	// override would lose to the inner one.
+	ink, ok := heading.(*container.ThemeOverride)
+	if !ok {
+		ink = container.NewThemeOverride(heading, theme.Current())
+		heading = ink
+	}
+	rest := ink.Theme
+	var lit color.Color = widgets.LogoGold
+	if date == Today() {
+		lit = color.White
+	}
+	var fade *fyne.Animation
+	var level float32
+	link.OnHover = func(on bool) {
+		if fade != nil {
+			fade.Stop()
+			fade = nil
+		}
+		from, target := level, float32(0)
+		if on {
+			target = 1
+		}
+		paint := func(done float32) {
+			level = from + (target-from)*done
+			ink.Theme = rest
+			if level > 0 {
+				base := rest.Color(theme.ColorNameForeground, fyne.CurrentApp().Settings().ThemeVariant())
+				ink.Theme = widgets.StatusHeaderTheme{Theme: rest, Ink: MixColor(base, lit, level)}
+			}
+			ink.Refresh()
+		}
+		if fyne.CurrentApp().Settings().ShowAnimations() {
+			var anim *fyne.Animation
+			anim = fyne.NewAnimation(widgets.HoverDuration, func(done float32) {
+				if fade == anim {
+					paint(done)
+				}
+			})
+			anim.Curve = fyne.AnimationEaseOut
+			fade = anim
+			anim.Start()
+		} else {
+			paint(1)
+		}
+		if hover != nil {
+			hover(link, on)
+		}
 	}
 	width := fyne.MeasureText(label.Text, theme.TextSize(), label.TextStyle).Width + 2*theme.InnerPadding()
 	return container.New(dayLinkLayout{width: width}, heading, link)

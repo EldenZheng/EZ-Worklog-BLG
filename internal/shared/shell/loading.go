@@ -317,7 +317,7 @@ func (ui *UI) SyncLoading() {
 		{MeetingTabName, ui.MeetingProgress, ui.MeetingBody, []string{"meeting:" + backend.OrDefault(ui.MeetingStart, MeetingWeekStartOf(Today()))}, ui.MeetingCommitLoad[backend.OrDefault(ui.MeetingStart, MeetingWeekStartOf(Today()))]},
 		{StatusTabName, ui.StatusProgress, ui.CalBody, []string{StatusCacheKey(ui.CalMonth)}, ui.ProjLoading[StatusCacheKey(ui.CalMonth)]},
 		{ReportTabName, ui.ReportProgress, ui.RepBody, []string{ReportCacheKey(ui.RepMonth), "rate"}, ui.ProjLoading[ReportCacheKey(ui.RepMonth)] || ui.RateLoading},
-		{SettingsTabName, ui.SettingsProgress, nil, []string{"profile", "settings-rate"}, ui.ProfileLoading},
+		{SettingsTabName, ui.SettingsProgress, nil, []string{"profile", "settings-rate", "history-backup"}, ui.ProfileLoading},
 	}
 	for _, page := range pages {
 		active, state := ui.progressFor(page.keys, page.fallback)

@@ -66,7 +66,7 @@ func TestProjectsAreSavedBesideTheWorklog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Current().Name != "Search" || len(got.Projects) != 2 || got.Projects[1].Issues[1] != "exampleorg/api#7" {
+	if got.Current().Name != "Checkout" || got.Selected != "" || len(got.Projects) != 2 || got.Projects[1].Issues[1] != "exampleorg/api#7" {
 		t.Fatalf("round trip lost something: %+v", got)
 	}
 	// The tabs tell projects apart by name.
@@ -452,7 +452,7 @@ func underlineTabs(o fyne.CanvasObject) *shell.UnderlineTabs {
 	return found
 }
 
-// Opening the tab fetches the project last open and draws its charts; the
+// Opening the tab starts with the leftmost project and draws its charts; the
 // projects stand in a row of tabs that ends with the + that adds one.
 func TestProjectsTabChartsTheOpenProject(t *testing.T) {
 	defer stubChildren(t, map[string]string{"": childrenPageOne, "c1": childrenPageTwo})()
@@ -468,13 +468,14 @@ func TestProjectsTabChartsTheOpenProject(t *testing.T) {
 
 	page := projectsPage(ui)
 	tabs := underlineTabs(page)
-	if tabs == nil || !slices.Equal(tabs.Options, []string{"Search", "Checkout", "+"}) || tabs.Selected != "Checkout" {
+	if tabs == nil || !slices.Equal(tabs.Options, []string{"Search", "Checkout", "+"}) || tabs.Selected != "Search" {
 		t.Fatalf("project tabs: %+v", tabs)
 	}
 	if got := labels(page); contains(got, "Workload By Person") {
 		t.Fatalf("nothing should be fetched before the tab is opened: %v", got)
 	}
 
+	tabs.SetSelected("Checkout")
 	openProjects(ui)
 	got := labels(page)
 	for _, want := range []string{"Status", "Workload By Person", "Burn-up", "Finished Report", "Week", "Parent Issues", "Milestones", "Issues",
@@ -552,8 +553,8 @@ func TestProjectsTabChartsTheOpenProject(t *testing.T) {
 		t.Fatalf("a project that cannot be read should say so: %v", got)
 	}
 	saved, err := projects.Load(ui.Store)
-	if err != nil || saved.Selected != "a" {
-		t.Fatalf("the open project should be remembered: %+v, %v", saved, err)
+	if err != nil || saved.Selected != "" {
+		t.Fatalf("the open project should not be saved: %+v, %v", saved, err)
 	}
 	// Each refresh keeps this week's in review and in progress, which GitHub
 	// does not remember, for the week panel to show later.
@@ -777,9 +778,9 @@ func TestProjectsPlusTabAddsAProject(t *testing.T) {
 	entries[1].SetText("https://github.com/exampleorg/shop/issues/1")
 	test.Tap(save)
 	saved, err := projects.Load(ui.Store)
-	if err != nil || len(saved.Projects) != 2 || saved.Current().Name != "Checkout" ||
+	if err != nil || len(saved.Projects) != 2 || saved.Current().Name != "Search" || saved.Projects[1].Name != "Checkout" ||
 		!slices.Equal(saved.Projects[1].Issues, []string{"exampleorg/shop#1"}) {
-		t.Fatalf("the new project should be saved and open: %+v, %v", saved, err)
+		t.Fatalf("the new project should be saved without persisting the selection: %+v, %v", saved, err)
 	}
 	tabs = underlineTabs(page)
 	if !slices.Equal(tabs.Options, []string{"Search", "Checkout", "+"}) || tabs.Selected != "Checkout" {

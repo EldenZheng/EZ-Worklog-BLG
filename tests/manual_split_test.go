@@ -44,7 +44,7 @@ func TestManualFormSplitsLongRemarks(t *testing.T) {
 			entryByPlaceholder(tab, logwork.IssuePlaceholder).SetText("exampleorg/repo#7")
 		}},
 		{"Meeting", backend.KindMeeting, func() {
-			entryByPlaceholder(tab, "What was it? (meeting notes)").SetText("Standup")
+			entryByPlaceholder(tab, "Meeting title (e.g. Sprint planning)").SetText("Standup")
 		}},
 		{"Code Review", backend.KindCodeReview, nil},
 		{"Independent", backend.KindIndependent, nil},

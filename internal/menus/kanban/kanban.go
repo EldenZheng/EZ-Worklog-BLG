@@ -44,7 +44,27 @@ func BuildKanbanTab(ui *shell.UI) fyne.CanvasObject {
 	if err != nil {
 		k.SetMessage("Cannot read local planner: " + err.Error())
 	}
-	search := shell.NewSearchEntry("Search issues or project", "", func(s string) { k.Search = strings.ToLower(s); Draw(k) })
+	// Each redraw builds the board afresh, so typing waits for a pause before
+	// drawing rather than drawing once per key. Clearing the field is at once.
+	var pause *time.Timer
+	search := shell.NewSearchEntry("Search issues or project", "", func(s string) {
+		k.Search = strings.ToLower(s)
+		if pause != nil {
+			pause.Stop()
+		}
+		if s == "" {
+			Draw(k)
+			return
+		}
+		query := k.Search
+		pause = time.AfterFunc(SearchPause, func() {
+			fyne.Do(func() {
+				if k.Search == query {
+					Draw(k)
+				}
+			})
+		})
+	})
 	refresh := widget.NewButtonWithIcon("Refresh GitHub", theme.ViewRefreshIcon(), func() { k.Load(true) })
 	k.RefreshButtons = append(k.RefreshButtons, refresh)
 	k.Activity = shell.NewLoadingIndicator()
@@ -53,6 +73,11 @@ func BuildKanbanTab(ui *shell.UI) fyne.CanvasObject {
 	Draw(k)
 	return k.Root
 }
+
+// SearchPause is how long Kanban's search waits after the last key before it
+// redraws the board. GitHub is asked to count matches later still (see
+// shell.SearchCountPause).
+const SearchPause = 400 * time.Millisecond
 
 func currentItems(k *shell.KanbanUI) []backend.SprintCandidate {
 	var out []backend.SprintCandidate
@@ -81,7 +106,7 @@ func MatchesIssueFilter(k *shell.KanbanUI, b backend.SprintBoard, it backend.Spr
 	if !k.VisibleItemType(it) {
 		return false
 	}
-	if k.Search != "" && !strings.Contains(strings.ToLower(it.Title+" "+it.URL+" "+b.Title), k.Search) {
+	if !k.MatchesSearch(b, it) {
 		return false
 	}
 	switch k.Filter {
@@ -123,8 +148,51 @@ func BuildPlannerTab(ui *shell.UI) fyne.CanvasObject {
 	return page
 }
 
+// ColumnCardsShown is how many cards a status column draws before its
+// "Show N more" toggle.
+const ColumnCardsShown = 20
+
+// columnMoreToggle opens a long column to all its cards, or folds it back to
+// the first ColumnCardsShown. hidden is how many are not drawn now.
+func columnMoreToggle(k *shell.KanbanUI, status string, hidden int) fyne.CanvasObject {
+	open := k.ColumnsOpen[status]
+	text := fmt.Sprintf("Show %d more", hidden)
+	if open {
+		text = "Show less"
+	}
+	toggle := shell.NewHoverTag(text, color.Transparent, widgets.LogoGold, widgets.LogoGold, shell.TagHoverInk, func() {
+		if k.ColumnsOpen == nil {
+			k.ColumnsOpen = map[string]bool{}
+		}
+		k.ColumnsOpen[status] = !open
+		Draw(k)
+	})
+	toggle.Wide = true
+	return toggle
+}
+
+// pageShown says a page is on screen, or not yet in the tab bar at all.
+func pageShown(page fyne.CanvasObject) bool {
+	return page == nil || page.Visible()
+}
+
+// CatchUp draws Kanban and the Sprint Calendar when either missed a redraw
+// while out of sight.
+func CatchUp(k *shell.KanbanUI) {
+	if k != nil && (k.BoardStale || k.CalendarStale) {
+		Draw(k)
+	}
+}
+
+// Draw rebuilds Kanban and the Sprint Calendar. With hundreds of issues each
+// page takes a noticeable moment to build, so a page out of sight is skipped
+// and drawn when it is next opened (see CatchUp).
 func Draw(k *shell.KanbanUI) {
 	k.RedrawPending = false
+	drawBoard := pageShown(k.Root)
+	drawCalendar := k.CalendarBody != nil && pageShown(k.CalendarPage)
+	k.BoardStale = !drawBoard
+	k.CalendarStale = k.CalendarBody != nil && !drawCalendar
 	sideOffset := shell.ScrollOffset(k.SideClip)
 	boardOffset := shell.ScrollOffset(k.BoardClip)
 	legendOffset := shell.ScrollOffset(k.LegendClip)
@@ -133,19 +201,21 @@ func Draw(k *shell.KanbanUI) {
 	if k.CalendarOffsets == nil {
 		k.CalendarOffsets = map[string]fyne.Position{}
 	}
-	if k.CalendarClip != nil {
+	if k.CalendarClip != nil && drawCalendar {
 		k.CalendarOffsets[k.CalendarDrawnMode] = shell.ScrollOffset(k.CalendarClip)
 	}
 	k.SyncActivity()
 	k.Targets = nil
 	k.Hover = nil
-	k.ColumnCards = map[string][]*shell.SprintDragCard{}
-	k.Body.Objects = []fyne.CanvasObject{boardView(k)}
-	k.Body.Refresh()
-	shell.RestoreScroll(k.SideClip, sideOffset)
-	shell.RestoreScroll(k.BoardClip, boardOffset)
-	shell.RestoreScroll(k.LegendClip, legendOffset)
-	if k.CalendarBody != nil {
+	if drawBoard {
+		k.ColumnCards = map[string][]*shell.SprintDragCard{}
+		k.Body.Objects = []fyne.CanvasObject{boardView(k)}
+		k.Body.Refresh()
+		shell.RestoreScroll(k.SideClip, sideOffset)
+		shell.RestoreScroll(k.BoardClip, boardOffset)
+		shell.RestoreScroll(k.LegendClip, legendOffset)
+	}
+	if drawCalendar {
 		k.Dates = nil
 		k.CalendarBody.Objects = []fyne.CanvasObject{shell.Hooks.KanbanUICalendar(k)}
 		k.CalendarBody.Refresh()
@@ -154,6 +224,11 @@ func Draw(k *shell.KanbanUI) {
 		shell.RestoreScroll(k.CalendarLegendClip, calendarLegendOffset)
 		k.CalendarDrawnMode = k.CalendarMode
 	}
+	// A sprint opened that is not fetched yet is fetched now; the redraw when
+	// it lands shows its cards. A search counts its matches in the sprints
+	// not fetched, once the typing has settled.
+	k.EnsureSelectionLoaded()
+	k.ScheduleSearchCounts()
 }
 
 func dropArea(k *shell.KanbanUI, content fyne.CanvasObject, b, kind, value string) fyne.CanvasObject {
@@ -184,11 +259,16 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 	// A new selection (sprint, filter, search) brings each column's cards in
 	// from the top down, one after another; any other redraw leaves them be.
 	shown := fmt.Sprint(k.Filter, "|", k.Sprint, "|", k.Search, "|", k.ProjectOff, "|", k.Plan.KanbanTypes)
-	// Held back while the boards are loading: the cards that arrive are the
-	// fresh ones, when the load lands.
-	arrive := shown != k.CardsShown && !k.Loading
-	if !k.Loading {
+	// No cards until the sprints shown are fetched: they arrive when they
+	// land, rather than turning up after the arrival has already played.
+	ready := k.SelectionReady()
+	arrive := ready && shown != k.CardsShown
+	if ready {
 		k.CardsShown = shown
+	}
+	// A column opened to all its cards folds back when the selection changes.
+	if k.ColumnsOpenFor != shown {
+		k.ColumnsOpen, k.ColumnsOpenFor = nil, shown
 	}
 	for _, status := range statuses {
 		status := status
@@ -197,18 +277,30 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 			value = ""
 		}
 		cards := container.NewVBox()
-		count := 0
-		for _, c := range ColumnOrder(k, value) {
-			count++
+		var order []ColumnCard
+		if ready {
+			order = ColumnOrder(k, value)
+		}
+		count := len(order)
+		// A long column draws its first cards only: hundreds of cards take
+		// seconds to build, and every move redraws the board.
+		limit := count
+		if !k.ColumnsOpen[status] && count > ColumnCardsShown {
+			limit = ColumnCardsShown
+		}
+		for i, c := range order[:limit] {
 			card := Card(k, c.Board, c.Item)
 			if d, ok := card.(*shell.SprintDragCard); ok {
 				k.ColumnCards[value] = append(k.ColumnCards[value], d)
 			}
 			if arrive {
-				cards.Add(shell.NewWipe(card, time.Duration(min(count, 12))*40*time.Millisecond))
+				cards.Add(shell.NewWipe(card, time.Duration(min(i+1, 12))*40*time.Millisecond))
 			} else {
 				cards.Add(card)
 			}
+		}
+		if count > ColumnCardsShown {
+			cards.Add(columnMoreToggle(k, status, count-limit))
 		}
 		header := widget.NewLabelWithStyle(status, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 		header.Wrapping = fyne.TextWrapWord

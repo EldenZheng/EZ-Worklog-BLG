@@ -32,6 +32,7 @@ func TestSprintHighlightsOnlySidebarHoverOrHeldMoveAndNeverResize(t *testing.T) 
 	}
 	reset := func() {
 		t.Helper()
+		shell.SettleFades() // the outlines fade; look at where they settle
 		for _, d := range k.Dates {
 			if d.Frame.FillColor != d.Base || d.Frame.StrokeColor != d.StrokeColor || d.Frame.StrokeWidth != d.StrokeWidth {
 				t.Fatal("unexpected drop highlight on", d.Date)
@@ -39,6 +40,7 @@ func TestSprintHighlightsOnlySidebarHoverOrHeldMoveAndNeverResize(t *testing.T) 
 		}
 	}
 	highlighted := func() bool {
+		shell.SettleFades() // the outlines fade; look at where they settle
 		for _, d := range k.Dates {
 			if d.Frame.FillColor == widgets.WithAlpha(shell.PlannerAvailableBlue, 0.13) || d.Frame.FillColor == widgets.WithAlpha(shell.PlannerAvailableBlue, 0.25) {
 				return true
