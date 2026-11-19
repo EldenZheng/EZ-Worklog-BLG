@@ -20,7 +20,7 @@ func worklogFieldsKey(ref projectRef) string {
 }
 
 func fetchWorklogFields(ref projectRef, root string) ([]field, error) {
-	query := `query($login:String!,$number:Int!){owner:OWNER(login:$login){projectV2(number:$number){fields(first:100){nodes{... on ProjectV2FieldCommon{id name}}}}}}`
+	query := `query($login:String!,$number:Int!){owner:OWNER(login:$login){projectV2(number:$number){fields(first:100){nodes{... on ProjectV2FieldCommon{id name} ` + issueFieldMetadata + `}}}}}`
 	out, err := Gh([]string{"api", "graphql", "-f", "query=" + strings.Replace(query, "OWNER", root, 1),
 		"-f", "login=" + ref.Login, "-F", fmt.Sprintf("number=%d", ref.Number)})
 	if err != nil {

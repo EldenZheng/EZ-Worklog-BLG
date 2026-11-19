@@ -139,16 +139,20 @@ func (r *foldRenderer) Destroy()                     {}
 // the slide, for the page around it to follow (see Reflow); onToggle runs once
 // per tap with the new state, to remember it.
 func CollapseToggle(label, body fyne.CanvasObject, open bool, onToggle func(open bool), relayout func(final bool)) (head, area fyne.CanvasObject) {
-	name, fold, toggle := collapseParts(label, body, open, onToggle, relayout)
+	name, _, fold, toggle := collapseParts(label, body, open, onToggle, relayout)
 	return container.NewHBox(NewTappable(name, toggle)), fold
 }
 
 // CollapseLine is CollapseToggle across a whole line: the label and its
 // arrow at the left, end (when set) at the right, and a click anywhere along
-// the line slides body open or shut, over slide when it is above zero.
+// the line slides body open or shut, over slide when it is above zero. Without
+// trailing controls, the disclosure arrow sits at the far right of the row.
 func CollapseLine(label, end, body fyne.CanvasObject, open bool, slide time.Duration, onToggle func(open bool), relayout func(final bool)) (head, area fyne.CanvasObject) {
-	name, fold, toggle := collapseParts(label, body, open, onToggle, relayout)
+	name, arrow, fold, toggle := collapseParts(label, body, open, onToggle, relayout)
 	fold.Duration = slide
+	if end == nil {
+		return NewTappable(container.NewBorder(nil, nil, nil, container.NewCenter(arrow), label), toggle), fold
+	}
 	var right fyne.CanvasObject
 	if end != nil {
 		right = container.NewCenter(end)
@@ -158,7 +162,7 @@ func CollapseLine(label, end, body fyne.CanvasObject, open bool, slide time.Dura
 
 // collapseParts is a collapsible heading's label with its gold arrow, the
 // fold for body, and the toggle that slides it.
-func collapseParts(label, body fyne.CanvasObject, open bool, onToggle func(open bool), relayout func(final bool)) (fyne.CanvasObject, *Fold, func()) {
+func collapseParts(label, body fyne.CanvasObject, open bool, onToggle func(open bool), relayout func(final bool)) (fyne.CanvasObject, fyne.CanvasObject, *Fold, func()) {
 	arrow := widget.NewIcon(theme.MenuExpandIcon())
 	if open {
 		arrow.SetResource(theme.MenuDropDownIcon())
@@ -177,7 +181,7 @@ func collapseParts(label, body fyne.CanvasObject, open bool, onToggle func(open 
 			onToggle(open)
 		}
 	}
-	return container.NewHBox(label, goldArrow), fold, toggle
+	return container.NewHBox(label, goldArrow), goldArrow, fold, toggle
 }
 
 // CollapsibleTitle is a SectionTitle's gold heading as a CollapseToggle.

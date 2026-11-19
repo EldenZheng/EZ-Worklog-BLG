@@ -280,7 +280,7 @@ func TestSettingsLineColours(t *testing.T) {
 			}
 		}
 	})
-	if greys != 0 || golds < 7 {
+	if greys != 0 || golds < 6 {
 		t.Fatalf("greys = %d, golds = %d", greys, golds)
 	}
 }

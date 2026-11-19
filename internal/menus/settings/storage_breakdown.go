@@ -2,23 +2,42 @@ package settings
 
 import (
 	"fmt"
+	"image/color"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
-func storageBreakdown(ui *shell.UI, cfg backend.Config, usage backend.StorageUsage, busy bool, clear func(backend.Config, backend.StorageCategory)) (fyne.CanvasObject, []*widget.Button) {
+// Stable category colours keep the legend and bar in sync without cycling
+// through the six organisation colours when there are more storage categories.
+var storageCategoryColours = map[backend.StorageKind]color.NRGBA{
+	backend.StorageLogged:         {R: 0x3b, G: 0x82, B: 0xf6, A: 0xff},
+	backend.StorageDrafts:         {R: 0xcd, G: 0xa2, B: 0x36, A: 0xff},
+	backend.StorageIgnored:        {R: 0x9c, G: 0xa3, B: 0xaf, A: 0xff},
+	backend.StorageProjectHistory: {R: 0xa7, G: 0x8b, B: 0xfa, A: 0xff},
+	backend.StoragePlans:          {R: 0x22, G: 0xb8, B: 0xcf, A: 0xff},
+	backend.StorageIssueCache:     {R: 0xf9, G: 0x73, B: 0x16, A: 0xff},
+	backend.StorageSupport:        {R: 0x4a, G: 0xde, B: 0x80, A: 0xff},
+	backend.StorageExports:        {R: 0xfb, G: 0x71, B: 0x85, A: 0xff},
+	backend.StorageHistory:        {R: 0x14, G: 0xb8, B: 0xa6, A: 0xff},
+	backend.StorageLegacyBackup:   {R: 0xc0, G: 0x84, B: 0x57, A: 0xff},
+	backend.StorageOther:          {R: 0xe8, G: 0x79, B: 0xf9, A: 0xff},
+}
+
+func storageBreakdown(ui *shell.UI, cfg backend.Config, usage backend.StorageUsage, busy, open bool, clear func(backend.Config, backend.StorageCategory), toggled func(bool), reflow func(bool)) (fyne.CanvasObject, []*widget.Button) {
 	var parts []shell.MeterPart
 	var rows []fyne.CanvasObject
 	var actions []*widget.Button
-	for i, category := range usage.Categories {
-		ink := shell.OrgPalette[i%len(shell.OrgPalette)]
+	for _, category := range usage.Categories {
+		ink := storageCategoryColours[category.Kind]
 		share := float32(0)
 		if usage.StoredDataBytes > 0 {
 			share = float32(float64(category.Bytes) / float64(usage.StoredDataBytes))
@@ -56,10 +75,15 @@ func storageBreakdown(ui *shell.UI, cfg backend.Config, usage backend.StorageUsa
 	}
 	caption := widget.NewLabel("Percentages of local data + backups (app executable excluded).")
 	caption.Wrapping = fyne.TextWrapWord
-	header := widget.NewLabelWithStyle("Data + backups: "+backend.FormatBytes(uint64(usage.StoredDataBytes)), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	header.Wrapping = fyne.TextWrapWord
+	header := canvas.NewText("Data + backups", widgets.LogoGold)
+	header.TextSize, header.TextStyle.Bold = theme.TextSize()+4, true
+	total := widget.NewLabelWithStyle("Total: "+backend.FormatBytes(uint64(usage.StoredDataBytes)), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	total.Wrapping = fyne.TextWrapWord
 	bar := ui.ProgressBarParts("settings/storage-breakdown", ui.Store.Dir, parts, 6)
-	return container.NewVBox(append([]fyne.CanvasObject{header, bar, caption}, rows...)...), actions
+	body := container.NewVBox(append([]fyne.CanvasObject{total, bar, caption}, rows...)...)
+	head, area := shell.CollapseLine(header, nil, body, open, 0, toggled, reflow)
+	heading := container.NewThemeOverride(container.NewVBox(head, widget.NewSeparator()), chunkySettingsTheme{Theme: theme.Current()})
+	return container.NewVBox(heading, area), actions
 }
 
 func confirmClearStorage(ui *shell.UI, cfg backend.Config, category backend.StorageCategory, busy func() bool, setBusy func(bool), status *widget.Label, measure func()) {

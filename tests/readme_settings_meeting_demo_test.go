@@ -71,6 +71,19 @@ func TestReadmeSettingsMeetingDemoFrames(t *testing.T) {
 		})
 		rec := newFrameRecorder(t, w, filepath.Join(frames, "settings-storage"), [2]float32{1150, 300})
 		rec.stay(rec.shot(), 1900, false)
+		openHeading, _ := storageDetailsFold(t, view)
+		rec.glide(rec.shot(), centreOf(openHeading), 250)
+		openingBaseApp := fyne.CurrentApp()
+		openingDriver := collectMotion(t)
+		openHeading.Tapped(nil)
+		for i := 1; i <= 8; i++ {
+			for _, anim := range openingDriver.anims {
+				anim.Tick(float32(i) / 8)
+			}
+			rec.stay(rec.shot(), 50, i == 1)
+		}
+		fyne.SetCurrentApp(openingBaseApp)
+		rec.stay(rec.shot(), 1800, false)
 		var sidebar, main *container.Scroll
 		walk(view, func(o fyne.CanvasObject) {
 			if s, ok := o.(*container.Scroll); ok {
@@ -91,6 +104,20 @@ func TestReadmeSettingsMeetingDemoFrames(t *testing.T) {
 		test.Tap(clear)
 		rec.stay(rec.shot(), 2200, true)
 		tapStoragePopupButton(t, w.Canvas().Overlays().Top(), "Cancel")
+		// Fold before scrolling the sidebar: the software renderer does not
+		// intersect nested scroll clips, though the native app renderer does.
+		heading, _ := storageDetailsFold(t, view)
+		rec.glide(rec.shot(), centreOf(heading), 250)
+		baseApp := fyne.CurrentApp()
+		driver := collectMotion(t)
+		heading.Tapped(nil)
+		for i := 1; i <= 8; i++ {
+			for _, anim := range driver.anims {
+				anim.Tick(float32(i) / 8)
+			}
+			rec.stay(rec.shot(), 50, i == 1)
+		}
+		fyne.SetCurrentApp(baseApp)
 		sidebar.ScrollToBottom()
 		rec.stay(rec.shot(), 2000, false)
 		var more *widget.Button

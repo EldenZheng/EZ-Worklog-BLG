@@ -286,6 +286,9 @@ func RowLabel(ui *shell.UI, issue string, commits []backend.Commit) string {
 // date. Issue-backed rows read like the issue list, using the loaded title and
 // falling back to the ref while that title is unavailable.
 func RowTitle(ui *shell.UI, r backend.Row) string {
+	if title := strings.TrimSpace(r["display_title"]); title != "" {
+		return title
+	}
 	if r["type"] == backend.KindMeeting && strings.TrimSpace(r["meeting_title"]) != "" {
 		return strings.TrimSpace(r["meeting_title"])
 	}

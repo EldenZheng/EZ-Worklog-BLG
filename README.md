@@ -362,9 +362,10 @@ text. The same query filters saved entries and the Log Work calendar.
 
 ![Settings: inspect storage categories, review a clear confirmation, then open the backup relocation options](docs/settings-storage.gif)
 
-Identity stays fixed at the top of the left sidebar and **Updates** stays at
-its bottom, beneath a divider and gold heading. Storage and History backup
-scroll between them. The right-hand form scrolls independently, with **Worklog**
+Identity stays fixed at the top of the left sidebar and **Updates** floats at
+its bottom, inside a rounded grey panel with a gold heading. Storage and History
+backup scroll behind the Updates bubble, as cards do behind a Kanban column
+heading. The right-hand form scrolls independently, with **Worklog**
 and **Projects** side by side and a gap between them. New storage controls use
 smooth hover feedback and the same button roles as the rest of the app.
 
@@ -410,7 +411,14 @@ The slim gold bar compares the app executable plus local data with free space
 on the app drive. Backup size and free space at its location are shown
 separately. The coloured **Data + backups** bar breaks down stored data by
 category; these percentages exclude the executable and are not whole-drive
-usage percentages.
+usage percentages. Each category has a distinct, stable colour. Click the
+gold, underlined **Data + backups** heading or its far-right arrow to fold or
+unfold the breakdown with the same slide
+animation as Log Work's Saved locally section. The breakdown starts collapsed.
+Storage, Data + backups and History backup have extra top padding to separate
+the sections. The storage refresh icon is gold.
+Your preferred backup folder is saved for later backups, including after you
+clear an archive.
 
 Each clearable category has its own red **Clear** button and confirmation:
 logged worklogs, drafts/partial pushes, ignored commits, Projects report
@@ -480,14 +488,20 @@ limit, **Separate worklog remarks** offers an animated checkbox; selecting it
 slides a short remarks field in from the right while preserving the full issue
 description. **Compact remarks** shortens text locally; no API key is needed.
 Regular worklogs, commits and single Code Reviews create sub-issues. Existing
-entries keep their original target when re-pushed.
+entries keep their original target when re-pushed. Every pushed worklog uses
+the **Worklog** GitHub issue type and writes the same minutes total to the
+issue's **Actual Worklog (mins)** field and the project's worklog minutes field,
+including its deprecated version. A failed type or field update keeps the row
+retryable. Editing the saved popup's local description also updates its bubble
+title without renaming the parent issue on GitHub.
 
 ![Meeting worklog: edit the title, add an optional recording link, then slide out separate remarks for long notes](docs/meeting-worklog.gif)
 
 For **Meeting**, edit the title and notes freely. The optional recording link
 is appended to the GitHub issue body as **Meeting Recording Link**. Leaving it
-blank shows a maroon **Missing Meeting Recording** badge on the form and saved
-entry cards; saving and pushing remain available. Older daily meeting entries
+blank shows a maroon **Missing Meeting Recording** badge on saved entry cards;
+saving and pushing remain available. The optional recording field sits below
+the worklog remarks. Older daily meeting entries
 keep their original issue when edited or re-pushed. The local Sprint Calendar
 MEETING placeholder is a plan, separate from a logged meeting.
 
@@ -756,7 +770,10 @@ or hosted Worklog server. GitHub remains the source for pushed records.
 The project the issues sit on must carry worklog fields. The app matches
 `worklog` plus `date`, `owner`, `min` and `remark`, case-insensitively, and
 supports names prefixed with `ZZZ (DEPRECATED)`. Populated current fields take
-precedence for reads; field selection for writes also prefers current names.
+precedence for reads. Project field writes use project-field IDs; the mirrored
+Actual Worklog field uses its underlying issue-field ID and the issue-field
+API. The app also finds Actual Worklog directly on the organisation when the
+board does not display that column.
 A `Status` field with a `Done` option is required for a
 completed push; the app verifies the board item is Done before marking the
 local entry pushed.
@@ -764,6 +781,9 @@ Without those fields an entry still pushes, and the app says which ones it could
 not write.
 
 ## Code layout
+
+Follow the [UI styling guide](docs/STYLING.md) for panels, floating bubbles,
+overflow, headings, buttons and motion.
 
 Each menu has its own package; anything two menus share lives under `shared`.
 

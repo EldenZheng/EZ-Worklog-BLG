@@ -453,10 +453,15 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// height while the column itself stretches to whatever height ratioRow
 	// hands it. The padding around each column adds a real gap between the
 	// two cards on top of ratioRow's own inter-column spacing.
-	// Identity and Updates stay fixed at the two edges; storage scrolls between.
+	// Identity is fixed above; Updates floats over the bottom of the storage
+	// scroll, like a Kanban column capsule over its scrolling cards.
 	updates := updatePanel(ui)
-	storage, refreshStorage := storagePanel(ui)
-	sidebar := container.NewBorder(sidebarContent, updates, nil, nil, container.NewVScroll(storage))
+	storageScroll := container.NewVScroll(container.NewVBox())
+	storage, refreshStorage := storagePanel(ui, storageScroll)
+	inset := &shell.ColumnInset{}
+	storageScroll.Content = container.New(inset, storage)
+	foot := container.New(&sidebarFooterLayout{inset: inset, gap: theme.InnerPadding() + 2}, shell.NoScrollShadow(storageScroll), updates)
+	sidebar := container.NewBorder(sidebarContent, nil, nil, nil, foot)
 	ui.Update.Frame = sidebar
 	body := container.New(widgets.NewFluidRow(0.2, 0.8),
 		container.NewPadded(sidebar),

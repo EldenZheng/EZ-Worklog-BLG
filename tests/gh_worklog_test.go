@@ -353,9 +353,9 @@ func TestProjectStatusMustBeDoneBeforePushCompletes(t *testing.T) {
 	}
 }
 
-// An org without a Worklog issue type is a fact about the org, not a failed
-// push. Confusing the two left the row waiting to be retried forever.
-func TestMissingIssueTypeIsNotAPushFailure(t *testing.T) {
+// An undefined type remains distinguishable from a failed lookup, so the
+// incomplete push can explain which configuration or access needs attention.
+func TestMissingIssueTypeRemainsRecognisable(t *testing.T) {
 	err := fmt.Errorf("%w: %s has no %q issue type", backend.ErrNoIssueType, "Example-Support", "Worklog")
 	if !errors.Is(err, backend.ErrNoIssueType) {
 		t.Fatal("a missing type must stay recognisable through wrapping")

@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
@@ -46,7 +45,7 @@ func TestMissingMeetingRecordingUsesMaroonBadgeAndAllowsBlankLink(t *testing.T) 
 	}
 }
 
-func TestMeetingRecordingWarningUpdatesWithoutBlockingDrafts(t *testing.T) {
+func TestMeetingRecordingSitsBelowRemarksAndWarnsOnlyOnSavedBubble(t *testing.T) {
 	ui := editorUI(t)
 	defer fyne.CurrentApp().Quit()
 	var tabs *shell.UnderlineTabs
@@ -59,34 +58,37 @@ func TestMeetingRecordingWarningUpdatesWithoutBlockingDrafts(t *testing.T) {
 	view := ui.Win.Content()
 	entryByPlaceholder(view, "Meeting title (e.g. Sprint planning)").SetText("Planning")
 	entryByPlaceholder(view, "minutes").SetText("30")
-	entryByPlaceholder(view, "- one bullet per thing done; this becomes the worklog remarks").SetText("- meeting notes")
+	notes := entryByPlaceholder(view, "- one bullet per thing done; this becomes the worklog remarks")
+	notes.SetText("- meeting notes")
+	assertBelow := func(form fyne.CanvasObject, notes fyne.CanvasObject) {
+		t.Helper()
+		if contains(labels(form), "Missing Meeting Recording") {
+			t.Fatal("the reminder belongs on the saved bubble, not the input field")
+		}
+		recording := entryByPlaceholder(form, "https://… (meeting recording)")
+		driver := fyne.CurrentApp().Driver()
+		if driver.AbsolutePositionForObject(recording).Y < driver.AbsolutePositionForObject(notes).Y+notes.Size().Height {
+			t.Fatal("recording field must sit below remarks")
+		}
+	}
+	ui.Win.Resize(fyne.NewSize(1400, 1000))
+	assertBelow(view, notes)
 	tapButton(t, view, "Save draft")
 	rows, err := ui.Store.ReadRows()
 	if err != nil || len(rows) != 1 || rows[0]["meeting_recording"] != "" {
 		t.Fatalf("blank recording blocked the draft: %v %v", rows, err)
 	}
+	if !contains(labels(logwork.RowTile(ui, rows[0], func() {})), "Missing Meeting Recording") {
+		t.Fatal("saved locally bubble needs the recording reminder")
+	}
 	form := logwork.RowEditor(ui, rows[0], func() {}, func() {}).All()
-	warningVisible := func() bool {
-		found := false
-		walk(form, func(o fyne.CanvasObject) {
-			if c, ok := o.(*fyne.Container); ok && c.Visible() && len(c.Objects) > 0 {
-				if frame, ok := c.Objects[0].(*canvas.Rectangle); ok && frame.StrokeColor == shell.MissingMeetingRecordingMaroon {
-					found = true
-				}
-			}
-		})
-		return found
-	}
-	if !warningVisible() {
-		t.Fatal("missing recording must show a warning")
-	}
+	ui.Win.SetContent(form)
+	assertBelow(form, multiLineEntry(form))
 	entryByPlaceholder(form, "https://… (meeting recording)").SetText("https://example.com/recording")
-	if warningVisible() {
-		t.Fatal("warning stayed after adding a recording")
-	}
-	entryByPlaceholder(form, "https://… (meeting recording)").SetText("")
-	if !warningVisible() {
-		t.Fatal("warning did not return after clearing the optional recording")
+	tapButton(t, form, "Save")
+	rows, err = ui.Store.ReadRows()
+	if err != nil || len(rows) != 1 || contains(labels(logwork.RowTile(ui, rows[0], func() {})), "Missing Meeting Recording") {
+		t.Fatal("saving a recording must clear the saved bubble's reminder", err)
 	}
 }
 

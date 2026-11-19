@@ -29,6 +29,7 @@ const dailyReviewQuery = `query($owner:String!,$repo:String!,$num:Int!){
    project{id number fields(first:60){nodes{
     ... on ProjectV2FieldCommon{id name dataType}
     ... on ProjectV2SingleSelectField{options{id name}}
+    ` + issueFieldMetadata + `
    }}}
    fieldValues(first:50){nodes{
     ... on ProjectV2ItemFieldTextValue{text field{... on ProjectV2FieldCommon{name}}}

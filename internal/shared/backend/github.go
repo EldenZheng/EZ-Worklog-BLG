@@ -1678,7 +1678,8 @@ query($owner:String!,$repo:String!,$num:Int!){
      project{ id number title
        fields(first:60){ nodes{
          ... on ProjectV2FieldCommon { id name dataType }
-         ... on ProjectV2SingleSelectField { options { id name } } } } } } } } } }
+         ... on ProjectV2SingleSelectField { options { id name } }
+         ` + issueFieldMetadata + ` } } } } } } } }
 `
 
 func SplitIssue(ref string) (owner, repo string, num int, err error) {
@@ -1696,10 +1697,15 @@ type FieldOption struct {
 }
 
 type field struct {
-	ID       string        `json:"id"`
-	Name     string        `json:"name"`
-	DataType string        `json:"dataType"`
-	Options  []FieldOption `json:"options"` // single-select only
+	ID           string        `json:"id"`
+	Name         string        `json:"name"`
+	DataType     string        `json:"dataType"`
+	Options      []FieldOption `json:"options"` // single-select only
+	IsIssueField bool          `json:"isIssueField"`
+	IssueField   *struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	} `json:"issueField"`
 }
 
 // option finds a choice on a single-select field by name.
@@ -1892,6 +1898,11 @@ func pickProject(items []projectItem) *projectItem {
 func findField(fields []field, musts ...string) *field {
 	var fallback *field
 	for i := range fields {
+		// Issue fields may be displayed as project columns, but their values
+		// belong to the issue and cannot use project item-edit.
+		if fields[i].IsIssueField {
+			continue
+		}
 		n := strings.ToLower(fields[i].Name)
 		ok := true
 		for _, m := range musts {
@@ -2000,11 +2011,9 @@ func issueTypeID(org, name string) (string, error) {
 	return found, nil
 }
 
-// ErrNoIssueType marks an organisation that simply does not define the type, as
-// opposed to a lookup that failed. Not every org carries a Worklog type —
-// Example-Support has only Task, Bug and Feature — and an untyped sub-issue
-// still holds its worklog fields and its Done status, so this must not be
-// counted as a failed push or the row waits to be retried forever.
+// ErrNoIssueType distinguishes an undefined type from a failed lookup. A push
+// that requires the Worklog type reports either failure instead of claiming
+// that an untyped issue is complete.
 var ErrNoIssueType = errors.New("issue type not defined")
 
 // setIssueType applies an organisation issue type to an issue.
@@ -2075,15 +2084,21 @@ func VerifyProjectStatusDone(raw string) error {
 //
 // addProjectV2ItemById returns the existing item when the content is already on
 // the board, so calling it again after a partial failure is safe.
-func pushToProject(issueURL, contentID string, items []projectItem,
+func pushToProject(org, issueURL, contentID string, items []projectItem,
 	wdate, owner string, mins int, remarks string, notes, problems []string,
 	emit func(int, string), from, to int) (PushResult, error) {
 
 	chosen := pickProject(items)
+	var fields []field
+	if chosen != nil {
+		fields = chosen.Project.Fields.Nodes
+	}
+	done, issueFailed := setWorklogIssueFields(org, contentID, fields, mins)
+	problems = append(problems, issueFailed...)
 	if chosen == nil {
 		return PushResult{
-			URL: issueURL, ItemID: "", Notes: notes,
-			Problems: append(problems, "Parent issue isn't in a project, so no fields were set."),
+			URL: issueURL, ItemID: "", Notes: notes, FieldsSet: done,
+			Problems: append(problems, "Parent issue isn't in a project, so no project fields were set."),
 		}, nil
 	}
 	proj := &chosen.Project
@@ -2104,7 +2119,7 @@ func pushToProject(issueURL, contentID string, items []projectItem,
 	// stores it on the row, and the retry resumes on that same sub-issue.
 	if err != nil {
 		return PushResult{
-			URL: issueURL, ItemID: "", Notes: notes,
+			URL: issueURL, ItemID: "", Notes: notes, FieldsSet: done,
 			Problems: append(problems, "Could not add to project board: "+err.Error()),
 		}, nil
 	}
@@ -2119,17 +2134,18 @@ func pushToProject(issueURL, contentID string, items []projectItem,
 	}
 	if e := json.Unmarshal([]byte(out), &addResp); e != nil {
 		return PushResult{
-			URL: issueURL, ItemID: "", Notes: notes,
+			URL: issueURL, ItemID: "", Notes: notes, FieldsSet: done,
 			Problems: append(problems, fmt.Sprintf("Could not read project item id: %v", e)),
 		}, nil
 	}
 	targetItem := addResp.Data.Add.Item.ID
 
 	emit(from+step, "Setting fields")
-	done, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
-	if len(done) == 0 {
+	projectDone, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
+	if len(projectDone) == 0 {
 		problems = append(problems, "No Worklog fields matched on this project board.")
 	}
+	done = append(done, projectDone...)
 	problems = append(problems, failed...)
 
 	// Status is set last: a failure here should not cost the field values.
@@ -2254,7 +2270,7 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 			notes = append(notes, fmt.Sprintf(
 				"Reused sub-issue #%d from an earlier attempt on this entry.", existing.Number))
 			emit(25, "Reusing sub-issue")
-			return pushToProject(existing.URL, existing.ID, items, wdate, owner, mins, remarks, notes, problems, emit, 25, 100)
+			return pushToProject(o, existing.URL, existing.ID, items, wdate, owner, mins, remarks, notes, problems, emit, 25, 100)
 		}
 
 		// Numbered only if the day already has one on this issue, so a normal
@@ -2303,19 +2319,8 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 		}, "GraphQL-Features: sub_issues"); e != nil {
 			problems = append(problems, "Could not link as sub-issue: "+e.Error())
 		}
-		emit(60, "Setting issue type")
-		typeID, typeErr := issueTypeID(o, "Worklog")
-		switch {
-		case errors.Is(typeErr, ErrNoIssueType):
-			notes = append(notes, o+" has no Worklog issue type, so the sub-issue was left untyped.")
-		case typeErr != nil:
-			problems = append(problems, "Could not set the Worklog issue type: "+typeErr.Error())
-		default:
-			if e := setIssueType(newID, typeID); e != nil {
-				problems = append(problems, "Could not set the Worklog issue type: "+e.Error())
-			}
-		}
-		return pushToProject(createdURL, newID, items, wdate, owner, mins, remarks, notes, problems, emit, 70, 100)
+		emit(60, "Setting Worklog issue fields")
+		return pushToProject(o, createdURL, newID, items, wdate, owner, mins, remarks, notes, problems, emit, 70, 100)
 	} else {
 		chosen := pickProject(items)
 		if chosen == nil {
@@ -2341,12 +2346,16 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 		targetItem = chosen.ID
 	}
 
-	// "issue" mode: the ref itself is the board item, so only fields are set.
+	// Standalone meetings/review batches and legacy direct rows carry the
+	// Worklog type and actual minutes themselves, just like a new sub-issue.
 	emit(30, "Setting fields")
-	done, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
-	if len(done) == 0 {
+	done, issueFailed := setWorklogIssueFields(o, issue.ID, proj.Fields.Nodes, mins)
+	problems = append(problems, issueFailed...)
+	projectDone, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
+	if len(projectDone) == 0 {
 		problems = append(problems, "No Worklog fields matched on this project board.")
 	}
+	done = append(done, projectDone...)
 	problems = append(problems, failed...)
 	emit(80, "Setting status")
 	if name, err := SetStatusDone(proj.ID, targetItem, proj.Fields.Nodes); err != nil {

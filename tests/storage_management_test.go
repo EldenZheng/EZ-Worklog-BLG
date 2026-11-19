@@ -8,12 +8,15 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/projects"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func refreshStorageMeasurement(t *testing.T, view fyne.CanvasObject) {
@@ -32,6 +35,10 @@ func refreshStorageMeasurement(t *testing.T, view fyne.CanvasObject) {
 
 func storageCategoryClearButton(t *testing.T, view fyne.CanvasObject, name string) *widget.Button {
 	t.Helper()
+	heading, fold := storageDetailsFold(t, view)
+	if !fold.Open() {
+		heading.Tapped(nil)
+	}
 	var found *widget.Button
 	walk(view, func(o fyne.CanvasObject) {
 		if c, ok := o.(*fyne.Container); ok && hasRenderedText(c, name) {
@@ -180,5 +187,155 @@ func TestStorageClearProjectHistoryKeepsProjectConfiguration(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ui.Store.Dir, "projects.json")); err != nil {
 		t.Fatal("clearing history removed project definitions", err)
+	}
+}
+
+func storageDetailsFold(t *testing.T, view fyne.CanvasObject) (*shell.Tappable, *shell.Fold) {
+	t.Helper()
+	var heading *shell.Tappable
+	var fold *shell.Fold
+	walk(view, func(o fyne.CanvasObject) {
+		c, ok := o.(*fyne.Container)
+		if !ok || len(c.Objects) != 2 {
+			return
+		}
+		f, ok := c.Objects[1].(*shell.Fold)
+		if !ok {
+			return
+		}
+		walk(c.Objects[0], func(o fyne.CanvasObject) {
+			if tap, ok := o.(*shell.Tappable); ok {
+				for _, text := range labels(tap.Content) {
+					if text == "Data + backups" {
+						heading, fold = tap, f
+					}
+				}
+			}
+		})
+	})
+	if heading == nil || fold == nil {
+		t.Fatal("Data + backups must have a collapsible heading")
+	}
+	return heading, fold
+}
+
+func TestStorageBreakdownCollapsesWithLogWorkMotionAndStaysCollapsedOnRefresh(t *testing.T) {
+	_, view := storageSettingsFixture(t)
+	heading, fold := storageDetailsFold(t, view)
+	if fold.Open() || fold.Visible() {
+		t.Fatal("Data + backups must start collapsed")
+	}
+	driver := collectMotion(t)
+	heading.Tapped(nil)
+	if len(driver.anims) != 1 || !fold.Open() {
+		t.Fatal("collapsed storage details must animate open")
+	}
+	open := driver.anims[0]
+	open.Tick(.5)
+	if height := fold.MinSize().Height; height <= 0 || height >= fold.Content.MinSize().Height {
+		t.Fatal("storage opening must have an intermediate height")
+	}
+	open.Tick(1)
+	driver.anims = nil
+	height := fold.MinSize().Height
+	heading.Tapped(nil)
+	if len(driver.anims) != 1 || driver.anims[0].Duration != widgets.HoverDuration || fold.Open() {
+		t.Fatal("storage collapse must use the shared fold motion")
+	}
+	slide := driver.anims[0]
+	slide.Tick(.5)
+	if got := fold.MinSize().Height; got <= 0 || got >= height || !fold.Visible() {
+		t.Fatalf("fold snapped instead of sliding: %v of %v", got, height)
+	}
+	slide.Tick(1)
+	if fold.Visible() {
+		t.Fatal("fold must hide only after the closing motion")
+	}
+	refreshStorageMeasurement(t, view)
+	heading, fold = storageDetailsFold(t, view)
+	if fold.Open() || fold.Visible() {
+		t.Fatal("storage measurement reopened the collapsed breakdown")
+	}
+	driver.anims = nil
+	heading.Tapped(nil)
+	driver.anims[len(driver.anims)-1].Tick(1)
+	if !fold.Open() || !fold.Visible() || fold.MinSize().Height == 0 {
+		t.Fatal("storage details did not reopen")
+	}
+}
+
+func TestStorageCategoryColoursDoNotRepeatAndRefreshIconIsGold(t *testing.T) {
+	_, view := storageSettingsFixture(t)
+	_, fold := storageDetailsFold(t, view)
+	colours := map[[4]uint32]bool{}
+	dots := 0
+	walkRendered(fold.Content, func(o fyne.CanvasObject) {
+		if r, ok := o.(*canvas.Rectangle); ok && r.MinSize() == fyne.NewSize(6, 6) && r.CornerRadius == 3 {
+			red, green, blue, alpha := r.FillColor.RGBA()
+			key := [4]uint32{red, green, blue, alpha}
+			if colours[key] {
+				t.Error("storage categories repeat a colour")
+			}
+			colours[key] = true
+			dots++
+		}
+	})
+	if dots != 11 {
+		t.Fatalf("expected 11 category colours, got %d", dots)
+	}
+	found := false
+	walkRendered(view, func(o fyne.CanvasObject) {
+		if b, ok := o.(*widget.Button); ok && b.Text == "" && b.Icon == theme.ViewRefreshIcon() {
+			found = true
+			if !sameColor(theme.ColorForWidget(theme.ColorNameForeground, b), widgets.LogoGold) {
+				t.Error("storage refresh icon must be gold")
+			}
+		}
+	})
+	if !found {
+		t.Fatal("storage refresh missing")
+	}
+}
+
+func TestStorageBreakdownHeadingIsGoldUnderlinedWithArrowAtRightEdge(t *testing.T) {
+	_, view := storageSettingsFixture(t)
+	head, fold := storageDetailsFold(t, view)
+	var title *canvas.Text
+	var arrow *widget.Icon
+	var divider *widget.Separator
+	walkRendered(head.Content, func(o fyne.CanvasObject) {
+		if text, ok := o.(*canvas.Text); ok && text.Text == "Data + backups" {
+			title = text
+		}
+		if icon, ok := o.(*widget.Icon); ok && icon.Resource == theme.MenuExpandIcon() {
+			arrow = icon
+		}
+	})
+	walk(view, func(o fyne.CanvasObject) {
+		if c, ok := o.(*fyne.Container); ok && len(c.Objects) == 2 && c.Objects[1] == fold {
+			walkRendered(c.Objects[0], func(o fyne.CanvasObject) {
+				if rule, ok := o.(*widget.Separator); ok {
+					divider = rule
+				}
+			})
+		}
+	})
+	if title == nil || arrow == nil || divider == nil || !sameColor(title.Color, widgets.LogoGold) {
+		t.Fatal("missing gold title, disclosure arrow or underline")
+	}
+	driver := fyne.CurrentApp().Driver()
+	titleBottom := driver.AbsolutePositionForObject(title).Y + title.Size().Height
+	if driver.AbsolutePositionForObject(divider).Y < titleBottom {
+		t.Fatal("underline must occupy its own line below the title")
+	}
+	right := driver.AbsolutePositionForObject(head).X + head.Size().Width
+	arrowRight := driver.AbsolutePositionForObject(arrow).X + arrow.Size().Width
+	if right-arrowRight > 1 || arrowRight > right+1 {
+		t.Fatalf("arrow is not at the right edge: heading %v, arrow %v", right, arrowRight)
+	}
+	for _, o := range test.WidgetRenderer(divider).Objects() {
+		if line, ok := o.(*canvas.Rectangle); ok && !sameColor(line.FillColor, widgets.LogoGold) {
+			t.Fatal("heading underline must be gold")
+		}
 	}
 }

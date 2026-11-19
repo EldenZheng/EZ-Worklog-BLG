@@ -31,9 +31,9 @@ const (
 	// The issue types the created kinds take. A meeting is not a piece of
 	// development work and the board types it apart; code review and independent
 	// entries are ordinary tasks.
-	meetingIssueType     = "Meeting / Training"
-	independentIssueType = "Task"
-	codeReviewIssueType  = "Task"
+	meetingIssueType     = "Worklog"
+	independentIssueType = "Worklog"
+	codeReviewIssueType  = "Worklog"
 
 	KindCommit      = "commit"
 	KindMeeting     = "meeting"

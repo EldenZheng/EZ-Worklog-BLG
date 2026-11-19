@@ -8,6 +8,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -21,14 +22,20 @@ import (
 var PickBackupFolder = pickBackupFolder
 
 func sidebarSectionTitle(title string) fyne.CanvasObject {
-	return container.NewThemeOverride(shell.SectionTitle(title), chunkySettingsTheme{Theme: theme.Current()})
+	return sidebarSectionTop(container.NewThemeOverride(shell.SectionTitle(title), chunkySettingsTheme{Theme: theme.Current()}))
 }
 
-func storagePanel(ui *shell.UI) (fyne.CanvasObject, func()) {
+func sidebarSectionTop(content fyne.CanvasObject) fyne.CanvasObject {
+	return container.New(layout.NewCustomPaddedLayout(theme.Padding()*4, 0, 0, 0), content)
+}
+
+func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, func()) {
 	label := func(text string) *widget.Label { l := widget.NewLabel(text); l.Wrapping = fyne.TextWrapWord; return l }
 	usageText := label("Measuring app storage…")
 	breakdown := label("")
 	categoryList := container.NewVBox()
+	var panel *fyne.Container
+	breakdownOpen := false
 	var categoryActions []*widget.Button
 	bar := ui.ProgressBarParts("settings/storage", "storage", []shell.MeterPart{{Key: "app", Fill: widgets.LogoGold}}, 6)
 	barCaption := label("App / available space")
@@ -87,7 +94,9 @@ func storagePanel(ui *shell.UI) (fyne.CanvasObject, func()) {
 					barCaption.SetText(fmt.Sprintf("App / available space · %.3f%%", fraction*100))
 				}
 				var content fyne.CanvasObject
-				content, categoryActions = storageBreakdown(ui, cfg, usage, busy, clearCategory)
+				content, categoryActions = storageBreakdown(ui, cfg, usage, busy, breakdownOpen, clearCategory,
+					func(open bool) { breakdownOpen = open },
+					func(final bool) { shell.Reflow(final, scroll, panel, categoryList) })
 				categoryList.Objects = []fyne.CanvasObject{content}
 				categoryList.Refresh()
 			}
@@ -217,7 +226,7 @@ func storagePanel(ui *shell.UI) (fyne.CanvasObject, func()) {
 				}
 				ui.Cfg = next
 				shell.CloseDialog(d, ui.Win)
-				status.SetText("Backup location updated.")
+				status.SetText("Backup location saved.")
 				measure()
 			})
 		})
@@ -285,7 +294,8 @@ func storagePanel(ui *shell.UI) (fyne.CanvasObject, func()) {
 		shell.AnimateOpening(ui.Win.Canvas())
 	})
 	backupActions := container.NewBorder(nil, nil, nil, shell.QuietButton(more), fetch)
-	panel := container.NewVBox(sidebarSectionTitle("Storage"), container.NewBorder(nil, nil, nil, shell.QuietButton(refresh), usageText), bar, barCaption, breakdown, categoryList, sidebarSectionTitle("History backup"), note, historyText, location, backupActions, status)
+	goldRefresh := container.NewThemeOverride(shell.QuietButton(refresh), widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	panel = container.NewVBox(sidebarSectionTitle("Storage"), container.NewBorder(nil, nil, nil, goldRefresh, usageText), bar, barCaption, breakdown, sidebarSectionTop(categoryList), sidebarSectionTitle("History backup"), note, historyText, location, backupActions, status)
 	measure()
 	return panel, measure
 }

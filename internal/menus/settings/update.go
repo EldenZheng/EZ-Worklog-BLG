@@ -6,6 +6,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -35,14 +36,18 @@ func updatePanel(ui *shell.UI) fyne.CanvasObject {
 	showUpdateState(ui)
 	title := canvas.NewText("Updates", widgets.LogoGold)
 	title.TextSize, title.TextStyle.Bold = theme.TextSize()+4, true
-	return container.NewVBox(
-		container.NewThemeOverride(widget.NewSeparator(), chunkySettingsTheme{Theme: theme.Current()}),
+	panel := shell.PanelFrame(container.NewPadded(container.NewVBox(
 		title,
 		version,
 		u.Status,
 		u.InstallView,
 		u.Check,
-	)
+	)))
+	// Absorb clicks on the capsule's neutral surface instead of activating
+	// a storage control scrolling behind it. Child buttons still get taps.
+	capsule := shell.NewTappable(panel, nil)
+	capsule.Look = desktop.DefaultCursor
+	return capsule
 }
 
 // showUpdateState paints what is known about updates onto the panel and the

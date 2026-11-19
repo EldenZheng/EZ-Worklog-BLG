@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/loglist"
 	"worklog/internal/menus/logwork"
@@ -123,5 +124,59 @@ func TestRowEditorDropsTitleWhenTheIssueChanges(t *testing.T) {
 	}
 	if rows[0]["issue"] != "exampleorg/repo#10" || rows[0]["issue_title"] != "" {
 		t.Fatalf("row = %v", rows[0])
+	}
+}
+
+func TestEditedPopupDescriptionBecomesTheSavedBubbleTitle(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	ui.IssueInfo = map[string]backend.IssueInfo{"exampleorg/repo#9": {Title: "Cached GitHub title"}}
+	for _, kind := range []string{backend.KindCommit, backend.KindOther, backend.KindCodeReview, backend.KindBulkReview, backend.KindIndependent} {
+		t.Run(kind, func(t *testing.T) {
+			ui.IssueInfo["exampleorg/repo#9"] = backend.IssueInfo{Title: "Cached GitHub title"}
+			made, err := ui.Store.AppendRows([]backend.Row{{"date": shell.Today(), "type": kind, "minutes": "15",
+				"issue": "exampleorg/repo#9", "issue_title": "Saved GitHub title", "description": "Legacy commit subjects", "remarks": "- work"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			row := made[0]
+			form := logwork.RowEditor(ui, row, func() {}, nil).All()
+			var title *widget.Entry
+			for _, entry := range entriesIn(form) {
+				if !entry.MultiLine && entry.Text == "Cached GitHub title" {
+					title = entry
+				}
+			}
+			if title == nil {
+				t.Fatal("description field missing")
+			}
+			title.SetText("My edited local title")
+			tapButton(t, form, "Save")
+			rows, err := ui.Store.ReadRows()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, saved := range rows {
+				if saved["id"] == row["id"] {
+					row = saved
+				}
+			}
+			if row["display_title"] != "My edited local title" || logwork.RowTitle(ui, row) != "My edited local title" {
+				t.Fatal("cached issue title overrode the edited description", row)
+			}
+			for _, card := range []fyne.CanvasObject{logwork.RowTile(ui, row, func() {}), logwork.DayRowCard(ui, row, func() {})} {
+				if !contains(labels(card), "My edited local title") {
+					t.Fatal("saved card retained the old display title")
+				}
+			}
+			ui.IssueInfo[row["issue"]] = backend.IssueInfo{Title: "Newer GitHub title"}
+			restored := false
+			for _, entry := range entriesIn(logwork.RowEditor(ui, row, func() {}, nil).All()) {
+				restored = restored || entry.Text == "My edited local title"
+			}
+			if !restored {
+				t.Fatal("edited title was not restored when reopening")
+			}
+		})
 	}
 }

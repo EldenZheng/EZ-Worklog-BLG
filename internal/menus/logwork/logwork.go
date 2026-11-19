@@ -77,7 +77,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	mText := CommitTextEditor(ui, "", "", mMsg)
 	mText.desc.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
 	mText.growWithText(4, func() { shell.Relayout(ui.LogBody) })
-	recordingRow := meetingRecordingField(mRecording, mText)
+	recordingRow := meetingRecordingField(mRecording)
 	recordingRow.Hide()
 
 	mModeVal := func() string { return "subissue" }
@@ -514,9 +514,9 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		dateRow,
 		dayReadout,
 		descRow,
-		recordingRow,
 		otherRow, singleReviewRow, codeReviewRow, indepRow,
 		remarksRow,
+		recordingRow,
 		actionRow, mMsg,
 	)
 	manualPane.Hide()
@@ -1631,7 +1631,8 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	parentTitleE.SetText(r["parent_title"])
 	parentTitleE.SetPlaceHolder("Title for the standalone task")
 	descE := widget.NewEntry()
-	descE.SetText(RowTitle(ui, r))
+	initialTitle := RowTitle(ui, r)
+	descE.SetText(initialTitle)
 	recordingE := widget.NewEntry()
 	recordingE.SetPlaceHolder("https://… (meeting recording)")
 	recordingE.SetText(r["meeting_recording"])
@@ -1684,11 +1685,21 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			"remarks":     remarks, "issue_body": issueBody, "mode": modeVal(),
 		}
 		if r["type"] == backend.KindMeeting {
+			patch["display_title"] = ""
 			patch["meeting_title"] = backend.OrDefault(strings.TrimSpace(descE.Text), "Meeting: "+date)
 			patch["meeting_recording"] = strings.TrimSpace(recordingE.Text)
 			if _, err := backend.MeetingEntryBody(patch); err != nil {
 				msg.SetText(err.Error())
 				return
+			}
+		}
+		// A local title override must survive later GitHub title lookups. Old
+		// descriptions remain untouched until the user edits this field.
+		if r["type"] != backend.KindMeeting {
+			if title := strings.TrimSpace(descE.Text); title != initialTitle {
+				patch["display_title"] = title
+			} else if issue != r["issue"] {
+				patch["display_title"] = ""
 			}
 		}
 		// A title saved for the old issue would go on naming this one.
@@ -1708,6 +1719,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 		for k, v := range patch {
 			r[k] = v
 		}
+		initialTitle = strings.TrimSpace(descE.Text)
 		refresh()
 		if !push {
 			msg.SetText("Saved.")
@@ -1823,7 +1835,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	if r["type"] == backend.KindMeeting {
 		descE.SetPlaceHolder("Meeting title (e.g. Sprint planning)")
 		descriptionField = shell.Labeled("Meeting title", descE)
-		fields.Add(meetingRecordingField(recordingE, text))
+		remPane = container.NewBorder(nil, meetingRecordingField(recordingE), nil, nil, remPane)
 	}
 	// Caption beside the dropdown rather than stacked over it: the bar shares a
 	// line with Back, and a two-row label would drag that whole line taller.

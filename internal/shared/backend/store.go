@@ -87,7 +87,7 @@ const (
 var FieldOrder = []string{
 	"id", "date", "minutes", "type", "description", "refs", "issue",
 	"owner", "remarks", "mode", "issue_url", "item_id", "pushed_at", "logged_at",
-	"parent_repo", "parent_title", "issue_body", "issue_title", "meeting_title", "meeting_recording",
+	"parent_repo", "parent_title", "issue_body", "issue_title", "meeting_title", "meeting_recording", "display_title",
 }
 
 // Config mirrors config.json so data carries over from the Python app.

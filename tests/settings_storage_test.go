@@ -91,7 +91,7 @@ func TestSettingsIdentityAndUpdatesStayFixedWhileStorageScrolls(t *testing.T) {
 		t.Fatal("scrolling storage moved Updates")
 	}
 	frameBottom := fyne.CurrentApp().Driver().AbsolutePositionForObject(ui.Update.Frame).Y + ui.Update.Frame.Size().Height
-	if bottom := before.Y + ui.Update.Check.Size().Height; frameBottom-bottom > 1 {
+	if bottom := before.Y + ui.Update.Check.Size().Height; frameBottom-bottom > 8 {
 		t.Fatalf("Updates is not pinned to the sidebar bottom: gap %v", frameBottom-bottom)
 	}
 	var worklog, projects, storage, updates *canvas.Text
@@ -129,7 +129,7 @@ func TestSettingsIdentityAndUpdatesStayFixedWhileStorageScrolls(t *testing.T) {
 	}
 }
 
-func TestUpdatesDividerComesBeforeItsGoldHeading(t *testing.T) {
+func TestUpdatesUsesRoundedGreyPanelWithoutDivider(t *testing.T) {
 	ui, view := storageSettingsFixture(t)
 	var block *fyne.Container
 	walk(view, func(o fyne.CanvasObject) {
@@ -140,23 +140,26 @@ func TestUpdatesDividerComesBeforeItsGoldHeading(t *testing.T) {
 	if block == nil {
 		t.Fatal("missing Updates section")
 	}
-	title, ok := block.Objects[1].(*canvas.Text)
+	title, ok := block.Objects[0].(*canvas.Text)
 	if !ok || title.Text != "Updates" || !sameColor(title.Color, widgets.LogoGold) {
-		t.Fatal("gold Updates title must follow the divider")
+		t.Fatal("gold Updates title must start the panel")
 	}
-	var divider *widget.Separator
-	walk(block.Objects[0], func(o fyne.CanvasObject) {
-		if s, ok := o.(*widget.Separator); ok {
-			divider = s
+	var bubble *fyne.Container
+	walkRendered(view, func(o fyne.CanvasObject) {
+		if c, ok := o.(*fyne.Container); ok && len(c.Objects) > 1 && hasRenderedText(c, "Updates") {
+			if bg, ok := c.Objects[0].(*canvas.Rectangle); ok && bg.CornerRadius == shell.CellCornerRadius {
+				bubble = c
+			}
 		}
 	})
-	if divider == nil {
-		t.Fatal("Updates needs its line before the title")
+	if bubble == nil {
+		t.Fatal("Updates needs a rounded panel")
 	}
-	driver := fyne.CurrentApp().Driver()
-	if driver.AbsolutePositionForObject(divider).Y >= driver.AbsolutePositionForObject(title).Y {
-		t.Fatal("divider rendered after the Updates title")
-	}
+	walkRendered(bubble, func(o fyne.CanvasObject) {
+		if _, ok := o.(*widget.Separator); ok {
+			t.Error("Updates must not contain a divider")
+		}
+	})
 }
 
 func openStorageAction(t *testing.T, ui *shell.UI, view fyne.CanvasObject, name string) {
@@ -332,5 +335,124 @@ func TestReallocateUsesPlatformFolderPickerWithoutMovingUntilConfirmed(t *testin
 	tapStoragePopupButton(t, popup, "Cancel")
 	if _, err := backend.LoadHistoryArchive(ui.Cfg); err != nil {
 		t.Fatal("cancel changed the backup", err)
+	}
+}
+
+func TestPreferredBackupFolderSurvivesSettingsSaveClearAndReopen(t *testing.T) {
+	ui, view := storageSettingsFixture(t)
+	destination := tempDir(t)
+	openStorageAction(t, ui, view, "Reallocate backup")
+	popup := ui.Win.Canvas().Overlays().Top()
+	walkRendered(popup, func(o fyne.CanvasObject) {
+		if e, ok := o.(*widget.Entry); ok {
+			e.SetText(destination)
+		}
+	})
+	tapStoragePopupButton(t, popup, "Reallocate")
+	tapButton(t, view, "Save settings")
+	openStorageAction(t, ui, view, "Clear backup")
+	tapStoragePopupButton(t, ui.Win.Canvas().Overlays().Top(), "Clear backup")
+	saved, ok := ui.Store.LoadConfig()
+	if !ok || saved.ArchiveDir != destination {
+		t.Fatal("clearing the file or saving settings lost the preferred folder")
+	}
+	fresh := &shell.UI{Store: ui.Store, Win: ui.Win, Cfg: saved, HasCfg: true}
+	view = settings.BuildSettingsTab(fresh)
+	ui.Win.SetContent(view)
+	if !hasRenderedText(view, destination) {
+		t.Fatal("preferred folder was not restored when reopening Settings")
+	}
+	if hasRenderedText(view, "Preferred backup folder") {
+		t.Fatal("the backup path should not have a redundant caption")
+	}
+	archive := backend.HistoryArchive{Version: 1, Owner: saved.WorklogOwner, Projects: []string{"orgs/storage-settings-tests/1"}, Through: backend.HistoryCutoff}
+	if err := backend.SaveHistoryArchive(saved, archive); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(backend.HistoryArchivePath(saved)); err != nil || filepath.Dir(backend.HistoryArchivePath(saved)) != destination {
+		t.Fatal("later backups did not use the preferred folder", err)
+	}
+}
+
+func TestStorageScrollPassesBehindUpdatesAndLastActionStaysReachable(t *testing.T) {
+	ui, view := storageSettingsFixture(t)
+	var scroll *container.Scroll
+	var capsule *fyne.Container
+	var backup *widget.Button
+	walkRendered(view, func(o fyne.CanvasObject) {
+		switch x := o.(type) {
+		case *container.Scroll:
+			if hasRenderedText(x.Content, "Storage") {
+				scroll = x
+			}
+		case *fyne.Container:
+			if len(x.Objects) > 1 && hasRenderedText(x, "Updates") {
+				if bg, ok := x.Objects[0].(*canvas.Rectangle); ok && bg.CornerRadius == shell.CellCornerRadius {
+					capsule = x
+				}
+			}
+		case *widget.Button:
+			if x.Text == "Back up from GitHub" {
+				backup = x
+			}
+		}
+	})
+	if scroll == nil || capsule == nil || backup == nil {
+		t.Fatal("missing storage viewport, Updates capsule or final action")
+	}
+	driver := fyne.CurrentApp().Driver()
+	footerTop := driver.AbsolutePositionForObject(capsule).Y
+	clipBottom := driver.AbsolutePositionForObject(scroll).Y + scroll.Size().Height
+	if clipBottom <= footerTop || clipBottom >= footerTop+capsule.Size().Height {
+		t.Fatal("the scroll must extend behind part of the Updates capsule")
+	}
+	before := driver.AbsolutePositionForObject(ui.Update.Check)
+	scroll.ScrollToBottom()
+	if bottom := driver.AbsolutePositionForObject(backup).Y + backup.Size().Height; bottom >= footerTop {
+		t.Fatal("the final backup action is hidden under Updates at the end of the scroll")
+	}
+	if driver.AbsolutePositionForObject(ui.Update.Check) != before {
+		t.Fatal("Updates moved with the storage content")
+	}
+}
+
+func TestUpdatesCapsuleBlocksHiddenStorageButtonsAndKeepsItsOwnButtonActive(t *testing.T) {
+	ui, view := storageSettingsFixture(t)
+	var scroll *container.Scroll
+	var title *canvas.Text
+	walkRendered(view, func(o fyne.CanvasObject) {
+		if s, ok := o.(*container.Scroll); ok && hasRenderedText(s.Content, "Storage") {
+			scroll = s
+		}
+		if text, ok := o.(*canvas.Text); ok && text.Text == "Updates" {
+			title = text
+		}
+	})
+	if scroll == nil || title == nil {
+		t.Fatal("missing storage or Updates")
+	}
+	under := storageCategoryClearButton(t, view, "GitHub history backup")
+	if under.Disabled() {
+		t.Fatal("fixture needs an active storage button")
+	}
+	clearCalls, checkCalls := 0, 0
+	under.OnTapped = func() { clearCalls++ }
+	ui.Update.Check.OnTapped = func() { checkCalls++ }
+	driver := fyne.CurrentApp().Driver()
+	point := driver.AbsolutePositionForObject(under).Add(fyne.NewPos(under.Size().Width/2, under.Size().Height/2))
+	wantedY := driver.AbsolutePositionForObject(title).Y + title.Size().Height/2
+	scroll.ScrollToOffset(fyne.NewPos(0, scroll.Offset.Y+point.Y-wantedY))
+	point = driver.AbsolutePositionForObject(under).Add(fyne.NewPos(under.Size().Width/2, under.Size().Height/2))
+	if delta := point.Y - wantedY; delta < -1 || delta > 1 {
+		t.Fatalf("could not place the storage button behind Updates: %v", delta)
+	}
+	test.TapCanvas(ui.Win.Canvas(), point)
+	if clearCalls != 0 {
+		t.Fatal("a click on the Updates surface reached a hidden storage action")
+	}
+	check := ui.Update.Check
+	test.TapCanvas(ui.Win.Canvas(), driver.AbsolutePositionForObject(check).Add(fyne.NewPos(check.Size().Width/2, check.Size().Height/2)))
+	if checkCalls != 1 {
+		t.Fatal("the Updates button was blocked by its own capsule")
 	}
 }

@@ -2,18 +2,18 @@ package shell
 
 import "fyne.io/fyne/v2"
 
-// ColumnInset holds a column's cards (Kanban's, or the Sprint Calendar tray's)
-// a set distance down from the top of their scroll, under the floating header.
-type ColumnInset struct{ Top float32 }
+// ColumnInset reserves content space under floating headers or above floating
+// footers. The scroll itself overlaps the capsule, as in Kanban's columns.
+type ColumnInset struct{ Top, Bottom float32 }
 
 func (c *ColumnInset) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	m := objects[0].MinSize()
-	return fyne.NewSize(m.Width, m.Height+c.Top)
+	return fyne.NewSize(m.Width, m.Height+c.Top+c.Bottom)
 }
 
 func (c *ColumnInset) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	objects[0].Move(fyne.NewPos(0, c.Top))
-	objects[0].Resize(fyne.NewSize(size.Width, max(size.Height-c.Top, 0)))
+	objects[0].Resize(fyne.NewSize(size.Width, max(size.Height-c.Top-c.Bottom, 0)))
 }
 
 // FloatingHeaderLayout lays a column's card scroll (first) from halfway down
