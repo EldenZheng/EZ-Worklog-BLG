@@ -44,12 +44,21 @@ func fetchWorklogFields(ref projectRef, root string) ([]field, error) {
 	return fields, nil
 }
 
-func worklogFilterForFields(filter string, fields []field) string {
+func worklogFilterForFields(filter string, fields []field, preferDeprecated bool) string {
 	for _, spec := range []struct{ token, part string }{
 		{"worklog-owner-(blg-xxxx)", "owner"},
 		{"worklog-(date)", "date"},
 	} {
-		if f := findField(fields, "worklog", spec.part); f != nil {
+		f := findField(fields, "worklog", spec.part)
+		if preferDeprecated {
+			for i := range fields {
+				if !fields[i].IsIssueField && deprecatedWorklogField(fields[i].Name) && nameHas(fields[i].Name, spec.part) {
+					f = &fields[i]
+					break
+				}
+			}
+		}
+		if f != nil {
 			// GitHub's filter syntax turns spaces in field names into hyphens.
 			name := strings.ReplaceAll(strings.ToLower(f.Name), " ", "-")
 			filter = strings.ReplaceAll(filter, `"`+spec.token+`":`, `"`+name+`":`)

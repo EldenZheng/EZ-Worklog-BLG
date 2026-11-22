@@ -134,9 +134,6 @@ func (m *TickMotion) Draw(share float32) {
 	if !m.ready {
 		return
 	}
-	at := func(p [2]float32) fyne.Position {
-		return m.icon.Add(fyne.NewPos(p[0]*m.side, p[1]*m.side))
-	}
 	// The gold fills in over the first 55%, and the tick starts drawing at 35%
 	// so the two run into each other rather than one waiting on the other.
 	fill := smoothStep(min(1, max(0, share/0.55)))
@@ -157,13 +154,20 @@ func (m *TickMotion) Draw(share float32) {
 	// icon, drawn along its length at an even speed: the short stroke, then
 	// round the corner into the long one.
 	drawn := smoothStep(min(1, max(0, (share-0.35)/0.65)))
-	cut := theme.Color(theme.ColorNameBackground)
+	DrawCheckMark(m.short, m.long, m.icon, m.side, theme.Color(theme.ColorNameBackground), drawn)
+}
+
+// DrawCheckMark reveals a check's short stroke and then its long stroke.
+func DrawCheckMark(short, long *canvas.Line, origin fyne.Position, side float32, ink color.Color, share float32) {
+	at := func(p [2]float32) fyne.Position {
+		return origin.Add(fyne.NewPos(p[0]*side, p[1]*side))
+	}
 	length := func(a, b [2]float32) float32 {
 		dx, dy := float64(b[0]-a[0]), float64(b[1]-a[1])
 		return float32(math.Sqrt(dx*dx + dy*dy))
 	}
 	first, second := length(tickPoints[0], tickPoints[1]), length(tickPoints[1], tickPoints[2])
-	along := drawn * (first + second)
+	along := min(1, max(0, share)) * (first + second)
 	stroke := func(l *canvas.Line, from, to [2]float32, part float32) {
 		if part <= 0 {
 			l.Hide()
@@ -172,13 +176,13 @@ func (m *TickMotion) Draw(share float32) {
 		a, b := at(from), at(to)
 		l.Position1 = a
 		l.Position2 = fyne.NewPos(a.X+(b.X-a.X)*part, a.Y+(b.Y-a.Y)*part)
-		l.StrokeColor = cut
-		l.StrokeWidth = m.side * 2.2 / 24
+		l.StrokeColor = ink
+		l.StrokeWidth = side * 2.2 / 24
 		l.Show()
 		l.Refresh()
 	}
-	stroke(m.short, tickPoints[0], tickPoints[1], min(1, along/first))
-	stroke(m.long, tickPoints[1], tickPoints[2], max(0, along-first)/second)
+	stroke(short, tickPoints[0], tickPoints[1], min(1, along/first))
+	stroke(long, tickPoints[1], tickPoints[2], max(0, along-first)/second)
 }
 
 // smoothStep eases t (0 to 1) in and out, with no jolt at either end.

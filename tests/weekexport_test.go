@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"worklog/internal/shared/backend"
 )
@@ -101,8 +100,8 @@ func TestWeekTSVKeepsEveryRowOnOneLine(t *testing.T) {
 // so the link is kept whole and only the week and the owner are rewritten.
 func TestWeekBoardLinksRewriteOnlyTheFilter(t *testing.T) {
 	links := backend.WeekBoardLinks(sampleExportConfig(), "team-alex", "2026-08-24", "2026-08-30")
-	if len(links) != len(boardViewURLs) {
-		t.Fatalf("one link per saved view, got %d", len(links))
+	if len(links) != 2*len(boardViewURLs) {
+		t.Fatalf("expected historical and Created filters for each view, got %d links", len(links))
 	}
 
 	for i, link := range links {
@@ -111,14 +110,17 @@ func TestWeekBoardLinksRewriteOnlyTheFilter(t *testing.T) {
 			t.Fatalf("link %d does not parse: %v", i, err)
 		}
 		q := u.Query()
-		want := `"worklog-owner-(blg-xxxx)":team-alex "worklog-(date)":>=2026-08-24 "worklog-(date)":<=2026-08-30`
+		want := `"zzz-(deprecated)-worklog-owner-(blg-xxxx)":team-alex "worklog-(date)":>=2026-08-24 "worklog-(date)":<=2026-08-30`
+		if i >= len(boardViewURLs) {
+			want = `type:"Worklog" assignee:@me created:2026-08-24..2026-08-30`
+		}
 		if got := q.Get("filterQuery"); got != want {
 			t.Fatalf("link %d filter = %q, want %q", i, got, want)
 		}
 
 		// Everything else survives, or the link opens the wrong view with the
 		// wrong columns — which is the whole reason these are kept verbatim.
-		orig, _ := url.Parse(boardViewURLs[i])
+		orig, _ := url.Parse(boardViewURLs[i%len(boardViewURLs)])
 		for key, vals := range orig.Query() {
 			if key == "filterQuery" {
 				continue
@@ -212,19 +214,11 @@ func TestDownloadsDirFallsBackWhenThereIsNoDownloads(t *testing.T) {
 	}
 }
 
-// A commit written past midnight belongs to the evening it came out of, not to
-// the calendar day the clock had just turned over into. On a Sunday night that
-// is the difference between a week and the week after it.
-func TestCommitsAreBucketedOnTheWorkingDayNotTheCalendarDay(t *testing.T) {
-	// Built in the machine's own zone, since that is the day the app reasons in.
-	at := func(day, hour int) string {
-		return time.Date(2026, 8, day, hour, 30, 0, 0, time.Local).Format(time.RFC3339)
-	}
+func TestCommitsUseMalaysiaCalendarDate(t *testing.T) {
 	for _, c := range []struct{ ts, want, why string }{
-		{at(31, 1), "2026-08-30", "1:30am is the night before's overtime"},
-		{at(31, 7), "2026-08-30", "still before the day turns over at 08:00"},
-		{at(31, 8), "2026-08-31", "08:30 starts the new day"},
-		{at(30, 23), "2026-08-30", "late evening is its own day"},
+		{"2026-08-30T15:59:59Z", "2026-08-30", "last second of Sunday"},
+		{"2026-08-30T16:00:00Z", "2026-08-31", "start of Monday"},
+		{"2026-08-30T23:30:00Z", "2026-08-31", "early Monday morning"},
 	} {
 		if got := backend.CommitWorkDate(c.ts); got != c.want {
 			t.Fatalf("%s: commitWorkDate(%s) = %s, want %s", c.why, c.ts, got, c.want)

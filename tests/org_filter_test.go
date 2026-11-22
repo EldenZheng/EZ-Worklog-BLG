@@ -99,7 +99,9 @@ func TestOrgFilterFadesOnlyButtonAndCancelsCleanly(t *testing.T) {
 type fadeOnlyDriver struct{ cascadeFrameDriver }
 
 func (d *fadeOnlyDriver) StartAnimation(a *fyne.Animation) {
-	if a.Curve == nil || a.Curve(.5) < .8 {
+	// The tap's ripple (eased fast, or timed by frames over four spans) is
+	// not the fade.
+	if (a.Curve == nil || a.Curve(.5) < .8) && a.Duration != 4*shell.RippleTime {
 		d.animation = a
 	}
 }

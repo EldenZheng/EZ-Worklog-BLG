@@ -5,18 +5,15 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2/test"
-	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
-	"worklog/internal/shared/backend"
-	"worklog/internal/shared/shell"
 )
 
 // Under the cap the box is one text: it is the remarks, the row stores no
 // separate body, and the split is not offered.
 func TestCommitTextStaysOneBoxUnderCap(t *testing.T) {
 	test.NewApp()
-	ct := logwork.CommitTextEditor((&shell.UI{}), "- short", "", widget.NewLabel(""))
+	ct := logwork.CommitTextEditor("- short", "")
 	if ct.Separate.Visible() {
 		t.Fatal("split offered for text under the cap")
 	}
@@ -30,11 +27,11 @@ func TestCommitTextStaysOneBoxUnderCap(t *testing.T) {
 }
 
 // Reaching the cap offers the split; ticking it keeps the long text as the
-// issue body, seeds remarks that fit, and lets the entry save.
+// issue body and copies it into remarks for the user to edit.
 func TestCommitTextSplitsLongDescription(t *testing.T) {
 	test.NewApp()
 	long := strings.Repeat("- a line of real commit work here\n", 60)
-	ct := logwork.CommitTextEditor((&shell.UI{}), long, "", widget.NewLabel(""))
+	ct := logwork.CommitTextEditor(long, "")
 	if !ct.Separate.Visible() {
 		t.Fatal("split not offered at the cap")
 	}
@@ -46,22 +43,22 @@ func TestCommitTextSplitsLongDescription(t *testing.T) {
 	if body != strings.TrimSpace(long) {
 		t.Fatal("description not kept whole as the issue body")
 	}
-	if remarks == "" || len(remarks) > backend.RemarkCap {
-		t.Fatalf("seeded remarks are %d chars", len(remarks))
+	if remarks != body {
+		t.Fatal("the remarks should start with the complete description")
 	}
-	if why := ct.Check(); why != "" {
-		t.Fatalf("check = %q", why)
-	}
-	ct.Remarks.SetText(strings.Repeat("x", backend.RemarkCap+1))
 	if why := ct.Check(); why == "" {
 		t.Fatal("over-cap remarks passed check split")
+	}
+	ct.Remarks.SetText("- a short summary")
+	if why := ct.Check(); why != "" {
+		t.Fatalf("check after editing remarks = %q", why)
 	}
 }
 
 // A row saved split reopens split, with each text in its own box.
 func TestCommitTextReopensSplit(t *testing.T) {
 	test.NewApp()
-	ct := logwork.CommitTextEditor((&shell.UI{}), "- brief", "the full description", widget.NewLabel(""))
+	ct := logwork.CommitTextEditor("- brief", "the full description")
 	if !ct.Split() {
 		t.Fatal("saved split row reopened as one box")
 	}

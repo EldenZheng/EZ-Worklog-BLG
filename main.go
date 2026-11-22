@@ -9,7 +9,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -51,6 +50,15 @@ func main() {
 
 	store := backend.NewStore(shell.DataDir())
 	cfg, has := store.LoadConfig()
+	// Once, on the first start after the worklog SOP: entries already waiting
+	// to be pushed, with commits on GitHub, are tagged legacy (see
+	// backend.TagLegacyDrafts). A failure leaves the flag off to try again.
+	if has && !cfg.SOPLegacyTagged {
+		if _, err := store.TagLegacyDrafts(); err == nil {
+			cfg.SOPLegacyTagged = true
+			_ = store.SaveConfig(cfg)
+		}
+	}
 	ui := &shell.UI{
 		Store:    store,
 		Cfg:      cfg,
@@ -60,6 +68,7 @@ func main() {
 		RepMonth: shell.CurrentPeriod(),
 	}
 
+	startDay := shell.Today()
 	assemble.BuildAllTabs(ui)
 	// Matched against the tab names, so the names and these have to stay in
 	// step: renaming "Log work" to "Log Work" quietly stopped the commit list
@@ -148,13 +157,10 @@ func main() {
 		// is the red removal pill.
 		msg := widget.NewLabel(fmt.Sprintf("%d Kanban change(s) have not reached GitHub yet. Close anyway and lose them?", n))
 		msg.Wrapping = fyne.TextWrapWord
-		var d dialog.Dialog
-		keep := widget.NewButton("Keep waiting", func() { shell.CloseDialog(d, w) })
+		var popup *widget.PopUp
+		keep := widget.NewButton("Keep waiting", func() { shell.ClosePopUp(popup) })
 		quit := widget.NewButton("Close anyway", func() { w.Close() })
-		d = dialog.NewCustomWithoutButtons("Changes still saving",
-			container.NewVBox(msg, shell.DialogButtons(keep, shell.DestructiveButton(quit))), w)
-		d.Resize(fyne.NewSize(480, d.MinSize().Height))
-		shell.ShowDialog(d, w)
+		popup = ui.ShowConfirmation("Changes still saving", msg, shell.DialogButtons(keep, shell.DestructiveButton(quit)))
 	})
 
 	logwork.DrawRecent(ui)
@@ -171,6 +177,8 @@ func main() {
 			ui.LoadPending(false)
 			// Quiet: it only shows itself if there is an update to offer.
 			settings.CheckForUpdates(ui, false)
+			// Until the user ticks "Don't show this again".
+			shell.ShowPatchNotes(ui)
 			if sprintcalendar.PruneSupportWeeks(ui) {
 				logwork.DrawWeekStrip(ui)
 			}
@@ -191,5 +199,8 @@ func main() {
 		time.Sleep(200 * time.Millisecond)
 		fyne.Do(func() { backend.MaximizeAppWindow(shell.WindowTitle) })
 	}()
+	closed := make(chan struct{})
+	defer close(closed)
+	go logwork.WatchDay(ui, startDay, closed)
 	w.ShowAndRun()
 }

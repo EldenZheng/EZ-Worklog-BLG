@@ -9,7 +9,10 @@ import (
 
 // WorklogEnableHoverFade opts a control into the app's gentle hover without
 // changing its role, keyboard handling, press feedback or layout.
-func (b *Button) WorklogEnableHoverFade() { b.worklogHoverFade = true }
+func (b *Button) WorklogEnableHoverFade() { b.WorklogSetHoverFade(300 * time.Millisecond) }
+
+// WorklogSetHoverFade lets app controls select their hover duration.
+func (b *Button) WorklogSetHoverFade(duration time.Duration) { b.worklogHoverFade = duration }
 
 type worklogHover struct {
 	ready, hovered bool
@@ -38,10 +41,11 @@ func (r *buttonRenderer) worklogSetBackground(target color.Color) {
 	hovered := r.button.hovered && !r.button.Disabled()
 	changed := h.ready && h.hovered != hovered
 	h.ready, h.hovered = true, hovered
-	if !r.button.worklogHoverFade || r.button.Disabled() || !fyne.CurrentApp().Settings().ShowAnimations() || !changed {
+	fade := r.button.worklogHoverFade > 0 && !r.button.Disabled() && fyne.CurrentApp().Settings().ShowAnimations()
+	if !fade || !changed {
 		// A refresh in the middle of the same hover leaves its frame intact;
 		// a new role, theme or disabled state replaces the old target at once.
-		if h.anim != nil && r.button.worklogHoverFade && !r.button.Disabled() && fyne.CurrentApp().Settings().ShowAnimations() && hoverColorEqual(h.target, target) {
+		if h.anim != nil && fade && hoverColorEqual(h.target, target) {
 			return
 		}
 		h.stop()
@@ -61,7 +65,7 @@ func (r *buttonRenderer) worklogSetBackground(target color.Color) {
 	}
 	h.target = target
 	var anim *fyne.Animation
-	anim = fyne.NewAnimation(300*time.Millisecond, func(p float32) {
+	anim = fyne.NewAnimation(r.button.worklogHoverFade, func(p float32) {
 		if h.anim != anim {
 			return
 		}

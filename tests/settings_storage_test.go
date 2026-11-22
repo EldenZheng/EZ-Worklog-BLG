@@ -79,7 +79,7 @@ func TestSettingsIdentityAndUpdatesStayFixedWhileStorageScrolls(t *testing.T) {
 	if hasRenderedText(sidebar.Content, "Identity") || hasRenderedText(sidebar.Content, "Worklog owner") {
 		t.Fatal("identity fields must stay outside the scrolling area")
 	}
-	if !hasRenderedText(sidebar.Content, "History backup") {
+	if !hasRenderedText(sidebar.Content, "History Backup") {
 		t.Fatal("backup must sit above updates")
 	}
 	if hasRenderedText(sidebar.Content, "Updates") {
@@ -432,6 +432,8 @@ func TestUpdatesCapsuleBlocksHiddenStorageButtonsAndKeepsItsOwnButtonActive(t *t
 		t.Fatal("missing storage or Updates")
 	}
 	under := storageCategoryClearButton(t, view, "GitHub history backup")
+	// A row's Delete shows only while the pointer is on the row.
+	hoverStorageRow(t, view, "GitHub history backup")
 	if under.Disabled() {
 		t.Fatal("fixture needs an active storage button")
 	}

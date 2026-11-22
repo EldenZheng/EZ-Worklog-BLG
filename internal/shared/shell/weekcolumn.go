@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
+	"worklog/internal/shared/widgets"
 )
 
 // ---- drop targets ----
@@ -20,10 +21,26 @@ import (
 // so hovering is what says where a drop would go.
 type DayColumn struct {
 	widget.BaseWidget
-	Ui    *UI
-	Date  string
-	Body  fyne.CanvasObject
-	Frame *canvas.Rectangle
+	Ui             *UI
+	Date           string
+	Body           fyne.CanvasObject
+	Frame          *canvas.Rectangle
+	Heading        fyne.CanvasObject
+	HeadingContent fyne.CanvasObject
+	HeadingFill    *canvas.Rectangle
+	DateHoverFrame *canvas.Rectangle
+	DateHovered    bool
+	// Edge redraws the day's outline over its cards while the heading is
+	// pinned. Cards then pass behind the heading and show round it, inside
+	// the day, as in a Kanban column, without running over its top edge.
+	Edge *canvas.Rectangle
+	// Cover hides cards in the strip above the pinned outline, the page's
+	// own background between the view's top and the day's top edge.
+	Cover *canvas.Rectangle
+	// Clip is the day's own fill from its pinned top edge down to the middle
+	// of its heading: as in a Kanban column, a card scrolling up slips under
+	// the heading and is gone by its middle line.
+	Clip *canvas.Rectangle
 
 	Mins     int // already on GitHub
 	Waiting  int // saved here, standing on this day
@@ -85,17 +102,23 @@ func (c *DayColumn) StartPulse(dropping int) {
 	// Green only where the drop would actually finish the day. Otherwise the day
 	// still lifts, towards the accent rather than towards done — a card has to
 	// look like it can land somewhere even when landing there settles nothing.
-	to := BlendColor(bg, theme.Color(theme.ColorNamePrimary), backend.WeekDraftTint)
-	if c.Mins+c.Waiting+c.Planned+dropping >= backend.Target {
+	to := BlendColor(bg, widgets.LogoGold, backend.WeekDraftTint)
+	if c.MeetsTarget(dropping) {
 		to = BlendColor(bg, theme.Color(theme.ColorNameSuccess), backend.WeekDoneTint)
 	}
 	c.Pulse = canvas.NewColorRGBAAnimation(c.BaseFill, to, pulsePeriod, func(col color.Color) {
 		c.Frame.FillColor = col
 		c.Frame.Refresh()
+		c.PaintEdge()
 	})
 	c.Pulse.AutoReverse = true
 	c.Pulse.RepeatCount = fyne.AnimationRepeatForever
 	c.Pulse.Start()
+}
+
+// MeetsTarget includes the minutes a drop would add to this day.
+func (c *DayColumn) MeetsTarget(adding int) bool {
+	return c.Mins+c.Waiting+c.Planned+adding >= backend.Target
 }
 
 // StopPulse puts the day back to the colour it earned on its own.
@@ -107,4 +130,73 @@ func (c *DayColumn) StopPulse() {
 	c.Pulse = nil
 	c.Frame.FillColor = c.BaseFill
 	c.Frame.Refresh()
+	c.PaintEdge()
+}
+
+// FollowHeading keeps the day's outline around its heading: once the page
+// scrolls and the heading is pinned, the outline's top comes down with it,
+// a padding under the top of the view, as it sits around the heading before
+// scrolling. Cards scroll behind the heading, as in a Kanban column, and are
+// gone by its middle line.
+func (c *DayColumn) FollowHeading() {
+	if c.Heading == nil || c.Frame == nil || c.Body == nil {
+		return
+	}
+	y := c.Heading.Position().Y
+	size := c.Body.Size()
+	for _, r := range []*canvas.Rectangle{c.Frame, c.DateHoverFrame} {
+		if r == nil {
+			continue
+		}
+		r.Move(fyne.NewPos(0, y))
+		r.Resize(fyne.NewSize(size.Width, max(0, size.Height-y)))
+	}
+	e, cover, clip := c.Edge, c.Cover, c.Clip
+	if e == nil || cover == nil || clip == nil {
+		return
+	}
+	if y <= 0 {
+		e.Hide()
+		cover.Hide()
+		clip.Hide()
+		return
+	}
+	// Both sit among the day's contents, inset a padding in the column.
+	pad := theme.Padding()
+	e.Move(fyne.NewPos(-pad, y-pad))
+	e.Resize(fyne.NewSize(size.Width, max(0, size.Height-y)))
+	e.Show()
+	cover.FillColor = theme.Color(theme.ColorNameBackground)
+	cover.Move(fyne.NewPos(-pad, y-2*pad-1))
+	cover.Resize(fyne.NewSize(size.Width, pad+1))
+	cover.Show()
+	cover.Refresh()
+	clip.Move(fyne.NewPos(-pad, y-pad))
+	clip.Resize(fyne.NewSize(size.Width, pad+c.Heading.Size().Height/2))
+	clip.Show()
+	c.PaintEdge()
+}
+
+// PaintEdge copies the day's outline onto its pinned edge, and its fill onto
+// the clip under the heading.
+func (c *DayColumn) PaintEdge() {
+	if c.Edge == nil || c.Frame == nil {
+		return
+	}
+	if c.Clip != nil {
+		fill := c.Frame.FillColor
+		if fill == nil {
+			fill = color.Transparent
+		}
+		if _, _, _, a := fill.RGBA(); a == 0 {
+			fill = theme.Color(theme.ColorNameBackground)
+		}
+		c.Clip.FillColor = fill
+		c.Clip.CornerRadius = c.Frame.CornerRadius
+		c.Clip.Refresh()
+	}
+	c.Edge.FillColor = color.Transparent
+	c.Edge.StrokeColor, c.Edge.StrokeWidth = c.Frame.StrokeColor, c.Frame.StrokeWidth
+	c.Edge.CornerRadius = c.Frame.CornerRadius
+	c.Edge.Refresh()
 }

@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 )
 
 // ButtonPressDuration is the complete compression-and-return time.
@@ -113,21 +112,4 @@ func ButtonPressScale(from, progress float32) float32 {
 	}
 	t := (progress - ButtonPressCompression) / (1 - ButtonPressCompression)
 	return 0.94 + 0.06*(1-(1-t)*(1-t)*(1-t))
-}
-
-// ApplyPressScale follows an ordinary layout pass. The objects must be canvas
-// primitives, with their normal geometry and text sizes restored by that pass.
-func ApplyPressScale(size fyne.Size, scale float32, objects ...fyne.CanvasObject) {
-	if scale == 1 {
-		return
-	}
-	offset := fyne.NewPos(size.Width*(1-scale)/2, size.Height*(1-scale)/2)
-	for _, o := range objects {
-		pos, s := o.Position(), o.Size()
-		o.Move(offset.AddXY(pos.X*scale, pos.Y*scale))
-		o.Resize(fyne.NewSize(s.Width*scale, s.Height*scale))
-		if text, ok := o.(*canvas.Text); ok {
-			text.TextSize *= scale
-		}
-	}
 }

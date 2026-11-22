@@ -21,7 +21,8 @@ import (
 // panelSide is the inset at a panel's left and right; panelEnd at its top and
 // bottom.
 func panelSide() float32 { return theme.InnerPadding() * 2.5 }
-func panelEnd() float32  { return theme.InnerPadding() * 1.5 }
+
+func panelEnd() float32 { return theme.InnerPadding() * 1.5 }
 
 func panelBackground() *canvas.Rectangle {
 	bg := canvas.NewRectangle(BlendColor(

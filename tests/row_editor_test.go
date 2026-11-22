@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
@@ -15,6 +16,7 @@ import (
 	"worklog/internal/menus/report"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 // walk visits every object in a widget tree.
@@ -137,6 +139,7 @@ func TestRowEditorSavesInPlace(t *testing.T) {
 
 	made, err := ui.Store.AppendRows([]backend.Row{{
 		"date": shell.Today(), "minutes": "90", "type": "commit",
+		"commit_date": "2026-08-12",
 		"description": "half written", "issue": "exampleorg/repo#7",
 		"refs": "3613aff", "remarks": "- half written", "mode": "subissue",
 	}})
@@ -146,7 +149,15 @@ func TestRowEditorSavesInPlace(t *testing.T) {
 	row := made[0]
 
 	refreshed, finished := 0, 0
-	form := logwork.RowEditor(ui, row, func() { refreshed++ }, func() { finished++ }).All()
+	editor := logwork.RowEditor(ui, row, func() { refreshed++ }, func() { finished++ })
+	contentHeader := editor.Body.(*fyne.Container).Objects[0].(*fyne.Container)
+	if created := contentHeader.Objects[0].(*widget.Label); !created.Visible() || created.Text != "Created "+row["logged_at"][:10] {
+		t.Fatalf("the line under the heading should open with the day the entry was saved, got %q", created.Text)
+	}
+	if date := contentHeader.Objects[1].(*widget.Label); !date.Visible() || date.Text != "Committed 2026-08-12" {
+		t.Fatal("the date beside the issue should be the original commit date")
+	}
+	form := editor.All()
 
 	mins := entryByPlaceholder(form, "480")
 	if mins == nil {
@@ -178,6 +189,9 @@ func TestRowEditorSavesInPlace(t *testing.T) {
 	if got["minutes"] != "480" || got["remarks"] != "- finished the thing" {
 		t.Fatalf("edits were not written: %+v", got)
 	}
+	if got["commit_date"] != "2026-08-12" || got["date"] != row["date"] {
+		t.Fatalf("commit and worklog dates should remain independent: %+v", got)
+	}
 	if got["pushed_at"] != "" {
 		t.Fatalf("saving locally must not mark the row pushed: %q", got["pushed_at"])
 	}
@@ -186,6 +200,42 @@ func TestRowEditorSavesInPlace(t *testing.T) {
 	}
 	if finished == 0 {
 		t.Fatal("a plain save should close the popup")
+	}
+}
+
+func TestSavedCommitDateFollowsTheCommitWhenWorklogDateChanges(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	const commitDate, worklogDate = "2026-08-12", "2026-08-13"
+	commit := backend.Commit{Repo: "exampleorg/repo", Sha: "3613aff", Date: commitDate, Message: "finish the task"}
+	form := logwork.GroupEditor(ui, backend.Group{
+		Date: commitDate, Issue: "exampleorg/repo#7", Commits: []backend.Commit{commit},
+	}, nil, nil).All()
+	var picker *logwork.WorklogDatePicker
+	walk(form, func(o fyne.CanvasObject) {
+		if p, ok := o.(*logwork.WorklogDatePicker); ok {
+			picker = p
+		}
+	})
+	if picker == nil {
+		t.Fatal("worklog date picker missing")
+	}
+	picker.Set(worklogDate)
+	tapButton(t, form, "Save only")
+	rows, err := ui.Store.ReadRows()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("expected one saved row: %v, %v", rows, err)
+	}
+	if rows[0]["commit_date"] != commitDate || rows[0]["date"] != worklogDate {
+		t.Fatalf("the two dates should be stored independently: %v", rows[0])
+	}
+	// Older entries can recover the original date from the Commit List cache.
+	rows[0]["commit_date"] = ""
+	ui.WeekCommits = map[string][]backend.Commit{"2026-08-10": {commit}}
+	older := logwork.RowEditor(ui, rows[0], func() {}, nil)
+	header := older.Body.(*fyne.Container).Objects[0].(*fyne.Container)
+	if date := header.Objects[1].(*widget.Label); !date.Visible() || date.Text != "Committed "+commitDate {
+		t.Fatal("an older entry should use its linked commit's cached date")
 	}
 }
 
@@ -230,45 +280,100 @@ func buttonNames(o fyne.CanvasObject) []string {
 	return out
 }
 
-// The popup's buttons ride in the same row as Back, above the scroll. Left at
-// the foot of the form they sat under a full set of remarks, and Back had a
-// line to itself.
-func TestPopupKeepsTheActionsBesideBack(t *testing.T) {
+func TestWorklogEditorPopupsUseSharedHeading(t *testing.T) {
 	ui := editorUI(t)
 	defer fyne.CurrentApp().Quit()
+	ui.Win.Resize(fyne.NewSize(1100, 760))
 
-	made, err := ui.Store.AppendRows([]backend.Row{{
-		"date": shell.Today(), "minutes": "90", "issue": "exampleorg/repo#7", "remarks": "- work",
-	}})
-	if err != nil {
-		t.Fatal(err)
+	date, issue := shell.Today(), "exampleorg/repo#7"
+	open := []func(){
+		func() { logwork.OpenGroupEditor(ui, backend.Group{Date: date, Issue: issue}) },
+		func() {
+			logwork.OpenPendingIssue(ui, []backend.Row{{"id": "1", "date": date, "issue": issue}}, nil)
+		},
 	}
-	back := widget.NewButton("Back", func() {})
-	shell := logwork.PopupShell(back, logwork.RowEditor(ui, made[0], func() {}, func() {}))
-
-	for _, want := range []string{"Back", "Save", "Save & push", "Compact remarks"} {
-		if !contains(buttonNames(shell), want) {
-			t.Fatalf("%q is missing from the popup: %v", want, buttonNames(shell))
+	for i, show := range open {
+		listeners := len(ui.LogDayListeners)
+		show()
+		back := waitForButton(t, ui.Win, "Back")
+		saveLabel := []string{"Save only", "Save"}[i]
+		save := waitForButton(t, ui.Win, saveLabel)
+		push := waitForButton(t, ui.Win, "Save & push")
+		popup := overlayField(ui.Win.Canvas().Overlays().Top(), "Content").(*widget.PopUp)
+		var heading *widget.Label
+		var rule *canvas.Rectangle
+		var body *container.Scroll
+		walkRendered(popup.Content, func(o fyne.CanvasObject) {
+			// The group editor names its day and issue; a saved entry's
+			// editor is named after its issue.
+			if label, ok := o.(*widget.Label); ok && label.SizeName == theme.SizeNameHeadingText &&
+				(strings.Contains(label.Text, date+"  ·  "+issue) || i == 1) {
+				heading = label
+			}
+			if line, ok := o.(*canvas.Rectangle); ok && sameColor(line.FillColor, widgets.LogoGold) && line.MinSize().Height == 2 {
+				rule = line
+			}
+			if s, ok := o.(*container.Scroll); ok {
+				if body == nil {
+					body = s
+				}
+				for _, name := range buttonNames(s.Content) {
+					if name == "Back" || name == saveLabel || name == "Save & push" {
+						t.Fatalf("%q scrolls with the form", name)
+					}
+				}
+			}
+		})
+		if heading == nil || heading.SizeName != theme.SizeNameHeadingText ||
+			heading.Theme().Color(theme.ColorNameForeground, fyne.CurrentApp().Settings().ThemeVariant()) != widgets.LogoGold {
+			t.Fatal("editor popup should use the shared gold heading")
+		}
+		if want := logwork.RowTitle(ui, backend.Row{"id": "1", "date": date, "issue": issue}); i == 1 && heading.Text != want {
+			t.Fatalf("a saved entry's editor should be named after its issue: %q, want %q", heading.Text, want)
+		}
+		position := fyne.CurrentApp().Driver().AbsolutePositionForObject
+		if rule == nil || position(back).X >= position(heading).X || position(save).X <= position(heading).X {
+			t.Fatal("Back and Save should flank the popup heading")
+		}
+		for _, b := range []*widget.Button{back, save, push} {
+			if position(b).Y+b.Size().Height > position(rule).Y {
+				t.Fatalf("%q should sit above the title underline", b.Text)
+			}
+		}
+		if body == nil || position(body).Y-position(rule).Y-rule.Size().Height > theme.Padding()+theme.InnerPadding() {
+			t.Fatal("the form should start just below the gold underline")
+		}
+		test.Tap(back)
+		if ui.Win.Canvas().Overlays().Top() != nil || len(ui.LogDayListeners) != listeners {
+			t.Fatal("Back should close the editor and stop watching for date changes")
 		}
 	}
+}
 
-	// Whatever scrolls must not carry them, or they scroll away again.
-	var scroll *container.Scroll
-	walk(shell, func(c fyne.CanvasObject) {
-		if s, ok := c.(*container.Scroll); ok && scroll == nil {
-			scroll = s
+func TestEditorStatusOnlyMakesRoomWhenItHasText(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	form := logwork.GroupEditor(ui, backend.Group{Date: shell.Today()}, nil, nil)
+	actions := form.All()
+	body := logwork.PopupShell(form)
+	ui.Win.SetContent(body)
+	ui.Win.Resize(fyne.NewSize(800, 540))
+
+	var fields *container.Scroll
+	walk(body, func(o fyne.CanvasObject) {
+		if s, ok := o.(*container.Scroll); ok && s.Content == form.Body {
+			fields = s
 		}
 	})
-	if scroll == nil {
-		t.Fatal("the popup body should scroll")
+	position := fyne.CurrentApp().Driver().AbsolutePositionForObject
+	if fields == nil || position(fields).Y != position(body).Y {
+		t.Fatal("empty feedback should leave the fields flush with the top")
 	}
-	for _, name := range buttonNames(scroll.Content) {
-		if name == "Save & push" || name == "Back" {
-			t.Fatalf("%q scrolls with the form: %v", name, buttonNames(scroll.Content))
-		}
-	}
-	if contains(labels(shell), "Push as") {
-		t.Fatalf("push mode is fixed and should not need a picker: %v", labels(shell))
+
+	top := position(fields).Y
+	tapButton(t, actions, "Save only")
+	if !hasRenderedText(body, "Tick at least one commit.") || position(fields).Y <= top {
+		t.Fatal("save feedback should be visible above the form")
 	}
 }
 
@@ -280,8 +385,7 @@ func TestRemarksOwnTheFootOfThePopup(t *testing.T) {
 	ui := editorUI(t)
 	defer fyne.CurrentApp().Quit()
 
-	back := widget.NewButton("Back", func() {})
-	shell := logwork.PopupShell(back, logwork.RowEditor(ui,
+	shell := logwork.PopupShell(logwork.RowEditor(ui,
 		backend.Row{"id": "1", "date": shell.Today(), "remarks": "- work"}, func() {}, func() {}))
 
 	// One scroller in the popup, and it holds the fields. A second one around

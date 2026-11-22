@@ -7,7 +7,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -21,8 +20,16 @@ import (
 // windows on the user's desktop.
 var PickBackupFolder = pickBackupFolder
 
-func sidebarSectionTitle(title string) fyne.CanvasObject {
-	return sidebarSectionTop(container.NewThemeOverride(shell.SectionTitle(title), chunkySettingsTheme{Theme: theme.Current()}))
+// goldText shows a section's total in gold.
+func goldText(l *widget.Label) fyne.CanvasObject {
+	l.TextStyle.Bold = true
+	return container.NewThemeOverride(l, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+}
+
+// tightLines stacks labels as the lines of one label: the gap between them is
+// a label's own line spacing, not two labels' padding.
+func tightLines(lines ...fyne.CanvasObject) *fyne.Container {
+	return container.New(layout.NewCustomPaddedVBoxLayout(theme.LineSpacing()-2*theme.InnerPadding()), lines...)
 }
 
 func sidebarSectionTop(content fyne.CanvasObject) fyne.CanvasObject {
@@ -32,14 +39,16 @@ func sidebarSectionTop(content fyne.CanvasObject) fyne.CanvasObject {
 func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, func()) {
 	label := func(text string) *widget.Label { l := widget.NewLabel(text); l.Wrapping = fyne.TextWrapWord; return l }
 	usageText := label("Measuring app storage…")
+	freeText := label("")
 	breakdown := label("")
 	categoryList := container.NewVBox()
 	var panel *fyne.Container
 	breakdownOpen := false
-	var categoryActions []*widget.Button
 	bar := ui.ProgressBarParts("settings/storage", "storage", []shell.MeterPart{{Key: "app", Fill: widgets.LogoGold}}, 6)
 	barCaption := label("App / available space")
 	barCaption.TextStyle.Italic = true
+	historyTotal := label("")
+	historyTotal.Hide()
 	historyText := label("No history backup yet.")
 	location := label(backend.HistoryDirectory(ui.Cfg))
 	location.Wrapping = fyne.TextWrapBreak
@@ -50,7 +59,7 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 	busy := false
 	buttons := func(on bool) {
 		busy = on
-		for _, b := range append([]*widget.Button{fetch, refresh, more}, categoryActions...) {
+		for _, b := range []*widget.Button{fetch, refresh, more} {
 			if b != nil {
 				if on {
 					b.Disable()
@@ -85,7 +94,8 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 				usageText.SetText("Cannot measure storage: " + usageErr.Error())
 			} else {
 				owned := usage.AppBytes + usage.DataBytes
-				usageText.SetText(fmt.Sprintf("App + local data: %s\nFree on app drive: %s", backend.FormatBytes(uint64(owned)), backend.FormatBytes(usage.FreeBytes)))
+				usageText.SetText("App + local data: " + backend.FormatBytes(uint64(owned)))
+				freeText.SetText("Free on app drive: " + backend.FormatBytes(usage.FreeBytes))
 				breakdown.SetText(fmt.Sprintf("App %s · Data %s\nBackup %s · Free at backup location %s", backend.FormatBytes(uint64(usage.AppBytes)), backend.FormatBytes(uint64(usage.DataBytes)), backend.FormatBytes(uint64(usage.ArchiveBytes)), backend.FormatBytes(usage.ArchiveFreeBytes)))
 				denominator := float64(owned) + float64(usage.FreeBytes)
 				if denominator > 0 {
@@ -93,13 +103,13 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 					ui.ProgressBarParts("settings/storage", "storage", []shell.MeterPart{{Key: "app", Fill: widgets.LogoGold, Weight: float32(fraction)}}, 6)
 					barCaption.SetText(fmt.Sprintf("App / available space · %.3f%%", fraction*100))
 				}
-				var content fyne.CanvasObject
-				content, categoryActions = storageBreakdown(ui, cfg, usage, busy, breakdownOpen, clearCategory,
+				content := storageBreakdown(ui, cfg, usage, breakdownOpen, clearCategory,
 					func(open bool) { breakdownOpen = open },
 					func(final bool) { shell.Reflow(final, scroll, panel, categoryList) })
 				categoryList.Objects = []fyne.CanvasObject{content}
 				categoryList.Refresh()
 			}
+			historyTotal.Hide()
 			if os.IsNotExist(archiveErr) {
 				historyText.SetText("No history backup yet.")
 			} else if archiveErr != nil {
@@ -114,7 +124,9 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 					}
 					rangeText = first + " to " + last
 				}
-				historyText.SetText(fmt.Sprintf("%d records · %s\nBacked up through %s\nLast fetched %s", len(archive.Items), rangeText, archive.Through, archive.FetchedAt))
+				historyTotal.SetText(fmt.Sprintf("%d records · %s", len(archive.Items), rangeText))
+				historyTotal.Show()
+				historyText.SetText(fmt.Sprintf("Backed up through %s\nLast fetched %s", archive.Through, archive.FetchedAt))
 			}
 		})
 	}
@@ -181,8 +193,8 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 				}
 			})
 		})
-		var d dialog.Dialog
-		cancel := settingsButton("Cancel", func() { shell.CloseDialog(d, ui.Win) })
+		var popup *widget.PopUp
+		cancel := settingsButton("Cancel", func() { shell.ClosePopUp(popup) })
 		confirm := settingsButton("Reallocate", func() {
 			if busy {
 				return
@@ -225,25 +237,23 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 					return
 				}
 				ui.Cfg = next
-				shell.CloseDialog(d, ui.Win)
+				shell.ClosePopUp(popup)
 				status.SetText("Backup location saved.")
 				measure()
 			})
 		})
-		body := container.NewVBox(label("Move this history backup to another folder. The new copy is verified before the old file is removed."), entry, browse, free, shell.DialogButtons(cancel, confirm))
-		d = dialog.NewCustomWithoutButtons("Reallocate history backup", body, ui.Win)
-		d.Resize(fyne.NewSize(540, body.MinSize().Height))
-		shell.ShowDialog(d, ui.Win)
+		body := container.NewVBox(label("Move this history backup to another folder. The new copy is verified before the old file is removed."), entry, browse, free)
+		popup = ui.ShowConfirmation("Reallocate history backup", body, shell.DialogButtons(cancel, confirm))
 	}
 	clear = func() {
 		if busy {
 			return
 		}
-		var d dialog.Dialog
+		var popup *widget.PopUp
 		cfg := ui.Cfg
-		cancel := settingsButton("Cancel", func() { shell.CloseDialog(d, ui.Win) })
+		cancel := settingsButton("Cancel", func() { shell.ClosePopUp(popup) })
 		confirm := settingsButton("Clear backup", func() {
-			shell.CloseDialog(d, ui.Win)
+			shell.ClosePopUp(popup)
 			buttons(true)
 			var operationErr error
 			ui.Async(func() error { operationErr = backend.ClearHistoryArchive(cfg); return nil }, func() {
@@ -257,9 +267,8 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 				measure()
 			})
 		})
-		body := container.NewVBox(label("Delete this owner's local history backup? Historical reports will need GitHub again. Your drafts, settings, exports and GitHub records are kept."), shell.RemovalButtons(cancel, confirm))
-		d = dialog.NewCustomWithoutButtons("Clear history backup?", body, ui.Win)
-		shell.ShowDialog(d, ui.Win)
+		body := label("Delete this owner's local history backup? Historical reports will need GitHub again. Your drafts, settings, exports and GitHub records are kept.")
+		popup = ui.ShowConfirmation("Clear history backup?", body, shell.RemovalButtons(cancel, confirm))
 	}
 	refresh = settingsIconButton("", theme.ViewRefreshIcon(), func() {
 		if !busy {
@@ -295,7 +304,20 @@ func storagePanel(ui *shell.UI, scroll *container.Scroll) (fyne.CanvasObject, fu
 	})
 	backupActions := container.NewBorder(nil, nil, nil, shell.QuietButton(more), fetch)
 	goldRefresh := container.NewThemeOverride(shell.QuietButton(refresh), widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
-	panel = container.NewVBox(sidebarSectionTitle("Storage"), container.NewBorder(nil, nil, nil, goldRefresh, usageText), bar, barCaption, breakdown, sidebarSectionTop(categoryList), sidebarSectionTitle("History backup"), note, historyText, location, backupActions, status)
+	// Storage, Data + Backups and History Backup share one heading: gold,
+	// folding, lit under the pointer, folded at first. Each total is in gold.
+	var storage, history *fyne.Container
+	var storageTop, historyTop fyne.CanvasObject
+	totals := tightLines(goldText(usageText), freeText)
+	storage = storageFold("Storage", container.NewVBox(container.NewBorder(nil, nil, nil, goldRefresh, totals), bar, barCaption, breakdown), false, nil,
+		func(final bool) { shell.Reflow(final, scroll, panel, storageTop, storage) })
+	storageTop = sidebarSectionTop(storage)
+	// Like Data + Backups, History Backup starts folded.
+	history = storageFold("History Backup", container.NewVBox(note, tightLines(goldText(historyTotal), historyText), location, backupActions), false, nil,
+		func(final bool) { shell.Reflow(final, scroll, panel, historyTop, history) })
+	historyTop = sidebarSectionTop(history)
+	// The status stays outside the fold: it also reports Data + Backups clears.
+	panel = container.NewVBox(storageTop, sidebarSectionTop(categoryList), historyTop, status)
 	measure()
 	return panel, measure
 }

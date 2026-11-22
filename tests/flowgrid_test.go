@@ -1,15 +1,19 @@
 package tests
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
+	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
 )
@@ -247,4 +251,71 @@ func TestWideSelectFitsItsLongestOption(t *testing.T) {
 		t.Fatalf("wrapper %g is no wider than the placeholder-sized select %g",
 			got, sel.MinSize().Width)
 	}
+}
+
+// A legacy entry, or one whose commits merged before they could name the
+// Worklog, says so in a tag beside its minutes.
+func TestSavedTileTagsLegacyAndMergedEntries(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	base := backend.Row{"date": "2026-11-24", "type": backend.KindCommit, "issue": "o/r#5", "mode": "subissue",
+		"refs": "o/r@abc1234", "minutes": "30", "pushed_at": "2026-11-24T10:00:00",
+		"issue_url": "https://github.com/o/r/issues/6001"}
+	legacy := backend.Row{"legacy": "1"}
+	merged := backend.Row{"ref_state": backend.RefIncomplete,
+		"ref_note": "feat's pull request is already merged, so its commits cannot be changed."}
+	// A draft whose commits GitHub reports merged is tagged before its push.
+	mergedDraft := backend.Row{"merged_refs": "o/r@abc1234", "pushed_at": "", "issue_url": ""}
+	for _, c := range []struct {
+		extra      backend.Row
+		want, gone string
+	}{{legacy, "Legacy", "Already merged"}, {merged, "Already merged", "Legacy"}, {mergedDraft, "Already merged", "Legacy"}, {backend.Row{}, "", "Legacy"}} {
+		row := backend.Row{}
+		for k, v := range base {
+			row[k] = v
+		}
+		for k, v := range c.extra {
+			row[k] = v
+		}
+		for _, card := range []fyne.CanvasObject{logwork.RowTile(ui, row, func() {}), logwork.DayRowCard(ui, row, func() {})} {
+			got := labels(card)
+			if c.want != "" && !contains(got, c.want) {
+				t.Errorf("card for %v should carry %q: %v", c.extra, c.want, got)
+			}
+			if contains(got, c.gone) || (c.want == "Already merged" && contains(got, "Add refs")) {
+				t.Errorf("card for %v has the wrong tag or a pointless Add refs: %v", c.extra, got)
+			}
+		}
+	}
+}
+
+// Saved locally tiles all stand one height and nothing in them spills: a long
+// title stays on one line, cut with an ellipsis.
+func TestSavedTilesShareOneHeightWithoutOverflow(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	long := strings.Repeat("A very long issue title that keeps going ", 6)
+	ui.IssueInfo = map[string]backend.IssueInfo{"o/r#5": {Title: long}}
+	var commits []string
+	for i := 0; i < 4; i++ {
+		commits = append(commits, fmt.Sprintf("o/r@%07d", i+1000000))
+	}
+	busy := backend.Row{"date": "2026-11-24", "type": backend.KindCommit, "issue": "o/r#5", "mode": "subissue",
+		"refs": strings.Join(commits, ","), "minutes": "30", "pushed_at": "2026-11-24T10:00:00", "legacy": "1",
+		"issue_url": "https://github.com/o/r/issues/6001"}
+	plain := backend.Row{"date": "2026-11-24", "type": backend.KindCommit, "issue": "o/r#6", "minutes": "15"}
+	a, b := logwork.RowTile(ui, busy, func() {}), logwork.RowTile(ui, plain, func() {})
+	ui.Win.SetContent(container.New(widgets.NewFlowGrid(logwork.BubbleMinWidth, logwork.BubbleMaxWidth, 176), a, b))
+	ui.Win.Resize(fyne.NewSize(2*logwork.BubbleMinWidth+40, 600))
+	if a.Size().Height != b.Size().Height {
+		t.Fatalf("tiles should share one height: %v vs %v", a.Size(), b.Size())
+	}
+	if a.MinSize().Height > a.Size().Height {
+		t.Fatalf("the busy tile needs %v but got %v: its content would spill", a.MinSize(), a.Size())
+	}
+	walk(a, func(o fyne.CanvasObject) {
+		if l, ok := o.(*widget.Label); ok && l.TextStyle.Bold && l.Truncation != fyne.TextTruncateEllipsis {
+			t.Errorf("title should stay on one line: %q", l.Text)
+		}
+	})
 }

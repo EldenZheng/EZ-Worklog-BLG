@@ -89,8 +89,7 @@ func TestMergeCommitsAreExcludedAndRemarksHaveFallback(t *testing.T) {
 }
 
 // Remarks are handed over complete even when they exceed remarkCap: the editor
-// counts characters, blocks the push, and offers AI compaction. Silently
-// dropping bullets here used to lose real work.
+// counts characters and requires the author to edit the remarks before saving.
 func TestOversizedRemarkIsNotTruncated(t *testing.T) {
 	long := strings.Repeat("meaningful work ", 100)
 	remarks := backend.BuildRemarks([]backend.Commit{{Sha: "ccccccc", Message: long}})

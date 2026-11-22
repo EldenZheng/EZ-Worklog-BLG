@@ -76,7 +76,7 @@ func TestUpdateBadgeOpensBesideTheGear(t *testing.T) {
 	w := a.NewWindow("update badge")
 	w.SetContent(tabs)
 	w.Resize(fyne.NewSize(700, 300))
-	kanban := tabs.Buttons[1]
+	kanban := tabs.Views[1]
 	before := fyne.CurrentApp().Driver().AbsolutePositionForObject(kanban).X
 
 	tabs.ShowUpdate(true)

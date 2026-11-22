@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
@@ -217,5 +218,53 @@ func TestDailyReviewFirstPushDoesNotNeedCombineChoice(t *testing.T) {
 	plan, err := backend.PrepareDailyReviewPush(reviewBatch())
 	if err != nil || plan.NeedsCombine || plan.Minutes != 30 || plan.Body != reviewSecond {
 		t.Fatalf("first push should proceed with only its own PRs: plan=%+v err=%v", plan, err)
+	}
+}
+
+// Pushing the same list again (a retry, or a re-push after an edit elsewhere)
+// is not a combine: GitHub holds nothing this entry does not already list.
+func TestDailyReviewRepushOfSameListDoesNotAskToCombine(t *testing.T) {
+	old := backend.Gh
+	t.Cleanup(func() { backend.Gh = old })
+	backend.Gh = func(args []string, headers ...string) (string, error) {
+		return reviewSnapshot(reviewSecond, reviewSecond, 30), nil
+	}
+	plan, err := backend.PrepareDailyReviewPush(reviewBatch())
+	if err != nil || plan.NeedsCombine || plan.Minutes != 30 || plan.OtherCount != 0 {
+		t.Fatalf("same list should push without the combine choice: plan=%+v err=%v", plan, err)
+	}
+	backend.Gh = func(args []string, headers ...string) (string, error) {
+		return reviewSnapshot(reviewFirst, reviewFirst, 30), nil
+	}
+	plan, err = backend.PrepareDailyReviewPush(reviewBatch())
+	if err != nil || !plan.NeedsCombine || plan.OtherCount != 2 || plan.OtherMinutes != 30 || plan.Minutes != 60 {
+		t.Fatalf("other PRs on GitHub need the combine choice: plan=%+v err=%v", plan, err)
+	}
+}
+
+// A new SOP Worklog off its day is refused before the description is
+// rewritten, so the issue is not left half updated.
+func TestDailyReviewOffDayWritesNothing(t *testing.T) {
+	oldGh, oldPush := backend.Gh, backend.PushEntry
+	t.Cleanup(func() { backend.Gh, backend.PushEntry = oldGh, oldPush })
+	backend.Gh = func(args []string, headers ...string) (string, error) {
+		if args[0] != "api" {
+			t.Fatalf("nothing may be written off the entry's day: %v", args)
+		}
+		bodyJSON, _ := json.Marshal(reviewFirst)
+		return fmt.Sprintf(`{"data":{"repository":{"issue":{"url":"https://github.com/exampleorg/tasks/issues/1","body":%s,"projectItems":{"nodes":[]}}}}}`, bodyJSON), nil
+	}
+	backend.PushEntry = func(backend.Config, string, string, string, int, string, string, string, string, string, ...func(backend.FetchProgress)) (backend.PushResult, error) {
+		t.Fatal("PushEntry must not run off the entry's day")
+		return backend.PushResult{}, nil
+	}
+	row := reviewBatch()
+	row["date"] = backend.AddDays(backend.WorkDate(time.Now()), 3)
+	plan, err := backend.PrepareDailyReviewPush(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := backend.PushDailyReview(backend.Config{}, plan); err == nil || !strings.Contains(err.Error(), "own day") {
+		t.Fatalf("expected the SOP day refusal, got %v", err)
 	}
 }

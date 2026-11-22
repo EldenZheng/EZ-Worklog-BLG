@@ -22,6 +22,46 @@ import (
 
 // ============================ recent entries ============================
 
+// savedCommitDate uses the stored author date, or a commit already in memory
+// when a row predates that field.
+func savedCommitDate(ui *shell.UI, saved string, refs []backend.CommitRef) string {
+	if backend.ValidPlannerDate(saved) {
+		return saved
+	}
+	if len(refs) == 0 {
+		return ""
+	}
+	dates := make(map[string]string)
+	for _, commits := range ui.WeekCommits {
+		for _, commit := range commits {
+			if backend.ValidPlannerDate(commit.Date) {
+				dates[backend.CommitRef{Repo: commit.Repo, Sha: backend.Short(commit.Sha)}.Key()] = commit.Date
+			}
+		}
+	}
+	for _, ref := range refs {
+		if date := dates[backend.CommitRef{Repo: ref.Repo, Sha: backend.Short(ref.Sha)}.Key()]; date != "" {
+			return date
+		}
+	}
+	return ""
+}
+
+func localCommitDate(folders []string, refs []backend.CommitRef) string {
+	clones := backend.RepoClones(folders)
+	for _, ref := range refs {
+		dir := clones[strings.ToLower(ref.Repo)]
+		if dir == "" {
+			continue
+		}
+		out, err := backend.Git(dir, nil, "", "show", "-s", "--format=%aI", "--end-of-options", ref.Sha+"^{commit}", "--")
+		if date := backend.CommitWorkDate(strings.TrimSpace(out)); err == nil && backend.ValidPlannerDate(date) {
+			return date
+		}
+	}
+	return ""
+}
+
 func DrawRecent(ui *shell.UI) {
 	// The strip is part of this list, not a separate view: whatever changes the
 	// saved entries — a drop, a push, an edit — changes what the week shows.
@@ -247,14 +287,7 @@ func entryTable(ui *shell.UI, rows []backend.Row, refresh func()) fyne.CanvasObj
 	tiles := make([]fyne.CanvasObject, 0, len(rows))
 	dup := duplicateRows(rows)
 	for _, r := range rows {
-		tile := rowTile(ui, r, refresh, dup[r["id"]])
-		if r["pushed_at"] == "" {
-			// Still ours to move: it can be dragged onto a day in the strip
-			// above. A pushed entry is already a date on the board, so it stays
-			// put and is edited the long way if it really has to change.
-			tile = newDragTile(ui, r, tile)
-		}
-		tiles = append(tiles, tile)
+		tiles = append(tiles, rowTile(ui, r, refresh, dup[r["id"]]))
 	}
 	return container.New(widgets.NewFlowGrid(BubbleMinWidth, BubbleMaxWidth, rowTileHeight).
 		Compact(BubbleCompactBelow, BubbleCompactMinWidth), tiles...)
@@ -353,28 +386,22 @@ func rowTile(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.C
 	}
 	title := widget.NewLabelWithStyle(shell.Truncate(what, BubbleTitleChars),
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	title.Wrapping = fyne.TextWrapWord
+	title.Truncation = fyne.TextTruncateEllipsis // one line, so every tile keeps the same height
 
-	issue := r["issue"]
-	switch {
-	case issue != "":
-		issue = ShortIssueLabel(ui.IssueInfo[r["issue"]], r["issue"])
-	case r["type"] == backend.KindMeeting:
-		// Ref-less on disk but not unfiled: it goes to the day's meeting issue,
-		// which is found or created when it is pushed.
-		issue = "meeting — " + backend.MeetingTitle(ui.Cfg, r["date"])
-	case r["type"] == backend.KindBulkReview:
-		issue = "bulk review — " + backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
-	case r["type"] == backend.KindCodeReview:
-		if _, err := backend.ParseCodeReviewItems(r["remarks"]); err == nil {
-			issue = "bulk review — " + backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
-		} else {
-			issue = "code review — no issue ref"
+	fallback := ""
+	if r["issue"] == "" {
+		switch {
+		case r["type"] == backend.KindMeeting:
+			fallback = "meeting — " + backend.MeetingTitle(ui.Cfg, r["date"])
+		case backend.RowIsBulkCodeReview(r):
+			fallback = "bulk review — " + backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+		case r["type"] == backend.KindCodeReview:
+			fallback = "code review — no issue ref"
+		case r["type"] == backend.KindIndependent && r["parent_repo"] != "":
+			fallback = "new issue in " + r["parent_repo"]
+		default:
+			fallback = shell.OrDash(r["type"]) + " — no issue ref"
 		}
-	case r["type"] == backend.KindIndependent && r["parent_repo"] != "":
-		issue = "new issue in " + r["parent_repo"]
-	default:
-		issue = shell.OrDash(r["type"]) + " — no issue ref"
 	}
 	state := "waiting to push"
 	if shell.RowPartlySaved(r) {
@@ -385,21 +412,35 @@ func rowTile(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.C
 	// Minutes, not hours and minutes: this is the number that goes in the
 	// worklog field, and reading "1h 30m" here meant converting it back to 90
 	// every time before pushing.
-	summary := caption(fmt.Sprintf("%s  ·  %d min  ·  %s", r["date"], r.Minutes(), issue))
-	if backend.RowIsSingleCodeReview(r) {
-		summary = container.NewBorder(nil, nil, nil, container.NewCenter(shell.CodeReviewTag()), summary)
-	} else if backend.MissingMeetingRecording(r) {
-		summary = container.NewBorder(nil, nil, nil, container.NewCenter(shell.MissingMeetingRecordingTag()), summary)
+	summaryText := fmt.Sprintf("%s  ·  %d min", r["date"], r.Minutes())
+	summary := caption(summaryText)
+	if tag := minutesTag(ui, r); tag != nil {
+		full := fyne.MeasureText(summaryText, theme.CaptionTextSize(), fyne.TextStyle{}).Width + minutesTagGap()
+		summary = container.New(&RefTagLayout{Full: full}, summary, tag)
 	}
-	foot := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), container.NewVBox(
-		summary,
-		caption(state)))
+	footLines := container.NewVBox(savedReferenceLine(r, fallback), summary, caption(state))
+	if line := refStateLine(r); line != "" && !backend.RefsLocked(r) {
+		footLines.Add(caption(line))
+	}
+	foot := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), footLines)
 
 	push, edit, del := rowActions(ui, r, refresh)
-	actionItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
+	var actionItems []fyne.CanvasObject
+	if push != nil {
+		actionItems = append(actionItems, shell.CompactGitHubHoverButton(push))
+	}
+	if add := addRefsButton(ui, r, refresh); add != nil {
+		actionItems = append(actionItems, shell.CompactGitHubHoverButton(add))
+	}
 	actionItems = append(actionItems, rowTags(ui, r, duplicate, false)...)
-	actions := container.NewHBox(append(actionItems, layout.NewSpacer(), widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del))...)
+	actionItems = append(actionItems, layout.NewSpacer())
+	if copyRef := copyRefButton(r); copyRef != nil {
+		actionItems = append(actionItems, widgets.WithPointerCursor(copyRef))
+	}
+	actions := container.NewHBox(append(actionItems, widgets.WithPointerCursor(edit), widgets.WithPointerCursor(del))...)
 
+	// Nothing is cut: the grid grows every tile to the tallest one, and the
+	// title is held to two lines so one long name does not stretch them all.
 	body := container.NewBorder(nil, container.NewVBox(foot, actions), nil, nil, title)
 	bg := canvas.NewRectangle(shell.BlendColor(
 		theme.Color(theme.ColorNameInputBackground), accent, 0.10))
@@ -410,7 +451,123 @@ func rowTile(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.C
 	stripe.SetMinSize(fyne.NewSize(4, 0))
 	stripe.CornerRadius = 2
 	inner := container.NewBorder(nil, nil, stripe, nil, container.NewPadded(body))
-	return container.NewStack(bg, container.NewPadded(inner))
+	content := container.NewStack(bg, container.NewPadded(inner))
+	if r["pushed_at"] == "" {
+		tile := newDragTile(ui, r, content)
+		tile.OnTap = edit.OnTapped
+		return tile
+	}
+	return shell.NewCardTappable(content, edit.OnTapped)
+}
+
+// minutesTag is what stands beside an entry's minutes: Legacy for one pending
+// at the SOP cutover, Already merged for one whose commits can no longer name
+// its Worklog, Pending Push for one whose commits are only on this machine,
+// and Code review for a single review. Nil when there is none.
+func minutesTag(ui *shell.UI, r backend.Row) fyne.CanvasObject {
+	var tags []fyne.CanvasObject
+	switch {
+	case backend.RowIsLegacy(r):
+		tags = append(tags, shell.LegacyTag())
+	case backend.RefsLocked(r):
+		tags = append(tags, shell.AlreadyMergedTag())
+	case rowWaitsForPush(ui, r):
+		tags = append(tags, shell.PendingPushTag())
+	}
+	if backend.RowIsSingleCodeReview(r) {
+		tags = append(tags, shell.CodeReviewTag())
+	}
+	switch len(tags) {
+	case 0:
+		return nil
+	case 1:
+		return tags[0]
+	}
+	return container.NewHBox(tags...)
+}
+
+// minutesTagGap is the space between the minutes and the tag beside them.
+func minutesTagGap() float32 { return 2.5 * theme.Padding() }
+
+// savedReferenceLine is shared by the saved list and the week's day cards.
+func savedReferenceLine(r backend.Row, fallback string) fyne.CanvasObject {
+	label, issueURL := backend.OrDefault(r["issue"], fallback), ""
+	issue, _ := backend.IssueRefFromAny(r["issue"])
+	if owner, repo, num, err := backend.SplitIssue(issue); err == nil {
+		label = fmt.Sprintf("%s#%d", repo, num)
+		issueURL = fmt.Sprintf("https://github.com/%s/%s/issues/%d", owner, repo, num)
+	}
+	var where fyne.CanvasObject
+	var full float32
+	if issueURL != "" {
+		// A plain link like the commits beside it, held at its text's width so
+		// the rest of the row still opens the editor.
+		link := shell.NewHoverLink(label, issueURL)
+		full = link.MinSize().Width + theme.Padding()
+		where = container.NewHBox(link)
+		// Too long for its bubble, it ends in an ellipsis instead of
+		// running out past the bubble's edge.
+		if h, ok := link.(*shell.HoverLink); ok {
+			where = container.New(&textWidthLayout{link: h, full: h.MinSize().Width}, h)
+		}
+	} else {
+		plain := widget.NewLabel(label)
+		plain.Wrapping = fyne.TextWrapBreak
+		where = plain
+		full = fyne.MeasureText(label, theme.TextSize(), plain.TextStyle).Width + 2*theme.InnerPadding() + 1
+	}
+
+	var beside []fyne.CanvasObject
+	if r["type"] == backend.KindCommit || r["type"] == "" {
+		for _, ref := range backend.ParseCommitRefs(r["refs"]) {
+			if ref.Sha == "" {
+				continue
+			}
+			// Older rows have only a SHA. The issue can live in a different repo.
+			commitURL := ""
+			if ref.Repo != "" {
+				commitURL = fmt.Sprintf("https://github.com/%s/commit/%s", ref.Repo, ref.Sha)
+			}
+			beside = append(beside, shell.NewHoverLink(backend.Short(ref.Sha), commitURL))
+		}
+	}
+	// A single review's Code review tag stands beside its minutes (minutesTag).
+	if backend.MissingMeetingRecording(r) {
+		beside = append(beside, shell.MissingMeetingRecordingTag())
+	}
+	if len(beside) == 0 {
+		return where
+	}
+	next := beside[0]
+	if len(beside) > 1 {
+		next = container.NewVBox(beside...)
+	}
+	return container.New(&RefTagLayout{Full: full}, where, next)
+}
+
+// textWidthLayout holds a link at the width of its whole text. Only when the
+// row is narrower than that is it cut short with an ellipsis, rather than
+// pushing out of its bubble; a link that fits is never cut.
+type textWidthLayout struct {
+	link *shell.HoverLink
+	full float32
+}
+
+func (l *textWidthLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(0, objects[0].MinSize().Height)
+}
+
+func (l *textWidthLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	cut := fyne.TextTruncateOff
+	if size.Width < l.full {
+		cut = fyne.TextTruncateEllipsis
+	}
+	if l.link.Truncation != cut {
+		l.link.Truncation = cut
+		l.link.Refresh()
+	}
+	objects[0].Move(fyne.NewPos(0, 0))
+	objects[0].Resize(fyne.NewSize(min(l.full, size.Width), size.Height))
 }
 
 // rowActions are the three things that can be done to a saved entry. The same
@@ -425,9 +582,12 @@ func rowActions(ui *shell.UI, r backend.Row, refresh func()) (push, edit, del *s
 	if r["pushed_at"] != "" {
 		label = "Re-push"
 	}
-	push = shell.NewHoverButton(label, nil, func() { pushRow(ui, r, refresh) })
-	if r["issue"] == "" && !backend.PushableWithoutIssue(r) {
-		push.Disable() // nothing to push to; the editor is where a ref is added
+	// Push is nil off the entry's day: see backend.RowPushable.
+	if PushDay == nil || backend.RowPushable(r, PushDay()) {
+		push = shell.NewHoverButton(label, nil, func() { pushRow(ui, r, refresh) })
+		if r["issue"] == "" && !backend.PushableWithoutIssue(r) {
+			push.Disable() // nothing to push to; the editor is where a ref is added
+		}
 	}
 	edit = shell.NewHoverButton("", theme.DocumentCreateIcon(), func() {
 		openRowEditor(ui, r, refresh)
@@ -443,14 +603,8 @@ func rowActions(ui *shell.UI, r backend.Row, refresh func()) (push, edit, del *s
 // ConfirmDelete puts up the two-button "really delete this?" popup for a saved
 // row, using the same red action and gold Cancel as Sprint Calendar Clear.
 func ConfirmDelete(ui *shell.UI, r backend.Row, refresh func()) {
-	body := widget.NewLabel(
-		"Delete this entry? Its commits become pending again. (Anything already pushed to GitHub stays there.)")
-	body.Wrapping = fyne.TextWrapWord
-
-	var pop *widget.PopUp
-	cancel := widget.NewButton("Cancel", func() { shell.ClosePopUp(pop) })
-	confirm := widget.NewButton("Delete", func() {
-		shell.ClosePopUp(pop)
+	const message = "Delete this entry? Its commits become pending again. (Anything already pushed to GitHub stays there.)"
+	ui.ConfirmRemoval("Delete entry", message, "Delete", func() {
 		if err := ui.Store.DeleteRow(r["id"]); err != nil {
 			ui.Errf(err)
 			return
@@ -459,19 +613,6 @@ func ConfirmDelete(ui *shell.UI, r backend.Row, refresh func()) {
 		ui.ReplayArrival("planner")
 		refresh()
 	})
-	buttons := shell.RemovalButtons(cancel, confirm)
-	content := container.NewBorder(container.NewVBox(widget.NewLabelWithStyle("Delete entry", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), body), buttons, nil, nil, nil)
-	padded := shell.RemovalPopupContent(content)
-	pop = widget.NewModalPopUp(padded, ui.Win.Canvas())
-	sz := ui.RemovalPopupSize(padded)
-	pop.Resize(sz)
-	pop.Show()
-	// Resizing keeps the old top-left position, so centre the compact confirmation.
-	canvasSize := ui.Win.Canvas().Size()
-	pop.Move(fyne.NewPos(
-		(canvasSize.Width-sz.Width)/2,
-		(canvasSize.Height-sz.Height)/2))
-	shell.AnimateOpening(ui.Win.Canvas())
 }
 
 // pushRow sends one saved row to GitHub and reports what landed.
@@ -493,6 +634,12 @@ func pushRow(ui *shell.UI, r backend.Row, refresh func()) {
 		_, complete := applyPushResult(ui, r["id"], res)
 		refresh()
 		ui.RefreshAfterPush(r["date"])
+		// Its commits get the Worklog's reference next; that popup says what
+		// happens, so it stands in for "Push complete".
+		if complete && rowNeedsRefRun(r) {
+			addWorklogRefs(ui, refresh)
+			return
+		}
 		title := "Push incomplete"
 		if complete {
 			title = "Push complete"
@@ -544,7 +691,7 @@ func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult, re
 		if u, err := url.Parse(res.URL); err == nil {
 			rows = append(rows, container.NewHBox(
 				widget.NewLabelWithStyle("Pushed:", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-				widget.NewHyperlink(res.URL, u),
+				shell.HyperlinkWithIcon(res.URL, u),
 			))
 		} else {
 			rows = append(rows, widget.NewLabel("Pushed: "+res.URL))
@@ -557,4 +704,18 @@ func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult, re
 		return
 	}
 	shell.ShowStockDialog(dialog.NewCustom(title, "OK", container.NewVBox(rows...), ui.Win), ui.Win, "OK")
+}
+
+// rowWaitsForPush reports whether any of r's commits is only on this machine,
+// as the last pending fetch found them in the clones.
+func rowWaitsForPush(ui *shell.UI, r backend.Row) bool {
+	if ui == nil || len(ui.Pending.Local) == 0 {
+		return false
+	}
+	for _, c := range backend.RowCommitRefs(r) {
+		if ui.Pending.Local[c.Key()] {
+			return true
+		}
+	}
+	return false
 }

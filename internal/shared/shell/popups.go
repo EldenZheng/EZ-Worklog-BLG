@@ -89,14 +89,3 @@ func FitText(text string, size float32, style fyne.TextStyle, width float32) str
 	}
 	return string(runes[:low]) + "…"
 }
-
-// compactPopupSize uses the editor popup's responsive width without borrowing
-// its tall form height. Confirmations need room for a sentence and two buttons,
-// but should still read as a compact decision rather than a second workspace.
-func (ui *UI) compactPopupSize(content fyne.CanvasObject) fyne.Size {
-	h := content.MinSize().Height
-	if h < 180 {
-		h = 180
-	}
-	return fyne.NewSize(ui.PopupSize().Width, h)
-}

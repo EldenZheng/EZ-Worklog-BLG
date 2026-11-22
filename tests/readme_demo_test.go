@@ -14,7 +14,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
@@ -254,23 +253,17 @@ func recordLoggingPopup(t *testing.T, ui *shell.UI, w fyne.Window, dir, out stri
 		rec.stay(logTab, 200, true)
 	}
 
-	// The popup, built the way openGroupEditor builds it.
-	form := logwork.GroupEditor(ui, g, nil, nil)
-	back := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), nil)
-	back.Importance = widget.LowImportance
-	heading := g.Date + "  ·  " + ui.IssueInfo[g.Issue].Title
-	d := dialog.NewCustomWithoutButtons(heading, logwork.PopupShell(back, form), w)
-	d.Resize(ui.PopupSize())
-	d.Show()
-	defer d.Hide()
+	logwork.OpenGroupEditor(ui, g)
+	popupContent := overlayField(w.Canvas().Overlays().Top(), "Content").(*widget.PopUp).Content
+	defer test.Tap(waitForButton(t, w, "Back"))
 
 	var picker *logwork.WorklogDatePicker
-	walk(form.Body, func(o fyne.CanvasObject) {
+	walk(popupContent, func(o fyne.CanvasObject) {
 		if p, ok := o.(*logwork.WorklogDatePicker); ok {
 			picker = p
 		}
 	})
-	minE := entryByPlaceholder(form.Body, "480")
+	minE := entryByPlaceholder(popupContent, "480")
 	if picker == nil || minE == nil {
 		t.Fatal("the popup should hold a date picker and a minutes field")
 	}

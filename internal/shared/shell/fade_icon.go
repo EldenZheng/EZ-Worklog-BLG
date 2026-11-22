@@ -23,6 +23,8 @@ type FadeIconButton struct {
 	wash     *canvas.Rectangle
 	glow     Glow
 	parent   func(on bool)
+	// hoverFill is the fill under the pointer; nil is a quiet button's gold.
+	hoverFill func() color.Color
 }
 
 // NewFadeIconButton is an icon button running tapped on a click.
@@ -51,7 +53,11 @@ const iconHoverFade = 300 * time.Millisecond
 // Only its strength fades: blending from clear (black with no alpha) dragged
 // it through a dark brown on the way out.
 func (b *FadeIconButton) paint(level float32) {
-	c := color.NRGBAModel.Convert(QuietHoverColor()).(color.NRGBA)
+	full := QuietHoverColor()
+	if b.hoverFill != nil {
+		full = b.hoverFill()
+	}
+	c := color.NRGBAModel.Convert(full).(color.NRGBA)
 	c.A = uint8(float32(c.A)*max(0, min(1, level)) + 0.5)
 	b.wash.FillColor = c
 	b.wash.Refresh()

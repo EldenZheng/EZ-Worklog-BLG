@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
@@ -45,6 +46,46 @@ func TestFitScreenLeavesAPageThatFitsAlone(t *testing.T) {
 	if s := page.Size(); s.Width <= 900 || s.Height <= 600 {
 		t.Fatalf("the page should fill the window: %v", s)
 	}
+}
+
+func TestConfirmationKeepsActionsVisibleWhileDetailsScroll(t *testing.T) {
+	a := test.NewApp()
+	defer a.Quit()
+	w := a.NewWindow("confirmation")
+	defer w.Close()
+	w.SetContent(sizedBox(1, 1))
+	w.Resize(fyne.NewSize(360, 290))
+	ui := &shell.UI{Win: w}
+
+	message := widget.NewLabel(strings.Repeat("An entry with a description long enough to wrap. ", 90))
+	message.Wrapping = fyne.TextWrapWord
+	cancel, apply := widget.NewButton("Not now", nil), widget.NewButton("Rewrite & force-push", nil)
+	popup := ui.ShowConfirmation("Add Worklog references", message, shell.DialogButtons(cancel, shell.GitHubButton(apply)))
+	var details *container.Scroll
+	walkCanvas(popup.Content, func(o fyne.CanvasObject) {
+		if s, ok := o.(*container.Scroll); ok && s.Content == message {
+			details = s
+		}
+	})
+	if details == nil || details.Size().Height <= 0 || message.Size().Height <= details.Size().Height {
+		t.Fatal("long confirmation details should scroll within the card")
+	}
+	if size := popup.Size(); size != size.Min(w.Canvas().Size()) {
+		t.Fatalf("confirmation %v exceeds the window %v", size, w.Canvas().Size())
+	}
+	position := a.Driver().AbsolutePositionForObject
+	first, last := position(cancel), position(apply)
+	edge := position(popup).AddXY(popup.Size().Width, popup.Size().Height)
+	if first.Y != last.Y || first.X+cancel.Size().Width >= last.X ||
+		cancel.Size().Height != cancel.MinSize().Height || apply.Size().Height != apply.MinSize().Height ||
+		last.X+apply.Size().Width > edge.X || last.Y+apply.Size().Height > edge.Y {
+		t.Fatal("the two actions should fit at their native height in the footer")
+	}
+	details.ScrollToBottom()
+	if details.Offset.Y <= 0 || first != position(cancel) || last != position(apply) {
+		t.Fatal("scrolling the details should leave both actions in place")
+	}
+	shell.ClosePopUp(popup)
 }
 
 // A long issue title must not make a popup wider than the window.

@@ -1,6 +1,8 @@
 package tests
 
 import (
+	"fmt"
+	"image/color"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +10,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/kanban"
@@ -16,6 +19,42 @@ import (
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
 )
+
+func TestSprintIssuesScrollbarReachesTheBottomBelowTheHeader(t *testing.T) {
+	ui, _, issue := plannerFixture(t)
+	k := ui.Kanban
+	if _, patched := any(shell.PlannerScroll(k.CalendarIssueClip)).(interface{ WorklogSetVerticalBarInset(float32) }); !patched {
+		t.Skip("uses the app scrollbar inset")
+	}
+	for i := range 24 {
+		k.Plan.Boards[0].Items = append(k.Plan.Boards[0].Items, backend.SprintItem{
+			ID: fmt.Sprint(i), Title: "Issue in the tray", SprintID: issue.Sprint.ID, Effort: 60,
+		})
+	}
+	kanban.Draw(k)
+	scroll := shell.PlannerScroll(k.CalendarIssueClip)
+	if scroll.Content.Size().Height <= scroll.Size().Height {
+		t.Fatal("the issue tray should overflow")
+	}
+	var thumb fyne.Draggable
+	for _, object := range test.WidgetRenderer(scroll).Objects() {
+		if widget, ok := object.(fyne.Widget); ok && object.Position().Y > 0 {
+			for _, child := range test.WidgetRenderer(widget).Objects() {
+				if bar, ok := child.(fyne.Draggable); ok {
+					thumb = bar
+				}
+			}
+		}
+	}
+	if thumb == nil {
+		t.Fatal("the tray needs a draggable thumb below its header")
+	}
+	thumb.Dragged(&fyne.DragEvent{Dragged: fyne.NewDelta(0, scroll.Size().Height)})
+	thumb.DragEnd()
+	if want := scroll.Content.Size().Height - scroll.Size().Height; scroll.Offset.Y != want {
+		t.Fatalf("dragged scrollbar offset %g, want bottom at %g", scroll.Offset.Y, want)
+	}
+}
 
 func TestSprintKanbanColumnsFillRightViewportAndKeepSidebarWidth(t *testing.T) {
 	ui, w, _ := plannerFixture(t)
@@ -142,33 +181,95 @@ func TestSprintCalendarSidebarAndDropColorsWithTopProgressMeters(t *testing.T) {
 	if tray == nil {
 		t.Fatal("sprint issues sidebar missing")
 	}
+	trayScroll := shell.PlannerScroll(k.CalendarIssueClip)
+	var trayHeading *shell.Tappable
+	walkRendered(k.CalendarBody, func(o fyne.CanvasObject) {
+		if heading, ok := o.(*shell.Tappable); ok && contains(labels(heading.Content), "Sprint Issues") {
+			trayHeading = heading
+		}
+	})
+	if trayHeading == nil {
+		t.Fatal("sprint issues heading missing")
+	}
+	display := fyne.CurrentApp().Driver()
+	scrollPos := display.AbsolutePositionForObject(trayScroll)
+	headPos := display.AbsolutePositionForObject(trayHeading)
+	if headPos.X+trayHeading.Size().Width != scrollPos.X+trayScroll.Size().Width || headPos.Y+trayHeading.Size().Height <= scrollPos.Y {
+		t.Fatal("the heading should fill the tray's original width and overlap the cards")
+	}
+	if _, patched := any(trayScroll).(interface{ WorklogSetVerticalBarInset(float32) }); patched {
+		barTop := scrollPos.Y
+		for _, object := range test.WidgetRenderer(trayScroll).Objects() {
+			if _, bar := object.(fyne.Tappable); bar && object.Size().Height > 0 {
+				barTop = scrollPos.Y + object.Position().Y
+			}
+		}
+		if want := headPos.Y + trayHeading.Size().Height; barTop != want {
+			t.Fatalf("the scrollbar must start below the heading at %g, got %g", want, barTop)
+		}
+	}
+	trayTheme := theme.CurrentForWidget(trayScroll)
+	for _, name := range []fyne.ThemeColorName{theme.ColorNameShadow, theme.ColorNameScrollBarBackground} {
+		if !sameColor(trayTheme.Color(name, theme.VariantDark), color.Transparent) {
+			t.Fatalf("the issue tray should suppress %s behind its header", name)
+		}
+	}
 	trayPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(tray)
 	gridPos := fyne.CurrentApp().Driver().AbsolutePositionForObject(k.CalendarClip)
 	if trayPos.X >= gridPos.X || tray.Size().Width > 300 {
 		t.Fatal("issues are not in a left sidebar")
 	}
+	driver := collectMotion(t)
 	tray.MouseIn(nil)
-	shell.SettleFades() // the outlines fade; look at where they settle
 	var target *shell.PlannerDateTarget
 	for _, date := range k.Dates {
 		if date.Date == c.Sprint.StartDate {
 			target = date
 		}
 	}
-	if target == nil || target.Frame.FillColor != widgets.WithAlpha(shell.PlannerAvailableBlue, 0.13) {
-		t.Fatal("eligible date is not translucent light blue")
+	if target == nil {
+		t.Fatal("target missing")
+	}
+	for _, anim := range driver.anims {
+		if anim.Duration == shell.SlowFade {
+			anim.Tick(0.5)
+		}
+	}
+	if sameColor(target.Frame.FillColor, target.Base) || sameColor(target.Frame.FillColor, widgets.WithAlpha(widgets.LogoGold, 0.13)) {
+		t.Fatal("the gold background should interpolate during the 600 ms fade")
+	}
+	shell.SettleFades()
+	if target.Frame.StrokeColor != widgets.LogoGold || target.Frame.FillColor != widgets.WithAlpha(widgets.LogoGold, 0.13) {
+		t.Fatal("an available date should have a gold outline and tint")
 	}
 	at := fyne.CurrentApp().Driver().AbsolutePositionForObject(target.Object).Add(fyne.NewPos(10, 80))
+	driver.anims = nil
 	tray.HighlightDates(&at)
+	for _, anim := range driver.anims {
+		if anim.Duration == shell.SlowFade {
+			anim.Tick(0.4)
+		}
+	}
+	if target.Frame.StrokeWidth != 4 || sameColor(target.Frame.FillColor, widgets.WithAlpha(widgets.LogoGold, 0.25)) {
+		t.Fatal("the outline should reach full width after 240 ms while the gold tint is still fading")
+	}
 	shell.SettleFades()
-	if target.Frame.StrokeColor != widgets.LogoGold || target.Frame.FillColor != widgets.WithAlpha(shell.PlannerAvailableBlue, 0.25) {
-		t.Fatal("active target needs gold outline over light blue")
+	if target.Frame.StrokeColor != widgets.LogoGold || target.Frame.FillColor != widgets.WithAlpha(widgets.LogoGold, 0.25) {
+		t.Fatal("the active target should deepen the gold tint")
 	}
 	tray.MouseOut()
 	shell.SettleFades()
 	if target.Frame.FillColor != target.Base {
 		t.Fatal("hover wash did not reset")
 	}
+	target.Base = shell.DayFill(backend.Target, 0)
+	shell.SetFrame(target.Frame, target.Base, target.StrokeColor, target.StrokeWidth)
+	tray.HighlightDates(&at)
+	shell.SettleFades()
+	if !sameColor(target.Frame.StrokeColor, theme.Color(theme.ColorNameSuccess)) || !sameColor(target.Frame.FillColor, target.Base) {
+		t.Fatal("a green day should keep its background and use a green outline")
+	}
+	tray.ResetDates()
 	foundMeter := false
 	for key := range ui.Meters {
 		if strings.HasPrefix(key, "planner/") {

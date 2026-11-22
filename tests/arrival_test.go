@@ -164,6 +164,35 @@ func TestWeekArrivesOnlyWhenItChanges(t *testing.T) {
 	}
 }
 
+// The cards on a newly shown week wait for their own day to be in place, then
+// wipe in themselves; a redraw of the same week shows them as they are.
+func TestWeekCardsArriveAfterTheirDays(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	withProject(ui, "2026-08")
+	if _, err := ui.Store.AppendRows([]backend.Row{{"date": "2026-08-12", "minutes": "30", "issue": "exampleorg/r#5"}}); err != nil {
+		t.Fatal(err)
+	}
+	wipes := func() int {
+		n := 0
+		walk(ui.WeekBox, func(o fyne.CanvasObject) {
+			if _, ok := o.(*shell.Wipe); ok {
+				n++
+			}
+		})
+		return n
+	}
+	ui.ReplayArrival("week")
+	logwork.DrawWeekStrip(ui)
+	if wipes() != 1 || len(dragTilesIn(ui.WeekBox)) != 1 {
+		t.Fatalf("the card should arrive on its own wipe once its day is in, %d wipes", wipes())
+	}
+	logwork.DrawWeekStrip(ui)
+	if wipes() != 0 || len(dragTilesIn(ui.WeekBox)) != 1 {
+		t.Fatal("a redraw of the same week should show its card as it is")
+	}
+}
+
 // The date picker reads planned time like Log Work's week: in purple under the
 // day, and counted in what the day still owes.
 func TestDatePickerShowsPlannedTime(t *testing.T) {
@@ -225,7 +254,11 @@ func TestKindSwitchSlidesTheOldFormOut(t *testing.T) {
 	walk(ui.Win.Content(), func(o fyne.CanvasObject) {
 		switch x := o.(type) {
 		case *shell.Morph:
-			morph = x
+			// The form's own slide is the outermost; the pending list
+			// inside it has a slide of its own.
+			if morph == nil {
+				morph = x
+			}
 		case *shell.UnderlineTabs:
 			tabs = x
 		}
@@ -382,6 +415,9 @@ func TestArrivalWaitsForTheFetchToLand(t *testing.T) {
 	ui.ReplayArrival("week")
 	key := shell.StatusCacheKey("2026-08")
 	first := func() fyne.CanvasObject {
+		if len(ui.WeekBox.Objects) < 3 {
+			return nil
+		}
 		return ui.WeekBox.Objects[len(ui.WeekBox.Objects)-1].(*fyne.Container).Objects[0]
 	}
 	ui.ProjLoading[key] = true

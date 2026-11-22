@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -106,20 +105,7 @@ func ConfirmClear(k *shell.KanbanUI, title, message string, apply func()) {
 // and Log Work Delete share red actions and gold rounded Cancel buttons. action
 // names the red button.
 func ConfirmRemoval(k *shell.KanbanUI, title, message, action string, apply func()) {
-	body := widget.NewLabel(message)
-	body.Wrapping = fyne.TextWrapWord
-	var popup *widget.PopUp
-	cancel := widget.NewButton("Cancel", func() { shell.ClosePopUp(popup) })
-	confirm := widget.NewButton(action, func() { shell.ClosePopUp(popup); apply() })
-	buttons := shell.RemovalButtons(cancel, confirm)
-	content := shell.RemovalPopupContent(container.NewBorder(container.NewVBox(widget.NewLabelWithStyle(title, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}), body), buttons, nil, nil, nil))
-	popup = widget.NewModalPopUp(content, k.Ui.Win.Canvas())
-	size := k.Ui.RemovalPopupSize(content)
-	popup.Resize(size)
-	popup.Show()
-	viewport := k.Ui.Win.Canvas().Size()
-	popup.Move(fyne.NewPos((viewport.Width-size.Width)/2, (viewport.Height-size.Height)/2))
-	shell.AnimateOpening(k.Ui.Win.Canvas())
+	k.Ui.ConfirmRemoval(title, message, action, apply)
 }
 
 // plannerDayBarBottom is the foot of a day's progress bar: the pointer above

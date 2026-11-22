@@ -2,6 +2,7 @@ package shell
 
 import (
 	"image/color"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -40,6 +41,8 @@ func (t GoldTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) co
 	switch name {
 	case theme.ColorNameButton, theme.ColorNameHyperlink:
 		return widgets.LogoGold
+	case theme.ColorNameSeparator:
+		return BlendColor(widgets.LogoGold, color.Black, 0.25)
 	case theme.ColorNameForegroundOnWarning:
 		return color.NRGBA{R: 0x1c, G: 0x18, B: 0x0d, A: 0xff}
 	case theme.ColorNameFocus, theme.ColorNameSelection:
@@ -119,6 +122,20 @@ func MissingMeetingRecordingTag() fyne.CanvasObject {
 	return OutlineTag("Missing Meeting Recording", MissingMeetingRecordingMaroon)
 }
 
+// LegacyTag marks an entry pending at the SOP cutover: its Worklog lists its
+// commits instead of the commits naming the Worklog.
+func LegacyTag() fyne.CanvasObject { return SavedTag("Legacy") }
+
+// PendingPushTag marks a commit, or an entry of commits, still only on this
+// machine: its Worklog's reference is added before it is pushed.
+func PendingPushTag() fyne.CanvasObject { return SavedTag("Pending Push") }
+
+// AlreadyMergedTag marks an entry whose commits were merged before they could
+// name its Worklog.
+func AlreadyMergedTag() fyne.CanvasObject {
+	return OutlineTag("Already merged", MissingMeetingRecordingMaroon)
+}
+
 // OutlineTag is a compact caption with coloured ink and a rounded outline.
 func OutlineTag(text string, ink color.Color) fyne.CanvasObject {
 	bg := canvas.NewRectangle(color.Transparent)
@@ -128,7 +145,10 @@ func OutlineTag(text string, ink color.Color) fyne.CanvasObject {
 	lbl := canvas.NewText(text, ink)
 	lbl.TextSize = theme.CaptionTextSize()
 	lbl.TextStyle = fyne.TextStyle{Bold: true}
-	return container.NewStack(bg, container.NewPadded(container.NewCenter(lbl)))
+	// Wider at the sides than above and below, so a short word such as
+	// "Legacy" does not sit tight against the rounded ends.
+	pad := layout.NewCustomPaddedLayout(theme.Padding(), theme.Padding(), theme.InnerPadding(), theme.InnerPadding())
+	return container.NewStack(bg, container.New(pad, container.NewCenter(lbl)))
 }
 
 func AppLogo(size float32) fyne.CanvasObject {
@@ -146,13 +166,24 @@ type pillTabs struct {
 	OnSelected func(*container.TabItem)
 	current    int
 	Buttons    []*widget.Button
-	page       *fyne.Container
-	body       *fyne.Container
+	// Views are the tabs as the bar holds them (the button styled is inside
+	// each), for finding a tab on screen.
+	Views []fyne.CanvasObject
+	page  *fyne.Container
+	body  *fyne.Container
 	// badge wraps the gear and says when a newer release is waiting.
 	badge    *updateBadge
 	settings int
 	// shown runs when the tab of that name is brought up (see WhenShown).
 	shown map[string]func()
+	// hover is the gold pill travelling over the tabs.
+	hover *tabHover
+	// looks are the tabs' surfaces, painted behind them in back; nil for the
+	// gear. tapAt is where the last click on tab tapTab landed.
+	looks  []*tabLook
+	back   *fyne.Container
+	tapTab int
+	tapAt  fyne.Position
 }
 
 // WhenShown runs fn each time the tab called name is brought up, for a page
@@ -165,7 +196,7 @@ func (t *pillTabs) WhenShown(name string, fn func()) {
 }
 
 func NewPillTabs(items ...*container.TabItem) *pillTabs {
-	t := &pillTabs{Items: items}
+	t := &pillTabs{Items: items, tapTab: -1}
 	t.ExtendBaseWidget(t)
 	// The bar's gaps are fixed from the pill theme rather than read while
 	// laying out, so the update badge can relayout the bar on every frame of
@@ -174,29 +205,54 @@ func NewPillTabs(items ...*container.TabItem) *pillTabs {
 	gap := pill.Size(theme.SizeNamePadding)
 	row := container.New(layout.NewCustomPaddedHBoxLayout(gap))
 	right := container.New(layout.NewCustomPaddedHBoxLayout(gap))
+	t.hover = &tabHover{pill: widgets.NewHoverPill()}
 	var settings fyne.CanvasObject
 	for i, item := range items {
 		i := i
 		var button *widget.Button
+		// view is what the bar holds: the tab itself, which hears the
+		// pointer, around the button it styles.
+		var view fyne.CanvasObject
 		if item.Text == SettingsTabName {
 			gear := newGearButton(item.Icon, func() { t.SelectIndex(i) })
 			button = &gear.Button
-			t.badge = newUpdateBadge(gear, pill)
+			view = gear
+			t.badge = newUpdateBadge(gear, tabBarTheme{Theme: pill})
 			t.badge.onTap = func() { t.SelectIndex(i) }
 			t.badge.onInk = func() { t.styleButton(i) }
 			t.settings = i
+			// The same travelling hover, except while the update capsule is up:
+			// it brightens itself. Its click keeps its own animation.
+			badgeHover := gear.hover
+			gear.hover = func(on bool) {
+				badgeHover(on)
+				t.hover.over(gear, on && !t.badge.shown)
+			}
 		} else {
-			button = widget.NewButtonWithIcon(item.Text, item.Icon, func() { t.SelectIndex(i) })
+			tab := newTabButton(item.Text, item.Icon, func() { t.SelectIndex(i) })
+			tab.hover = func(on bool) { t.hover.over(tab, on) }
+			tab.tap = func(at fyne.Position) { t.tapTab, t.tapAt = i, at }
+			button = &tab.Button
+			view = tab
+		}
+		var look *tabLook
+		if item.Text != SettingsTabName {
+			look = newTabLook(view, pill)
+		}
+		t.looks = append(t.looks, look)
+		if hover, ok := any(button).(interface{ WorklogSetHoverFade(time.Duration) }); ok {
+			hover.WorklogSetHoverFade(SlowFade)
 		}
 		t.Buttons = append(t.Buttons, button)
+		t.Views = append(t.Views, view)
 		t.styleButton(i)
 		if item.Text == SettingsTabName {
 			settings = container.NewCenter(t.badge)
 		} else {
 			if item.Text == KanbanTabName || item.Text == PlannerTabName || item.Text == ProjectsTabName {
-				right.Add(button)
+				right.Add(look.over)
 			} else {
-				row.Add(button)
+				row.Add(look.over)
 			}
 		}
 		item.Content.Hide()
@@ -210,11 +266,32 @@ func NewPillTabs(items ...*container.TabItem) *pillTabs {
 	if settings != nil {
 		right.Add(settings)
 	}
-	bar := container.New(tabBarLayout{gap: gap}, container.NewHScroll(row), right)
-	if t.badge != nil {
-		t.badge.relayout = func(final bool) { Reflow(final, bar, right, settings) }
+	rowScroll := container.NewHScroll(row)
+	bar := container.New(tabBarLayout{gap: gap}, rowScroll, right)
+	// The tabs' surfaces are painted behind the bar; the hover pill is drawn
+	// over the tabs.
+	var surfaces []fyne.CanvasObject
+	for _, l := range t.looks {
+		if l != nil {
+			surfaces = append(surfaces, l.bg, l.fill)
+		}
 	}
-	header := container.NewPadded(container.NewThemeOverride(bar, pill))
+	t.back = container.New(lookLayer{t: t}, surfaces...)
+	layer := container.New(pillLayer{h: t.hover}, t.hover.pill.Rect)
+	t.hover.layer = layer
+	rowScroll.OnScrolled = func(fyne.Position) { t.placeLooks() }
+	if t.badge != nil {
+		t.badge.relayout = func(final bool) {
+			Reflow(final, bar, right, settings)
+			t.placeLooks()
+		}
+	}
+	for i, l := range t.looks {
+		if l != nil && i == t.current {
+			l.set(1)
+		}
+	}
+	header := container.NewPadded(container.NewThemeOverride(container.New(barStack{}, t.back, bar, layer), tabBarTheme{Theme: pill}))
 	t.body = container.NewBorder(header, nil, nil, nil, t.page)
 	return t
 }
@@ -289,6 +366,20 @@ func (t *pillTabs) SelectIndex(index int) {
 	}
 	previous := t.current
 	t.current = index
+	// The gold drains from the tab let go of and spreads over the one picked,
+	// from where the click landed.
+	if l := t.looks[previous]; l != nil {
+		l.to(0, nil)
+	}
+	if l := t.looks[index]; l != nil {
+		var centre *fyne.Position
+		if t.tapTab == index {
+			at := t.tapAt.Subtract(fyne.CurrentApp().Driver().AbsolutePositionForObject(l.tab))
+			centre = &at
+		}
+		l.to(1, centre)
+	}
+	t.tapTab = -1
 	t.styleButton(previous)
 	item := t.Items[index]
 	t.page.Objects = []fyne.CanvasObject{item.Content}

@@ -11,6 +11,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -164,7 +165,7 @@ func DrawWeekStrip(ui *shell.UI) {
 		DrawWeekStrip(ui)
 	}
 	h := weekHeadFor(ui)
-	prev, next, here, mail, refresh := h.prev, h.next, h.here, h.mail, h.refresh
+	prev, next, here, refresh := h.prev, h.next, h.here, h.refresh
 	prev.OnTapped = func() { walkTo(shell.ShiftWeek(ui.WeekStart, -1)) }
 	next.OnTapped = func() { walkTo(shell.ShiftWeek(ui.WeekStart, 1)) }
 	here.OnTapped = func() { walkTo(backend.WeekStartOf(shell.Today())) }
@@ -176,10 +177,9 @@ func DrawWeekStrip(ui *shell.UI) {
 	title := widget.NewLabelWithStyle(shell.WeekRangeLabel(ui.WeekStart),
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 
+	// Loading says nothing here: the progress strip under the row shows it.
 	note := ""
 	switch state {
-	case "loading":
-		note = "checking GitHub…"
 	case "off":
 		note = "Set a project URL in Settings to see what each day already holds."
 	case "error":
@@ -194,11 +194,6 @@ func DrawWeekStrip(ui *shell.UI) {
 	if ui.WeekStripProgress == nil {
 		ui.WeekStripProgress = shell.NewLoadingIndicator()
 	}
-	// The same export as Log List, on the tab the week is actually worked from:
-	// having to change tabs to send the week you are looking at is a step for
-	// nothing. Both buttons run the same code on the same shared week.
-	mail.OnTapped = func() { ExportWeekForEmail(ui, days, byDay, state) }
-
 	// Refresh reloads the project data behind the week strip — the boards, the
 	// day fills, the score line — and only that. The commit sweep has its own
 	// refresh in the pane above, and a second machine's push shows up on the
@@ -211,35 +206,65 @@ func DrawWeekStrip(ui *shell.UI) {
 		// spending a separate row above the week.
 		headLeft = container.NewBorder(nil, nil, headLeft, nil, ui.LogLegend)
 	}
-	headRight := container.NewHBox(weekSupportControl(ui, rota), mail, refresh,
-		widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
-	head := container.New(widgets.NewSidesLayout(headLeft, headRight, ui.WeekBox.Size().Width), headLeft, headRight)
+	// The note leads the group, so the buttons keep the same right edge
+	// whether or not it is showing.
+	var right []fyne.CanvasObject
+	if note != "" {
+		right = append(right, widget.NewLabelWithStyle(note, fyne.TextAlignTrailing, fyne.TextStyle{Italic: true}))
+	}
+	// Exporting the week for email lives on Log List. The buttons end at the
+	// week's own right edge, level with the days under them.
+	right = append(right, weekSupportControl(ui, rota), refresh)
+	headRight := container.NewHBox(right...)
+	sides := widgets.NewSidesLayout(headLeft, headRight, ui.WeekBox.Size().Width)
+	// On a row too narrow for both, the buttons go under, still at the right.
+	sides.EndAligned = true
+	head := container.New(sides, headLeft, headRight)
 
 	// Any column about to be thrown away stops breathing first: an animation left
 	// running would keep refreshing a rectangle nothing is showing any more.
 	for _, col := range ui.WeekCols {
 		col.StopPulse()
 	}
-	ui.WeekCols = map[string]*shell.DayColumn{}
-	var dayCols []fyne.CanvasObject
-	for _, ds := range days {
-		col := WeekColumn(ui, ds, byDay[ds], localByDay[ds])
-		ui.WeekCols[ds] = col
-		dayCols = append(dayCols, col)
+	for _, old := range ui.WeekCols {
+		shell.FollowFrame(old.Frame, nil)
 	}
+	ui.WeekCols = map[string]*shell.DayColumn{}
 	// A week shown for the first time arrives as Kanban's cards do: each day
 	// uncovered from the top down, one after another left to right, its bar
-	// filling in as it comes. Any other redraw leaves the days be. The days are
-	// held back until the week's worklogs have landed, and arrive together with
-	// the saved list, once.
+	// filling in as it comes. A day's cards wipe in themselves, one after
+	// another: Monday's first cardFirst into the arrival, each later day's as
+	// much later as the day itself. Any other redraw leaves the days
+	// be. The days are held back until the week's worklogs have landed, and
+	// arrive together with the saved list, once.
 	shown := savedShown(ui, days, state)
+	var arrival *shell.Arrival
 	if shown {
-		dayCols = ui.Arrival("week", ui.WeekStart).Reveal(dayCols, shell.ArriveDelays(len(dayCols)), func(i int, share float32) {
+		arrival = ui.Arrival("week", ui.WeekStart)
+	}
+	delays := shell.ArriveDelays(len(days))
+	var columns []*shell.DayColumn
+	var dayCols []fyne.CanvasObject
+	for i, ds := range days {
+		var enter func(n int) time.Duration
+		// Left is what remains of this day's own uncovering in this draw; the
+		// cards start cardFirst after the day began, wherever this draw is.
+		if left := arrival.Left(delays[i:i+1], weekArriveEach); left > 0 {
+			first := max(0, left-weekArriveEach+cardFirst)
+			enter = func(n int) time.Duration { return first + time.Duration(min(n, 12))*cardArriveStep }
+		}
+		col := weekColumn(ui, ds, byDay[ds], localByDay[ds], enter)
+		ui.WeekCols[ds] = col
+		columns = append(columns, col)
+		dayCols = append(dayCols, col)
+	}
+	if shown {
+		dayCols = arrival.RevealFor(weekArriveEach, dayCols, delays, func(i int, share float32) {
 			t, _ := time.Parse("2006-01-02", days[i])
 			ui.MeterShare("strip/"+t.Format("Mon"), share)
 		})
 	}
-	grid := container.New(&WeekGrid{}, dayCols...)
+	grid := container.New(&WeekGrid{columns: columns}, dayCols...)
 
 	objs := []fyne.CanvasObject{head, ui.WeekStripProgress.View, grid}
 	// Only the heading and the progress strip while the week is held back.
@@ -255,11 +280,89 @@ func DrawWeekStrip(ui *shell.UI) {
 	shell.Hooks.DrawLogList(ui)
 }
 
+// weekdayHeadingLayout reserves the weekday heading's space and draws it
+// last inside its column so the day's cards pass behind it. Objects: the
+// cards, the cover above the pinned outline, the clip under the heading, the
+// outline, the heading.
+type weekdayHeadingLayout struct {
+	body fyne.Layout
+	cols *dayColumnLayout
+}
+
+func (l weekdayHeadingLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	last := len(objects) - 1
+	return l.body.MinSize(append(objects[:last-3:last-3], objects[last]))
+}
+
+func (l weekdayHeadingLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	last := len(objects) - 1
+	heading := objects[last]
+	y := heading.Position().Y
+	l.body.Layout(append([]fyne.CanvasObject{heading}, objects[:last-3]...), size)
+	heading.Move(fyne.NewPos(0, min(y, max(0, size.Height-heading.Size().Height))))
+	if l.cols != nil && l.cols.col != nil {
+		l.cols.col.FollowHeading()
+	}
+}
+
+// dayColumnLayout stacks a day's floor, outline, date preview and contents,
+// then brings the outline's top down to a pinned heading.
+type dayColumnLayout struct{ col *shell.DayColumn }
+
+func (l *dayColumnLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	return layout.NewStackLayout().MinSize(objects)
+}
+
+func (l *dayColumnLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	layout.NewStackLayout().Layout(objects, size)
+	if l.col != nil {
+		l.col.FollowHeading()
+	}
+}
+
+func pinWeekdayHeadings(ui *shell.UI, offset float32) {
+	if len(ui.WeekBox.Objects) < 3 {
+		return
+	}
+	// The seven columns share one row, with padding inside each column.
+	pad := theme.Padding()
+	top := ui.WeekBox.Objects[2].Position().Y + pad
+	for _, col := range ui.WeekCols {
+		head := col.Heading
+		if head == nil {
+			continue
+		}
+		room := max(0, col.Size().Height-2*pad-head.Size().Height)
+		// Pinned with the day's outline brought down around it, a padding
+		// below the top of the view, as it sits before the page scrolls.
+		head.Move(fyne.NewPos(0, min(max(0, offset-top+2*pad), room)))
+		col.FollowHeading()
+	}
+}
+
+// The scroll remeasures its content even on programmatic moves that do not
+// call OnScrolled, such as the pan back after the page gets shorter.
+type calendarPageLayout struct {
+	body fyne.Layout
+	pin  func()
+}
+
+func (l *calendarPageLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	size := l.body.MinSize(objects)
+	l.pin()
+	return size
+}
+
+func (l *calendarPageLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	l.body.Layout(objects, size)
+	l.pin()
+}
+
 // weekHead is the buttons at the head of the week strip. Each of them redraws
 // the strip, and a button built again by its own click is a new one, at rest:
 // the one that was pressed is gone before it has shrunk. So they are built once
 // and every draw puts the same ones back, with what they do set for that draw.
-type weekHead struct{ prev, next, here, mail, refresh *widget.Button }
+type weekHead struct{ prev, next, here, refresh *widget.Button }
 
 var weekHeads = map[*shell.UI]*weekHead{}
 
@@ -270,7 +373,6 @@ func weekHeadFor(ui *shell.UI) *weekHead {
 			prev:    widget.NewButtonWithIcon("", theme.NavigateBackIcon(), nil),
 			next:    widget.NewButtonWithIcon("", theme.NavigateNextIcon(), nil),
 			here:    widget.NewButton("This week", nil),
-			mail:    widget.NewButtonWithIcon("Export week for email", theme.MailComposeIcon(), nil),
 			refresh: widget.NewButtonWithIcon("Refresh calendar", theme.ViewRefreshIcon(), nil),
 		}
 		weekHeads[ui] = h
@@ -281,7 +383,7 @@ func weekHeadFor(ui *shell.UI) *weekHead {
 // WeekBoardsPanel keeps the week's links in a gold bubble at the foot of Log List.
 func WeekBoardsPanel(ui *shell.UI, from, to string) fyne.CanvasObject {
 	links := backend.WeekBoardLinks(ui.Cfg, ui.Cfg.WorklogOwner, from, to)
-	copyAll := shell.NewHoverButton("Copy all", theme.ContentCopyIcon(), nil)
+	copyAll := widget.NewButtonWithIcon("Copy all", theme.ContentCopyIcon(), nil)
 	copyAll.OnTapped = func() {
 		app := fyne.CurrentApp()
 		app.Clipboard().SetContent(backend.WeekBoardMailText(ui.Cfg, ui.Cfg.WorklogOwner, from, to))
@@ -304,16 +406,21 @@ func WeekBoardsPanel(ui *shell.UI, from, to string) fyne.CanvasObject {
 		if link, ok := open.(*shell.HoverLink); ok {
 			link.Truncation = fyne.TextTruncateEllipsis
 		}
-		copyBtn := shell.NewHoverButton("", theme.ContentCopyIcon(), func() {
+		copyBtn := widget.NewButtonWithIcon("Copy", theme.ContentCopyIcon(), func() {
 			fyne.CurrentApp().Clipboard().SetContent(raw)
 		})
-		shell.QuietButton(&copyBtn.Button)
-		rows.Add(container.NewBorder(nil, nil, nil, copyBtn, open))
+		rows.Add(container.NewBorder(nil, nil, nil, boardCopyControl(copyBtn), open))
 	}
 	if len(links) == 0 {
 		rows.Add(widget.NewLabel("Set board view URLs in Settings."))
 	}
-	return shell.GoldSection("Boards for this week", copyAll, rows)
+	return shell.GoldSection("Boards for this week", boardCopyControl(copyAll), rows)
+}
+
+func boardCopyControl(button *widget.Button) fyne.CanvasObject {
+	row := shell.NewTappable(shell.QuietButton(button), nil)
+	pill := widgets.NewHoverPillWithOpacity(0.36, 0.9)
+	return shell.HoverRowsWithPill(container.NewStack(row), []*shell.Tappable{row}, pill)
 }
 
 // WeekIssuesPanel keeps its gold heading fixed above a compact bubble grid.
@@ -409,7 +516,26 @@ func ExportWeekForEmail(ui *shell.UI, days []string, byDay map[string][]backend.
 // waiting on it. items are already on GitHub — they are counted and coloured
 // into the bar, but they are not listed, because a day's worth of finished work
 // filled the column and buried the only thing there is anything left to do to.
+// weekArriveEach is how long one day takes to uncover as the week arrives:
+// slower than a list's rows, so the tall columns glide down. A day's cards
+// start their own wipe cardFirst after the day starts, cardArriveStep apart,
+// each taking cardArriveSpan, longer than a Kanban card's, so they settle
+// softly.
+const (
+	weekArriveEach = 640 * time.Millisecond
+	cardFirst      = 200 * time.Millisecond
+	cardArriveStep = 70 * time.Millisecond
+	cardArriveSpan = 520 * time.Millisecond
+)
+
+// WeekColumn is one day of the week strip.
 func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []backend.Row) *shell.DayColumn {
+	return weekColumn(ui, ds, items, local, nil)
+}
+
+// weekColumn is WeekColumn whose cards, when enter is set, each wipe in after
+// enter(their place in the day).
+func weekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []backend.Row, enter func(n int) time.Duration) *shell.DayColumn {
 	t, _ := time.Parse("2006-01-02", ds)
 	byOrg := shell.MinutesByOrg(items)
 	mins := 0
@@ -450,7 +576,11 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		// Today's heading is gold, like its outline.
 		head = container.NewThemeOverride(head, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	}
-	head = ui.DayLink(ds, dayLabel, head, nil)
+	var col *shell.DayColumn
+	head = ui.DayLink(ds, dayLabel, head, func(_ fyne.CanvasObject, on bool) {
+		col.DateHovered = on
+		MarkDropTargets(ui)
+	})
 	// Time planned on the Sprint Calendar, in its purple, beside the day's name
 	// as on the calendar: on the heading's line, so a day with a plan starts its
 	// cards level with one without.
@@ -471,7 +601,6 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		}
 		head = container.New(widgets.NewSidesLayout(head, trigger, 0), head, trigger)
 	}
-
 	// Left of the line is what the day actually holds and what is queued for it,
 	// plans included; right of it is what those come to together — the number the
 	// day would score if everything standing on it were done and pushed.
@@ -491,41 +620,77 @@ func WeekColumn(ui *shell.UI, ds string, items []backend.WorklogItem, local []ba
 		caption = container.New(&boundedDayCaptions{base: &dayCaptionLayout{}}, shell.WeekCaption(banked+" · "+queued),
 			shell.WeekCaption(DayScoreLine(mins+queuedMins)), score, added)
 	}
-	body := []fyne.CanvasObject{
-		head,
-		ui.ProgressBarParts("strip/"+t.Format("Mon"), ds, shell.PlannedBarParts(ui.Cfg, byOrg, draftByOrg, planned), 8),
-		caption,
-	}
+	baseFill := shell.DayFill(mins, waiting+planned)
+	headingFill := canvas.NewRectangle(weekdayHeadingFill(baseFill, mins >= backend.Target))
+	headingFill.CornerRadius = shell.CellCornerRadius
+	progress := ui.ProgressBarParts("strip/"+t.Format("Mon"), ds, shell.PlannedBarParts(ui.Cfg, byOrg, draftByOrg, planned), 8)
+	pad := theme.Padding()
+	headingContent := container.New(&dayHeadingLayout{}, head, progress, caption)
+	headingInset := container.New(layout.NewCustomPaddedLayout(0, 0, pad, pad), headingContent)
+	heading := shell.NewTappable(container.NewStack(headingFill, headingInset), nil)
+	heading.Look = desktop.DefaultCursor
 
 	// What is still waiting is the card itself, standing on the day it will be
 	// pushed with — every one of them, however long that makes the column. The
 	// list above is for the entries that belong to some other week.
 	dup := duplicateRows(drafts)
+	var body []fyne.CanvasObject
 	for _, r := range drafts {
 		refresh := func() { DrawRecent(ui) }
-		card := newDragTile(ui, r, dayRowCard(ui, r, refresh, dup[r["id"]]))
+		area := dayRowCard(ui, r, refresh, dup[r["id"]])
+		area.SetHoverParent(func(bool) {
+			if ui.DragRow == nil {
+				MarkDropTargets(ui)
+			}
+		})
+		card := newDragTile(ui, r, area)
 		// A click opens the entry in the editor Saved locally opens it in.
 		card.OnTap = func() { openRowEditor(ui, r, refresh) }
+		if enter != nil {
+			body = append(body, shell.NewWipeFor(card, enter(len(body)), cardArriveSpan))
+			continue
+		}
 		body = append(body, card)
 	}
 
 	// The frame is kept to hand so a drop target can be lit without rebuilding
 	// the column under the pointer that is aiming at it.
 	frame := canvas.NewRectangle(color.Transparent)
-	frame.StrokeColor, frame.StrokeWidth = dayEdge(ds)
 	frame.CornerRadius = shell.CellCornerRadius
+	dateHover := canvas.NewRectangle(color.Transparent)
+	dateHover.StrokeColor = color.Transparent
+	dateHover.CornerRadius = shell.CellCornerRadius
 	floor := canvas.NewRectangle(color.Transparent)
 	floor.SetMinSize(fyne.NewSize(0, backend.WeekColMinHeight))
 
-	col := newDayColumn(ui, ds, container.NewStack(floor, frame,
-		container.NewPadded(container.NewVBox(body...))), frame)
+	// The outline drawn again over the cards while the heading is pinned,
+	// between them and the heading.
+	edge := canvas.NewRectangle(color.Transparent)
+	edge.Hide()
+	cover := canvas.NewRectangle(color.Transparent)
+	cover.Hide()
+	clip := canvas.NewRectangle(color.Transparent)
+	clip.Hide()
+	colLayout := &dayColumnLayout{}
+	contents := container.New(weekdayHeadingLayout{body: layout.NewVBoxLayout(), cols: colLayout},
+		append(body, cover, clip, edge, heading)...)
+	col = newDayColumn(ui, ds, container.New(colLayout, floor, frame, dateHover,
+		container.NewPadded(contents)), frame)
+	colLayout.col = col
+	col.Edge, col.Cover, col.Clip = edge, cover, clip
+	shell.FollowFrame(frame, col.PaintEdge)
+	col.Heading = heading
+	col.HeadingContent = headingContent
+	col.HeadingFill = headingFill
+	col.DateHoverFrame = dateHover
 	col.Mins, col.Waiting = mins, waiting
 	// The day turns green once logged + drafts + planned reach the target, as
 	// on the Sprint Calendar. Waiting stays drafts and support only, the minutes
 	// a drop or a push can move; Planned carries the plans.
 	col.Planned = planned
-	col.BaseFill = shell.DayFill(mins, waiting+col.Planned)
+	col.BaseFill = baseFill
 	frame.FillColor = col.BaseFill
+	frame.StrokeColor, frame.StrokeWidth = dayEdge(ds)
 	return col
 }
 
@@ -548,55 +713,43 @@ func DayRowCard(ui *shell.UI, r backend.Row, refresh func()) fyne.CanvasObject {
 
 // dayRowCard is DayRowCard, tagged when another entry on the same day goes to
 // the same issue (or is another bulk review).
-func dayRowCard(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.CanvasObject {
+func dayRowCard(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) *shell.HoverArea {
 	accent := shell.RowAccentColor(ui.Cfg, r)
-	// One line, elided at the width the column actually has.
-	//
-	// It used to be cut at a character count and then word-wrapped, and a count
-	// is not a width: forty-four narrow characters fit on one line while
-	// forty-four wide ones need two. Cards on the same row came out different
-	// heights for no reason a reader could see, and the columns stopped lining
-	// up. Letting fyne elide at the real width makes every card the same height
-	// whatever its title says.
 	title := widget.NewLabelWithStyle(weekRowTitle(ui, r),
 		fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	title.Wrapping = fyne.TextWrapOff
+	// One line, so every card keeps the same height.
 	title.Truncation = fyne.TextTruncateEllipsis
 
 	// The minutes are the number this card exists to carry — how much of the day
 	// it would take — so they are said out loud in the org's own colour rather
 	// than folded into a grey caption with everything else.
-	mins := canvas.NewText(fmt.Sprintf("%d min", r.Minutes()), accent)
-	mins.TextStyle = fyne.TextStyle{Bold: true}
+	minsText := canvas.NewText(fmt.Sprintf("%d min", r.Minutes()), accent)
+	minsText.TextStyle = fyne.TextStyle{Bold: true}
+	var mins fyne.CanvasObject = minsText
+	if tag := minutesTag(ui, r); tag != nil {
+		full := fyne.MeasureText(minsText.Text, theme.TextSize(), minsText.TextStyle).Width + minutesTagGap()
+		mins = container.New(&RefTagLayout{Full: full}, minsText, tag)
+	}
+	// Every card keeps room for a tag here, so a tagged card is no taller.
+	mins = container.NewStack(shell.VGap(shell.CodeReviewTag().MinSize().Height), mins)
 
-	// The issue ref wraps instead of being cut: two repos in the same org can
-	// share their first twenty characters, and an ellipsis there says nothing
-	// about which one this is. Broken mid-word, since a ref has no spaces to
-	// break on.
-	where := widget.NewLabel("no issue ref")
-	if r["issue"] != "" {
-		where = widget.NewLabel(backend.OrDefault(shell.ShortIssueRef(r["issue"]), r["issue"]))
-	} else if backend.RowIsBulkCodeReview(r) {
-		where.SetText("") // keep the shared card height without a missing-ref caption
+	fallback := "no issue ref"
+	if backend.RowIsBulkCodeReview(r) {
+		fallback = ""
 	}
-	where.Wrapping = fyne.TextWrapBreak
-	var whereLine fyne.CanvasObject = where
-	if backend.RowIsSingleCodeReview(r) || backend.MissingMeetingRecording(r) {
-		// The label's own right padding is the gap before the tag. One extra
-		// pixel keeps rounding from wrapping a reference that fits.
-		full := fyne.MeasureText(where.Text, theme.TextSize(), where.TextStyle).Width + 2*theme.InnerPadding() + 1
-		tag := shell.CodeReviewTag()
-		if backend.MissingMeetingRecording(r) {
-			tag = shell.MissingMeetingRecordingTag()
-		}
-		whereLine = container.New(&RefTagLayout{Full: full}, where, tag)
-	}
+	whereLine := savedReferenceLine(r, fallback)
+	// Reserve the same metadata line for bare issues, reviews and ref-less drafts.
+	whereLine = container.NewStack(shell.VGap(widget.NewLabel("").MinSize().Height), whereLine)
 
 	// A click on the card opens it in the editor (see DragTile.OnTap), so it
 	// carries no Edit; its Delete icon shows only while the card is lit,
 	// fading in and out with the light.
 	push, _, _ := rowActions(ui, r, refresh)
-	actionItems := []fyne.CanvasObject{shell.CompactGitHubHoverButton(push)}
+	// The layout keeps Push's place first; off the entry's day it is empty.
+	actionItems := []fyne.CanvasObject{shell.VGap(0)}
+	if push != nil {
+		actionItems[0] = shell.CompactGitHubHoverButton(push)
+	}
 	actionItems = append(actionItems, rowTags(ui, r, duplicate, true)...)
 	// The Delete icon's own hover fades as gently as the icon itself.
 	del := shell.NewFadeIconButton(theme.DeleteIcon(), func() { ConfirmDelete(ui, r, refresh) })
@@ -631,58 +784,151 @@ func newDayColumn(ui *shell.UI, date string, body fyne.CanvasObject, frame *canv
 	return c
 }
 
-// MarkDropTargets lights the day the pointer is over, and only while a card is
-// actually being dragged — otherwise every passing mouse would look like a drop.
+// MarkDropTargets updates duplicate outlines and previews the score of a drop.
 func MarkDropTargets(ui *shell.UI) {
+	matchedDays := markWeekMatches(ui)
 	for ds, col := range ui.WeekCols {
-		// The day under the card, its own day included, is edged, the edge
-		// fading in and out: green while the drop leaves it under the target,
-		// gold once the drop takes it to the target or past.
-		markMatches(ui, col)
+		stroke, width := dayEdge(ds)
+		if ink := paintDateHover(col, ui.DragRow != nil); ink != nil {
+			stroke, width = ink, 2
+		}
 		if ui.DragRow != nil && ds == ui.HoverDay {
-			shell.FadeEdge(col.Frame, dropEdge(col, ui.DragRow), 2)
-			adding := ui.DragRow.Minutes()
-			if ui.DragRow["date"] == ds {
-				adding = 0 // over its own day, the card is counted there already
+			adding := 0
+			if ui.DragRow["date"] != ds {
+				adding = ui.DragRow.Minutes()
+			}
+			stroke, width = widgets.LogoGold, 2
+			if col.MeetsTarget(adding) {
+				stroke = theme.Color(theme.ColorNameSuccess)
 			}
 			col.StartPulse(adding)
-			continue
+		} else {
+			col.StopPulse()
 		}
-		col.StopPulse()
-		stroke, width := dayEdge(ds)
+		if matchedDays[ds] {
+			stroke, width = widgets.LogoGold, 2
+		}
 		shell.FadeEdge(col.Frame, stroke, width)
 	}
 }
 
-// dropEdge is the edge of the day a card is carried over: gold when the day
-// would hold the target once the card lands, green while it would still be
-// short. A card over its own day is counted there already.
-func dropEdge(col *shell.DayColumn, r backend.Row) color.Color {
-	total := col.Mins + col.Waiting + col.Planned
-	if r["date"] != col.Date {
-		total += r.Minutes()
+// HeadingFoot is the space under the tallest weekday heading's caption.
+func HeadingFoot() float32 { return theme.InnerPadding() }
+
+// dayHeadingLayout stacks a weekday heading: the day's name, the bar, then
+// the caption, each a small gap under the last, the same on every day of the
+// week. The caption is measured at the heading's width, so captions that sit
+// side by side on one line take one line. Headings share the tallest one's
+// height, so a shorter day keeps the spare room at its foot. Objects: name,
+// bar, caption.
+type dayHeadingLayout struct{ width float32 }
+
+func (l *dayHeadingLayout) captionHeight(caption fyne.CanvasObject) float32 {
+	if c, ok := caption.(*fyne.Container); ok && l.width > 0 {
+		if m, ok := c.Layout.(interface {
+			heightAt([]fyne.CanvasObject, float32) float32
+		}); ok {
+			return m.heightAt(c.Objects, l.width)
+		}
 	}
-	if total >= backend.Target {
-		return widgets.LogoGold
-	}
-	return theme.Color(theme.ColorNameSuccess)
+	return caption.MinSize().Height
 }
 
-// markMatches lights in gold, while a card is held, every other card going to
-// the same issue (or bulk review) as the one in hand, whatever day it is on,
-// so a drop is seen to make a duplicate before it is made.
-func markMatches(ui *shell.UI, col *shell.DayColumn) {
-	place := ""
-	if ui.DragRow != nil {
-		place = rowPlace(ui.DragRow)
+func (l *dayHeadingLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	w := float32(0)
+	for _, o := range objects {
+		w = max(w, o.MinSize().Width)
 	}
-	for _, card := range dayCards(col.Body) {
+	h := objects[0].MinSize().Height + objects[1].MinSize().Height + l.captionHeight(objects[2])
+	return fyne.NewSize(w, h+headingGap(0)+headingGap(1)+HeadingFoot())
+}
+
+// headingGap is the space under a heading's i-th line: a small one under the
+// day's name, a little more under the bar so the caption does not crowd it.
+func headingGap(i int) float32 {
+	if i == 1 {
+		return theme.Padding() * 1.5
+	}
+	return theme.Padding() / 2
+}
+
+func (l *dayHeadingLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	l.width = size.Width
+	y := float32(0)
+	for i, o := range objects {
+		h := o.MinSize().Height
+		if i == 2 {
+			h = l.captionHeight(o)
+		}
+		o.Move(fyne.NewPos(0, y))
+		o.Resize(fyne.NewSize(size.Width, h))
+		y += h + headingGap(i)
+	}
+}
+
+// weekdayHeadingFill is the heading's surface: lighter than an empty day; on
+// a green day, greener still while drafts fill it, and a shade darker than
+// the day once the minutes are logged, so a finished day stays calm.
+func weekdayHeadingFill(base color.Color, done bool) color.Color {
+	if _, _, _, alpha := base.RGBA(); alpha == 0 {
+		return shell.BlendColor(theme.Color(theme.ColorNameBackground), color.White, 0.12)
+	}
+	if !done {
+		return shell.BlendColor(base, theme.Color(theme.ColorNameSuccess), 0.22)
+	}
+	return shell.BlendColor(base, color.Black, HeadingShade)
+}
+
+// HeadingShade is how much darker than its logged day a heading is.
+const HeadingShade = 0.3
+
+func paintDateHover(col *shell.DayColumn, dragging bool) color.Color {
+	base := weekdayHeadingFill(col.BaseFill, col.Mins >= backend.Target)
+	if col.DateHovered && !dragging {
+		ink, tint, alpha := color.Color(widgets.LogoGold), color.Color(widgets.LogoGold), float32(0.16)
+		if col.MeetsTarget(0) {
+			ink = theme.Color(theme.ColorNameSuccess)
+			tint, alpha = ink, 0.22
+		}
+		shell.FadeFrame(col.DateHoverFrame, widgets.WithAlpha(tint, alpha), color.Transparent, 0)
+		shell.FadeFrame(col.HeadingFill, shell.BlendColor(base, tint, alpha), color.Transparent, 0)
+		return ink
+	}
+	shell.FadeFrame(col.DateHoverFrame, color.Transparent, color.Transparent, 0)
+	shell.FadeFrame(col.HeadingFill, base, color.Transparent, 0)
+	return nil
+}
+
+// markWeekMatches lights every other card for the same issue or bulk review.
+// The dragged row takes precedence while the pointer passes over other cards.
+func markWeekMatches(ui *shell.UI) map[string]bool {
+	var cards []*DragTile
+	for _, col := range ui.WeekCols {
+		cards = append(cards, dayCards(col.Body)...)
+	}
+	source := ui.DragRow
+	if source == nil {
+		for _, card := range cards {
+			if area, ok := card.Content.(*shell.HoverArea); ok && area.Hovered() {
+				source = card.Row
+				break
+			}
+		}
+	}
+	place := rowPlace(source)
+	matchedDays := map[string]bool{}
+	for _, card := range cards {
 		area, ok := card.Content.(*shell.HoverArea)
 		if !ok {
 			continue
 		}
-		area.Bubble().SetMatch(place != "" && card.Row["id"] != ui.DragRow["id"] && rowPlace(card.Row) == place)
+		matched := place != "" && card.Row["id"] != source["id"] && rowPlace(card.Row) == place
+		area.Bubble().SetMatch(matched)
+		if matched {
+			matchedDays[card.Row["date"]] = true
+		}
 	}
+	return matchedDays
 }
 
 // dayCards are the saved entries standing in a day's column.
@@ -690,6 +936,8 @@ func dayCards(obj fyne.CanvasObject) []*DragTile {
 	switch o := obj.(type) {
 	case *DragTile:
 		return []*DragTile{o}
+	case *shell.Wipe:
+		return dayCards(o.Content)
 	case *fyne.Container:
 		var cards []*DragTile
 		for _, child := range o.Objects {
@@ -890,8 +1138,7 @@ func weekSupportControl(ui *shell.UI, rota bool) fyne.CanvasObject {
 	return ui.WeekSupportView.View
 }
 
-// dayEdge is a day's outline at rest: today edged in gold, as on the Sprint
-// Calendar, every other day in the plain input border.
+// dayEdge is the resting outline, with today's date marked in gold.
 func dayEdge(date string) (color.Color, float32) {
 	if date == shell.Today() {
 		return widgets.LogoGold, 2

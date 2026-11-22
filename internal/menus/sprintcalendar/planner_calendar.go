@@ -10,6 +10,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -65,7 +66,6 @@ func UniqueCurrentItems(k *shell.KanbanUI) []backend.SprintCandidate {
 }
 
 func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
-	k.BlockMarks = map[string][]shell.PlannerBlockMark{}
 	k.DayCards = map[string][]*shell.PlannerDragCard{}
 	loadCalendarWorklogs(k, false)
 	work := CalendarWorkData(k)
@@ -361,6 +361,7 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		// under the pointer, set a little apart from the cards above.
 		doneTag = shell.NewHoverTag(doneIssuesText(k.CalendarShowDone, len(done)), color.Transparent, widgets.LogoGold, widgets.LogoGold, shell.TagHoverInk, nil)
 		doneTag.Wide = true
+		doneTag.SetHoverDuration(shell.SlowFade)
 		doneHead = container.New(layout.NewCustomPaddedLayout(theme.Padding()*3, 0, 0, 0), doneTag)
 	}
 	// The cards arrive as the calendar's do, uncovered from the top down one
@@ -426,7 +427,9 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 	capsule := canvas.NewRectangle(shell.BlendColor(theme.Color(theme.ColorNameBackground), theme.Color(theme.ColorNameForeground), 0.14))
 	capsule.CornerRadius = 8
 	pad := theme.Padding()
-	heading := container.New(layout.NewCustomPaddedLayout(pad, 0, pad, pad), container.NewStack(capsule, container.NewPadded(trayTitle)))
+	headingInset := container.New(layout.NewCustomPaddedLayout(pad, 0, pad, pad), container.NewStack(capsule, container.NewPadded(trayTitle)))
+	heading := shell.NewTappable(shell.PanelFrame(headingInset), nil)
+	heading.Look = desktop.DefaultCursor
 	inset := &shell.ColumnInset{}
 	// The tray keeps its own width whatever its cards hold: they wrap and
 	// shorten to it rather than pushing the calendar to the right.
@@ -448,7 +451,11 @@ func Calendar(k *shell.KanbanUI) fyne.CanvasObject {
 		}
 	}
 	k.CalendarIssueClip = trayScroll
-	tray := container.New(&shell.FloatingHeaderLayout{Inset: inset, Gap: theme.InnerPadding() + 2}, shell.NoScrollShadow(trayScroll), heading)
+	trayScrollView := container.NewThemeOverride(trayScroll, plannerTrayScrollTheme{Theme: theme.Current()})
+	tray := container.New(&plannerTrayLayout{
+		FloatingHeaderLayout: shell.FloatingHeaderLayout{Inset: inset, Gap: theme.InnerPadding() + 2},
+		scroll:               trayScroll,
+	}, trayScrollView, heading)
 	// The issue tray is its own menu, so it sits in a rounded panel like
 	// Settings; the issues scroll inside it while the panel stays put.
 	sidebar := shell.PanelFrame(tray)
@@ -565,7 +572,8 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 		card.Day = hover
 		face := card.Content.(*fyne.Container).Objects[0].(*PlannerTimedFace)
 		face.day = hover
-		k.BlockMarks[a.c.Key] = append(k.BlockMarks[a.c.Key], face)
+		face.onHover = card.PreviewMatches
+		card.BlockMark = face
 		k.DayCards[date] = append(k.DayCards[date], card)
 		list.Add(card)
 	}
@@ -599,6 +607,10 @@ func calendarDay(k *shell.KanbanUI, date string, items []backend.SprintCandidate
 	heading := container.New(plannerDayHeaderLayout{}, k.Ui.DayLink(date, caption, dateCaption, hover.DateHover), shell.WeekCaption(PlannerDayPercentage(projected)), progress, hover.ClearView, reading, left)
 	hover.Header = heading
 	base := shell.DayFill(totals.Logged, totals.Draft+totals.support+totals.Planned)
+	if _, _, _, alpha := base.RGBA(); alpha == 0 {
+		// The empty day fades to gold by changing opacity around the same hue.
+		base = widgets.WithAlpha(widgets.LogoGold, 0)
+	}
 	bg := canvas.NewRectangle(base)
 	bg.CornerRadius = shell.CellCornerRadius
 	// The plain edge Log Work's days have; the green fill says a day is done,
@@ -726,6 +738,29 @@ func doneIssuesText(open bool, n int) string {
 		return fmt.Sprintf("Hide Done Issues (%d)", n)
 	}
 	return fmt.Sprintf("Show Done Issues (%d)", n)
+}
+
+type plannerTrayLayout struct {
+	shell.FloatingHeaderLayout
+	scroll *container.Scroll
+}
+
+func (l *plannerTrayLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	l.FloatingHeaderLayout.Layout(objects, size)
+	if bar, ok := any(l.scroll).(interface{ WorklogSetVerticalBarInset(float32) }); ok {
+		bar.WorklogSetVerticalBarInset(objects[1].Size().Height - objects[0].Position().Y)
+	}
+}
+
+type plannerTrayScrollTheme struct{ fyne.Theme }
+
+func (t plannerTrayScrollTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	switch name {
+	case theme.ColorNameShadow, theme.ColorNameScrollBarBackground:
+		return color.Transparent
+	default:
+		return t.Theme.Color(name, variant)
+	}
 }
 
 type trayWidthLayout struct{}

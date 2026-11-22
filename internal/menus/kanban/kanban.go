@@ -322,19 +322,7 @@ func boardView(k *shell.KanbanUI) fyne.CanvasObject {
 		frame.FillColor = KanbanColumnFill(status)
 		frame.StrokeColor = KanbanColumnBorder(status)
 		frame.StrokeWidth = 1
-		// Anywhere in the column, its cards included, lights its capsule.
-		var glow shell.Glow
-		region := shell.NewHoverRegion(col, func(on bool) {
-			target := float32(0)
-			if on {
-				target = 1
-			}
-			glow.To(target, func(level float32) {
-				capsule.FillColor = shell.MixColor(KanbanHeaderFill(status), KanbanHeaderHover(status), level)
-				capsule.Refresh()
-			})
-		})
-		column := container.New(kanbanColumnLayout{}, region)
+		column := container.New(kanbanColumnLayout{}, col)
 		drawn[status] = column
 		columns.Add(column)
 	}

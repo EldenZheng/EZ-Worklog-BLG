@@ -32,6 +32,11 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// The name a meeting issue is titled with. Left blank it comes off the
 	// worklog owner, which is right for a handle that is a name.
 	dispName := widget.NewEntry()
+	// Folders holding the user's clones, for giving commits their Worklog's
+	// reference (they are rewritten in the clone, then force-pushed).
+	repoFolders := widget.NewMultiLineEntry()
+	repoFolders.SetMinRowsVisible(3)
+	repoFolders.SetPlaceHolder(`D:\code\backend` + "\n" + `D:\code  (a folder of clones)`)
 	repos := widget.NewMultiLineEntry()
 	repos.SetMinRowsVisible(3)
 	repos.SetPlaceHolder("exampleorg  (whole org)\nexampleorg/repository\none per line, or comma-separated")
@@ -92,6 +97,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	dispName.SetText(c.DisplayName)
 	dispName.SetPlaceHolder(backend.OrDefault(backend.DisplayName(c), "Your name") + "  — from your worklog owner")
 	repos.SetText(strings.Join(c.Repos, "\n"))
+	repoFolders.SetText(strings.Join(c.RepoFolders, "\n"))
 	// Left blank when unset rather than pre-filled with a number: a figure
 	// already in the box is a figure that gets saved without being read, and
 	// nobody else's salary is a sensible starting guess for yours.
@@ -220,6 +226,12 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		newCfg.WorklogOwner = strings.TrimSpace(owner.Text)
 		newCfg.DisplayName = strings.TrimSpace(dispName.Text)
 		newCfg.Repos = repoList
+		newCfg.RepoFolders = nil
+		for _, line := range strings.Split(repoFolders.Text, "\n") {
+			if line = strings.TrimSpace(line); line != "" {
+				newCfg.RepoFolders = append(newCfg.RepoFolders, line)
+			}
+		}
 		newCfg.BaseSalary = salF
 		newCfg.SupportSetPay = supportF
 		newCfg.MeetingRepo = strings.TrimSpace(meetingDest.Text)
@@ -395,6 +407,7 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	// project boards on the bottom.
 	fieldsCol := container.NewVBox(
 		shell.LabeledHint("Repos and orgs", "One per line, or comma-separated. A bare org name scans every repo it owns.", repos),
+		shell.LabeledHint("Repo folders", "Your clones, one folder per line: a clone, or a folder of clones. The app adds each Worklog's reference to its commits there and force-pushes the branch.", repoFolders),
 		shell.LabeledHint("Project board URLs", "One per line. Status and Report read every board on the list, filtered to the worklog owner above.", projURL),
 		shell.LabeledHint("Board view URLs", "Optional saved views for weekly links. Blank uses the project boards above.", boardViews),
 		shell.LabeledHint("Kanban boards and filters", "Project URLs are read directly; shared view changes do not affect these filters. Applies to Kanban and Sprint Calendar.", kanbanFields),

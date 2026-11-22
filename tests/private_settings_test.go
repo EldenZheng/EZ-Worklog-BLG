@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -14,6 +15,7 @@ import (
 	"worklog/internal/menus/settings"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func TestPrivateSettingsStartEmpty(t *testing.T) {
@@ -38,12 +40,12 @@ func TestPrivateSettingsStartEmpty(t *testing.T) {
 func TestConfiguredBoardLinksFallbackToOwnProjects(t *testing.T) {
 	cfg := backend.Config{ProjectURL: "https://github.com/orgs/exampleorg/projects/3/views/2?visibleFields=Title"}
 	links := backend.WeekBoardLinks(cfg, "team-alex", "2026-08-24", "2026-08-30")
-	if len(links) != 1 {
+	if len(links) != 2 {
 		t.Fatalf("expected configured project fallback, got %v", links)
 	}
 	u, err := url.Parse(links[0])
 	if err != nil || u.Path != "/orgs/exampleorg/projects/3/views/2" || u.Query().Get("visibleFields") != "Title" ||
-		u.Query().Get("filterQuery") != backend.WorklogProjectFilter("team-alex", "2026-08-24", "2026-08-30") {
+		u.Query().Get("filterQuery") != `"zzz-(deprecated)-worklog-owner-(blg-xxxx)":team-alex "worklog-(date)":>=2026-08-24 "worklog-(date)":<=2026-08-30` {
 		t.Fatalf("project view must survive with the requested owner and dates: %v", links)
 	}
 }
@@ -92,7 +94,36 @@ func TestSettingsSavePrivateDestinationsAndPay(t *testing.T) {
 	if save == nil || len(updates) != 0 {
 		t.Fatalf("configured settings must have editable fields; missing %d fields", len(updates))
 	}
+	driver := collectMotion(t)
 	save.OnTapped()
+	var tick *fyne.Animation
+	for _, anim := range driver.anims {
+		if anim.Duration == widgets.TickTime {
+			tick = anim
+		} else {
+			anim.Tick(1)
+		}
+	}
+	if tick == nil {
+		t.Fatal("Settings saved should animate a check mark")
+	}
+	var strokes []*canvas.Line
+	walkRendered(view.(*fyne.Container).Objects[1], func(o fyne.CanvasObject) {
+		if line, ok := o.(*canvas.Line); ok {
+			strokes = append(strokes, line)
+		}
+	})
+	if len(strokes) != 2 || strokes[0].Visible() || strokes[1].Visible() {
+		t.Fatal("the check should start with both strokes hidden")
+	}
+	tick.Tick(0.25)
+	if !strokes[0].Visible() || strokes[1].Visible() {
+		t.Fatal("the short stroke should draw before the long one")
+	}
+	tick.Tick(1)
+	if !strokes[0].Visible() || !strokes[1].Visible() {
+		t.Fatal("the completed check should stay visible beside Settings saved")
+	}
 	got, exists := ui.Store.LoadConfig()
 	if !exists || got.BaseSalary != 2345 || got.SupportSetPay != 187.5 ||
 		got.MeetingRepo != "exampleorg/team-meetings" || got.BulkCodeReviewRepo != "exampleorg/team-reviews" ||

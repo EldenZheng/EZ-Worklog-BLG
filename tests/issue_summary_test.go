@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
@@ -15,6 +16,7 @@ import (
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func TestLogListIssuesScrollIndependentlyInsideThePage(t *testing.T) {
@@ -145,27 +147,70 @@ func TestIssueBubblesFitSideBySideAndRevealFullTitlesOnHover(t *testing.T) {
 	}
 }
 
-func TestBoardsCopyAllUsesTheSelectedWeekAndOnlyTheRequestedMailText(t *testing.T) {
+func TestBoardCopyControlsShareGoldHoverAndCopyTheSelectedLinks(t *testing.T) {
 	a := test.NewApp()
 	defer a.Quit()
 	ui := &shell.UI{Cfg: sampleExportConfig()}
 	ui.Cfg.WorklogOwner = "team-alex"
 	panel := logwork.WeekBoardsPanel(ui, "2026-08-24", "2026-08-30")
-	var copyAll *shell.HoverButton
-	walk(panel, func(o fyne.CanvasObject) {
-		if b, ok := o.(*shell.HoverButton); ok && b.Text == "Copy all" {
-			copyAll = b
+	w := a.NewWindow("boards for this week")
+	defer w.Close()
+	w.SetContent(panel)
+	w.Resize(fyne.NewSize(500, 260))
+	var buttons []*widget.Button
+	var pills []*canvas.Rectangle
+	walkRendered(panel, func(o fyne.CanvasObject) {
+		if b, ok := o.(*widget.Button); ok && (b.Text == "Copy all" || b.Text == "Copy") {
+			buttons = append(buttons, b)
+		}
+		if r, ok := o.(*canvas.Rectangle); ok && r.CornerRadius == 8 && r.StrokeWidth == 1 {
+			pills = append(pills, r)
 		}
 	})
-	if copyAll == nil {
-		t.Fatal("Copy all missing from board heading")
+	links := backend.WeekBoardLinks(ui.Cfg, "team-alex", "2026-08-24", "2026-08-30")
+	if len(buttons) != len(links)+1 || len(pills) != len(buttons) {
+		t.Fatal("each copy control needs a gold hover pill")
 	}
-	copyAll.OnTapped()
-	want := "I have attached the worklog combined for last week in this email\nhere is the github project link:"
-	for _, link := range backend.WeekBoardLinks(ui.Cfg, "team-alex", "2026-08-24", "2026-08-30") {
-		want += "\n- " + link
+	mail := "I have attached the worklog combined for last week in this email\nhere is the github project link:"
+	for _, link := range links {
+		mail += "\n- " + link
 	}
-	if got := a.Clipboard().Content(); got != want {
-		t.Fatalf("clipboard = %q, want %q", got, want)
+	want := append([]string{mail}, links...)
+	driver := collectMotion(t)
+	fill, outline := widgets.WithAlpha(widgets.LogoGold, 0.36), widgets.WithAlpha(widgets.LogoGold, 0.9)
+	for i, button := range buttons {
+		if button.Icon == nil {
+			t.Fatalf("copy control %d is missing its icon", i)
+		}
+		pos := a.Driver().AbsolutePositionForObject(button)
+		size := button.Size()
+		at := pos.Add(fyne.NewPos(size.Width/2, size.Height/2))
+		pill := pills[i]
+		rest := pill.FillColor
+		driver.anims = nil
+		test.MoveMouse(w.Canvas(), at)
+		if len(driver.anims) != 1 || driver.anims[0].Duration != widgets.HoverDuration || !sameColor(pill.FillColor, rest) {
+			t.Fatalf("%q should start the Kanban fade when hovered", button.Text)
+		}
+		driver.anims[0].Tick(0.5)
+		if sameColor(pill.FillColor, rest) || sameColor(pill.FillColor, fill) {
+			t.Fatalf("%q should show a partial gold fill during the fade", button.Text)
+		}
+		driver.anims[0].Tick(1)
+		if pill.Size() != size || !sameColor(pill.FillColor, fill) || !sameColor(pill.StrokeColor, outline) {
+			t.Fatalf("%q should settle on the stronger gold fill and outline around the button", button.Text)
+		}
+		test.MoveMouse(w.Canvas(), fyne.Position{})
+		if len(driver.anims) != 2 || driver.anims[1].Duration != widgets.HoverDuration {
+			t.Fatalf("%q should fade out on exit", button.Text)
+		}
+		driver.anims[1].Tick(1)
+		if !sameColor(pill.FillColor, rest) {
+			t.Fatalf("%q should return to a clear highlight after exiting", button.Text)
+		}
+		test.TapCanvas(w.Canvas(), at)
+		if got := a.Clipboard().Content(); got != want[i] {
+			t.Fatalf("copy control %d put %q on the clipboard, want %q", i, got, want[i])
+		}
 	}
 }

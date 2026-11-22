@@ -7,9 +7,11 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/shell"
@@ -35,7 +37,8 @@ func rippleWindow(t *testing.T, content fyne.CanvasObject) (fyne.Window, *fyne.C
 func rippleAnim(t *testing.T, driver *collectDriver) *fyne.Animation {
 	t.Helper()
 	for _, a := range driver.anims {
-		if a.Duration == shell.RippleTime {
+		// Timed by frames drawn, the ripple waits up to four times its span.
+		if a.Duration == 4*shell.RippleTime {
 			return a
 		}
 	}
@@ -113,5 +116,133 @@ func TestACompactCheckRipples(t *testing.T) {
 	box := fyne.CurrentApp().Driver().AbsolutePositionForObject(group).X + 12
 	if at := fyne.CurrentApp().Driver().AbsolutePositionForObject(layer).X + layer.Objects[0].Position().X; at <= box {
 		t.Fatalf("the ripple should start beside the box, not at %v", at)
+	}
+}
+
+// A click on a menu tab ripples its selected gold out from where it landed,
+// as a sprint row does on the Kanban, while the tab let go of drains; the
+// gear keeps its own click.
+func TestClickingAMenuTabRipples(t *testing.T) {
+	tabs := shell.NewPillTabs(
+		container.NewTabItem(shell.LogListTabName, widget.NewLabel("log list")),
+		container.NewTabItem(shell.KanbanTabName, widget.NewLabel("kanban")),
+		container.NewTabItemWithIcon(shell.SettingsTabName, theme.SettingsIcon(), widget.NewLabel("settings")),
+	)
+	w, layer, driver := rippleWindow(t, tabs)
+	gold := func() []*canvas.Rectangle {
+		var found []*canvas.Rectangle
+		walkRendered(tabs, func(o fyne.CanvasObject) {
+			if r, ok := o.(*canvas.Rectangle); ok && r.Visible() && sameColor(r.FillColor, widgets.LogoGold) {
+				found = append(found, r)
+			}
+		})
+		return found
+	}
+	d := fyne.CurrentApp().Driver()
+	logList, kanban := tabs.Views[0], tabs.Views[1]
+	if g := gold(); len(g) != 1 || g[0].Size() != logList.Size() {
+		t.Fatal("the open tab should stand in gold")
+	}
+	driver.anims = nil
+	at := d.AbsolutePositionForObject(kanban).Add(fyne.NewPos(10, kanban.Size().Height/2))
+	test.TapAt(kanban.(fyne.Tappable), at.Subtract(d.AbsolutePositionForObject(kanban)))
+	_ = w
+	if tabs.SelectedIndex() != 1 || len(layer.Objects) != 0 {
+		t.Fatalf("a click on Kanban should open it with its own ripple, not the page's: open %d", tabs.SelectedIndex())
+	}
+	var motions []*fyne.Animation
+	for _, a := range driver.anims {
+		if a.Duration == 4*shell.RippleTime {
+			motions = append(motions, a)
+		}
+	}
+	if len(motions) < 2 {
+		t.Fatalf("Log List should drain and Kanban fill, got %d motions", len(motions))
+	}
+	// The first frame starts the motion; the next, a frame's time later,
+	// carries it on.
+	for _, m := range motions {
+		m.Tick(0)
+	}
+	time.Sleep(40 * time.Millisecond)
+	for _, m := range motions {
+		m.Tick(0.01)
+	}
+	var spreading *canvas.Rectangle
+	for _, r := range gold() {
+		if p := d.AbsolutePositionForObject(r); p.X >= d.AbsolutePositionForObject(kanban).X-1 {
+			spreading = r
+		}
+	}
+	if spreading == nil || spreading.Size().Width >= kanban.Size().Width ||
+		d.AbsolutePositionForObject(spreading).X > at.X {
+		t.Fatal("the gold should be spreading over Kanban from the click")
+	}
+	for _, m := range motions {
+		m.Tick(1)
+	}
+	if g := gold(); len(g) != 1 || g[0].Size() != kanban.Size() || d.AbsolutePositionForObject(g[0]) != d.AbsolutePositionForObject(kanban) {
+		t.Fatal("Kanban should end in gold and Log List back at rest")
+	}
+	driver.anims = nil
+	test.Tap(tabs.Views[2].(fyne.Tappable))
+	if tabs.SelectedIndex() != 2 || len(layer.Objects) != 0 {
+		t.Fatalf("the gear should open Settings without the tabs' ripple: open %d", tabs.SelectedIndex())
+	}
+}
+
+// A click that draws a heavy page holds up the frames; the ripple then carries
+// on by one frame's time, not the time lost, so it is still seen.
+func TestARippleOutlastsASlowFrame(t *testing.T) {
+	tabs := shell.NewPillTabs(
+		container.NewTabItem(shell.LogListTabName, widget.NewLabel("log list")),
+		container.NewTabItem(shell.KanbanTabName, widget.NewLabel("kanban")),
+	)
+	_, _, driver := rippleWindow(t, tabs)
+	driver.anims = nil
+	test.Tap(tabs.Views[1].(fyne.Tappable))
+	var motion *fyne.Animation
+	for _, a := range driver.anims {
+		if a.Duration == 4*shell.RippleTime {
+			motion = a
+		}
+	}
+	if motion == nil {
+		t.Fatal("no motion for the tab")
+	}
+	motion.Tick(0)
+	time.Sleep(300 * time.Millisecond) // the page takes its time to draw
+	motion.Tick(0.1)
+	var gold *canvas.Rectangle
+	walkRendered(tabs, func(o fyne.CanvasObject) {
+		if r, ok := o.(*canvas.Rectangle); ok && r.Visible() && sameColor(r.FillColor, widgets.LogoGold) &&
+			fyne.CurrentApp().Driver().AbsolutePositionForObject(r).X >= fyne.CurrentApp().Driver().AbsolutePositionForObject(tabs.Views[1]).X {
+			gold = r
+		}
+	})
+	if gold != nil && gold.Size() == tabs.Views[1].Size() {
+		t.Fatal("a slow frame should not carry the ripple to its end")
+	}
+	motion.Tick(1)
+}
+
+// A ripple that has spread over its whole box is rounded at the box's
+// corners, as the hover pill under it is: no square corner lights round a
+// rounded target.
+func TestARippleKeepsToRoundedCorners(t *testing.T) {
+	spot := canvas.NewRectangle(widgets.LogoGold)
+	box := fyne.NewSize(120, 30)
+	shell.SpreadIn(spot, fyne.NewPos(10, 20), box, fyne.NewPos(30, 15), 200, 8)
+	if spot.Position() != fyne.NewPos(10, 20) || spot.Size() != box {
+		t.Fatalf("a full ripple should cover its box: %v %v", spot.Position(), spot.Size())
+	}
+	for _, r := range []float32{spot.TopLeftCornerRadius, spot.TopRightCornerRadius, spot.BottomLeftCornerRadius, spot.BottomRightCornerRadius} {
+		if r != 8 {
+			t.Fatalf("each corner should be rounded as the pill is, got %v", r)
+		}
+	}
+	shell.SpreadIn(spot, fyne.Position{}, box, fyne.NewPos(30, 15), 0, 8)
+	if spot.Visible() {
+		t.Fatal("a ripple with no size should not show")
 	}
 }

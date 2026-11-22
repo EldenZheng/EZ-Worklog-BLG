@@ -100,12 +100,13 @@ type PlannerTimedFace struct {
 	title, project, duration, issueURL string
 	accent                             color.Color
 	day                                *shell.PlannerDayHover
+	onHover                            func(bool)
 	finished                           bool
 	onDelete                           func() // removes the block; nil: no Delete
 	delFade                            *shell.SmallDelete
 	glow                               shell.Glow
 	lit, over                          bool
-	marked                             bool          // edged in gold for its tray card
+	marked                             bool          // edged in gold as a matching block
 	mark                               shell.Glow    // how far into its gold edge it has faded
 	top                                float32       // the inset above and below the text, set by Layout
 	icon                               fyne.Resource // issue or PR mark; nil for the meeting
@@ -137,6 +138,9 @@ func (f *PlannerTimedFace) light() {
 		return
 	}
 	f.lit = on
+	if f.onHover != nil {
+		f.onHover(on)
+	}
 	target := float32(0)
 	if on {
 		target = 1
@@ -216,8 +220,7 @@ const plannerHeaderHeight = float32(18)
 // on Kanban's cards.
 const plannerHeaderGap = float32(6)
 
-// SetMarked edges the block in gold while its issue's tray card is under the
-// pointer, to show where the issue is already planned.
+// SetMarked edges a matching block in gold while its issue is under the pointer.
 func (f *PlannerTimedFace) SetMarked(on bool) {
 	if f.marked == on {
 		return

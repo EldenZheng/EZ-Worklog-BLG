@@ -88,6 +88,7 @@ var FieldOrder = []string{
 	"id", "date", "minutes", "type", "description", "refs", "issue",
 	"owner", "remarks", "mode", "issue_url", "item_id", "pushed_at", "logged_at",
 	"parent_repo", "parent_title", "issue_body", "issue_title", "meeting_title", "meeting_recording", "display_title",
+	"legacy", "ref_state", "ref_note", "merged_refs", "commit_date",
 }
 
 // Config mirrors config.json so data carries over from the Python app.
@@ -127,6 +128,16 @@ type Config struct {
 	// time. Zero means one.
 	ReportMonths int    `json:"finished_report_months,omitempty"`
 	ArchiveDir   string `json:"history_archive_directory,omitempty"`
+	// SOPLegacyTagged records that the entries waiting to be pushed when the
+	// worklog SOP began were tagged legacy (see TagLegacyDrafts), so it runs
+	// once.
+	SOPLegacyTagged bool `json:"sop_legacy_tagged,omitempty"`
+	// PatchNotesSeen is the ID of the last patch notes the user ticked "Don't
+	// show this again" on. Notes with another ID open at start-up.
+	PatchNotesSeen string `json:"patch_notes_seen,omitempty"`
+	// RepoFolders hold the user's clones. Adding a Worklog's reference to its
+	// commits rewrites them there (see commit_rewrite.go).
+	RepoFolders []string `json:"repo_folders,omitempty"`
 }
 
 // MaxReportMonths is the longest page Settings takes for the finished report.

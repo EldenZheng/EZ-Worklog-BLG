@@ -146,43 +146,74 @@ func TestCardDeleteHoverFadesToGold(t *testing.T) {
 	}
 }
 
-// Holding a card lights in gold every other card going to the same issue,
-// on whatever day it stands, and lets them go once the card is dropped.
-func TestCarryingACardMarksItsMatches(t *testing.T) {
+// Hovering or carrying a card shows every other card for the same issue,
+// on whatever day it stands.
+func TestHoveringOrCarryingACardMarksItsMatches(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
 	if _, err := ui.Store.AppendRows([]backend.Row{
 		{"date": "2026-08-11", "minutes": "30", "issue": "exampleorg/repo#7", "description": "carried"},
 		{"date": "2026-08-12", "minutes": "45", "issue": "exampleorg/repo#7", "description": "already there"},
 		{"date": "2026-08-12", "minutes": "20", "issue": "exampleorg/repo#8", "description": "other"},
-		{"date": "2026-08-13", "minutes": "20", "issue": "exampleorg/repo#7", "description": "later"},
+		{"date": "2026-08-13", "minutes": "480", "issue": "exampleorg/repo#7", "description": "later"},
 	}); err != nil {
 		t.Fatal(err)
 	}
 	logwork.DrawRecent(ui)
-	bubbles := map[string]*shell.StripeBubble{}
+	areas := map[string]*shell.HoverArea{}
 	var carried backend.Row
 	for _, day := range []string{"2026-08-11", "2026-08-12", "2026-08-13"} {
 		walk(ui.WeekCols[day], func(o fyne.CanvasObject) {
 			if card, ok := o.(*logwork.DragTile); ok {
-				bubbles[card.Row["description"]] = card.Content.(*shell.HoverArea).Bubble()
+				areas[card.Row["description"]] = card.Content.(*shell.HoverArea)
 				if card.Row["description"] == "carried" {
 					carried = card.Row
 				}
 			}
 		})
 	}
-	ui.DragRow, ui.HoverDay = carried, "2026-08-11"
-	logwork.MarkDropTargets(ui)
-	if !bubbles["already there"].Matched() || !bubbles["later"].Matched() || bubbles["other"].Matched() {
-		t.Fatal("every card for the same issue, and only those, should light in gold")
+	matched := func(name string) bool { return areas[name].Bubble().Matched() }
+	assertMatches := func() {
+		t.Helper()
+		if !matched("already there") || !matched("later") || matched("other") || matched("carried") {
+			t.Fatal("every other card for the same issue, and only those, should light in gold")
+		}
+		shell.SettleFades()
+		for _, day := range []string{"2026-08-12", "2026-08-13"} {
+			if outline := ui.WeekCols[day].Frame; outline.StrokeColor != widgets.LogoGold || outline.StrokeWidth != 2 {
+				t.Fatalf("%s should show a gold duplicate outline", day)
+			}
+		}
 	}
-	if bubbles["carried"].Matched() {
-		t.Fatal("the card in hand should not mark itself")
+
+	source := areas["carried"]
+	source.MouseIn(&desktop.MouseEvent{})
+	assertMatches()
+	if ui.HoverDay != "" {
+		t.Fatal("hovering a card should not mark its day as a drop target")
+	}
+	source.Bubble().ChildHover(true)
+	source.MouseOut()
+	assertMatches()
+	source.Bubble().ChildHover(false)
+	shell.SettleFades()
+	if matched("already there") || matched("later") {
+		t.Fatal("leaving the card and its controls should clear its matches")
+	}
+	if ui.WeekCols["2026-08-13"].Frame.StrokeColor != theme.Color(theme.ColorNameInputBorder) {
+		t.Fatal("the gold day outline should clear when hovering ends")
+	}
+
+	ui.DragRow, ui.HoverDay = carried, "2026-08-13"
+	logwork.MarkDropTargets(ui)
+	areas["other"].MouseIn(&desktop.MouseEvent{})
+	assertMatches()
+	if col := ui.WeekCols["2026-08-13"]; col.Frame.StrokeColor != widgets.LogoGold || col.DateHoverFrame.StrokeWidth != 0 {
+		t.Fatal("a completed drop target with a duplicate should show just one gold outline")
 	}
 	ui.DragRow, ui.HoverDay = nil, ""
 	logwork.MarkDropTargets(ui)
-	if bubbles["already there"].Matched() || bubbles["later"].Matched() {
+	if matched("already there") || matched("later") {
 		t.Fatal("dropping the card should let the gold go")
 	}
 }

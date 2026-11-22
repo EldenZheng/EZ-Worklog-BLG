@@ -13,6 +13,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/driver/software"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -113,6 +114,9 @@ type HoverTag struct {
 // on the tag.
 func (t *HoverTag) SetHoverParent(f func(on bool)) { t.parent = f }
 
+// SetHoverDuration sets the fade time for both entering and leaving the tag.
+func (t *HoverTag) SetHoverDuration(duration time.Duration) { t.hover.Duration = duration }
+
 const tagInset = 8
 
 // NewGoldTag is the gold HoverTag, for a parent issue and the like.
@@ -160,15 +164,8 @@ func (t *HoverTag) NaturalWidth() float32 {
 // Shown is the text the tag shows now, after any ellipsis.
 func (t *HoverTag) Shown() string { return t.label.Text }
 
-func (t *HoverTag) paint(level float32) {
-	t.bg.FillColor = MixColor(t.RestFill, t.HoverFill, level)
-	t.label.Color = MixColor(t.RestInk, t.HoverInk, level)
-	t.bg.Refresh()
-	t.label.Refresh()
-}
-
 func (t *HoverTag) MouseIn(*desktop.MouseEvent) {
-	t.hover.to(1, t.paint)
+	t.hover.to(1, func(float32) { t.Refresh() })
 	if t.parent != nil {
 		t.parent(true)
 	}
@@ -177,7 +174,7 @@ func (t *HoverTag) MouseIn(*desktop.MouseEvent) {
 func (t *HoverTag) MouseMoved(*desktop.MouseEvent) {}
 
 func (t *HoverTag) MouseOut() {
-	t.hover.to(0, t.paint)
+	t.hover.to(0, func(float32) { t.Refresh() })
 	if t.parent != nil {
 		t.parent(false)
 	}
@@ -208,9 +205,26 @@ func (t *HoverTag) Cursor() desktop.Cursor {
 	return desktop.DefaultCursor
 }
 
-func (t *HoverTag) CreateRenderer() fyne.WidgetRenderer { return &hoverTagRenderer{t: t} }
+func (t *HoverTag) CreateRenderer() fyne.WidgetRenderer {
+	shot := canvas.NewImageFromImage(nil)
+	shot.FillMode = canvas.ImageFillStretch
+	shot.Hide()
+	return &hoverTagRenderer{t: t, shot: shot}
+}
 
-type hoverTagRenderer struct{ t *HoverTag }
+type hoverTagRenderer struct {
+	t    *HoverTag
+	shot *canvas.Image
+	face tagPressFace
+}
+
+type tagPressFace struct {
+	size      fyne.Size
+	text      string
+	textSize  float32
+	textAt    fyne.Position
+	fill, ink color.NRGBA
+}
 
 func (r *hoverTagRenderer) Layout(size fyne.Size) {
 	t := r.t
@@ -232,7 +246,54 @@ func (r *hoverTagRenderer) Layout(size fyne.Size) {
 	}
 	t.label.Move(fyne.NewPos(x, (size.Height-m.Height)/2))
 	t.label.Resize(m)
-	widgets.ApplyPressScale(size, t.press.Scale(), t.bg, t.label)
+	r.placePress(size)
+}
+
+// Scale the tag as one image, so font hinting and pixel rounding cannot make
+// the label shrink or move independently of its background.
+func (r *hoverTagRenderer) placePress(size fyne.Size) {
+	t := r.t
+	scale := t.press.Scale()
+	if scale == 1 || size.Width <= 0 || size.Height <= 0 {
+		if r.shot.Visible() {
+			r.shot.Hide()
+			r.shot.Image = nil
+			t.bg.Show()
+			t.label.Show()
+		}
+		return
+	}
+
+	face := tagPressFace{
+		size: size, text: t.label.Text, textSize: t.label.TextSize, textAt: t.label.Position(),
+		fill: color.NRGBAModel.Convert(t.bg.FillColor).(color.NRGBA),
+		ink:  color.NRGBAModel.Convert(t.label.Color).(color.NRGBA),
+	}
+	if r.shot.Image == nil || r.face != face {
+		bg := canvas.NewRectangle(face.fill)
+		bg.CornerRadius = t.bg.CornerRadius
+		bg.Resize(size)
+		label := canvas.NewText(face.text, face.ink)
+		label.TextSize, label.TextStyle = face.textSize, t.label.TextStyle
+		label.Move(face.textAt)
+		label.Resize(t.label.Size())
+		surface := software.NewTransparentCanvas()
+		surface.SetPadded(false)
+		surface.SetScale(2)
+		surface.SetContent(container.NewWithoutLayout(bg, label))
+		surface.Resize(size)
+		r.shot.Image = surface.Capture()
+		r.face = face
+		r.shot.Refresh()
+	}
+	shrunk := fyne.NewSize(size.Width*scale, size.Height*scale)
+	r.shot.Move(fyne.NewPos((size.Width-shrunk.Width)/2, (size.Height-shrunk.Height)/2))
+	r.shot.Resize(shrunk)
+	if !r.shot.Visible() {
+		t.bg.Hide()
+		t.label.Hide()
+		r.shot.Show()
+	}
 }
 
 func (r *hoverTagRenderer) MinSize() fyne.Size {
@@ -249,14 +310,24 @@ func (r *hoverTagRenderer) MinSize() fyne.Size {
 }
 
 func (r *hoverTagRenderer) Refresh() {
-	r.t.paint(r.t.hover.level)
-	r.Layout(r.t.Size())
+	t := r.t
+	t.bg.FillColor = MixColor(t.RestFill, t.HoverFill, t.hover.level)
+	t.label.Color = MixColor(t.RestInk, t.HoverInk, t.hover.level)
+	r.Layout(t.Size())
+	if !r.shot.Visible() {
+		t.bg.Refresh()
+		t.label.Refresh()
+	}
 }
 
 func (r *hoverTagRenderer) Objects() []fyne.CanvasObject {
-	return []fyne.CanvasObject{r.t.bg, r.t.label}
+	return []fyne.CanvasObject{r.t.bg, r.t.label, r.shot}
 }
-func (r *hoverTagRenderer) Destroy() { r.t.press.Stop() }
+func (r *hoverTagRenderer) Destroy() {
+	r.t.press.Stop()
+	r.t.bg.Show()
+	r.t.label.Show()
+}
 
 // HugTag places a tag at its text's width, never wider than the row it sits
 // in, so the tag (and its hover) covers only itself.
@@ -318,14 +389,13 @@ type StripeBubble struct {
 	// OnLight, if set, hears the bubble start to light up or go dark, for
 	// what shows only while it is lit (a Delete fading in and out).
 	OnLight func(on bool)
-	// match edges the bubble in gold, fading over SlowFade, while a card
-	// going to the same place is carried over its day (SetMatch).
+	// match edges the bubble in gold, fading over SlowFade, while another
+	// card going to the same place is hovered or dragged.
 	match   Glow
 	matched bool
 }
 
-// SetMatch edges the bubble in gold, as the date picker edges the day picked,
-// or lets the edge go: the card it marks already holds what is being dragged.
+// SetMatch fades the gold highlight for a card matching the active row.
 func (b *StripeBubble) SetMatch(on bool) {
 	if on == b.matched {
 		return
@@ -675,6 +745,9 @@ func HoverBubble(accent color.Color, body fyne.CanvasObject) *HoverArea {
 // Bubble is the bubble the area lights.
 func (a *HoverArea) Bubble() *StripeBubble { return a.bubble }
 
+// Hovered reports pointer presence on the bubble or one of its controls.
+func (a *HoverArea) Hovered() bool { return a.bubble.present }
+
 // SetHoverParent tells the bubble what it sits in, such as a Kanban column,
 // to keep that lit while the pointer is on the bubble.
 func (a *HoverArea) SetHoverParent(f func(on bool)) { a.bubble.parent = f }
@@ -724,11 +797,16 @@ func TextBadge(text string) fyne.CanvasObject {
 // ParentTag is a parent issue as a gold tag: muted at rest, bright under the
 // pointer, and a click opens the parent on GitHub.
 func ParentTag(title, link string) fyne.CanvasObject {
+	return HugTag(NewLinkTag(title, link))
+}
+
+// NewLinkTag opens the link when any part of the gold tag is tapped.
+func NewLinkTag(title, link string) *HoverTag {
 	var open func()
 	if u, err := url.Parse(link); err == nil && link != "" {
 		open = func() { _ = fyne.CurrentApp().OpenURL(u) }
 	}
-	return HugTag(NewGoldTag(title, open))
+	return NewGoldTag(title, open)
 }
 
 // clipBox shows only the part of its objects inside its own bounds. It is a
@@ -800,26 +878,61 @@ func prepareRippleIn(layer *fyne.Container, area fyne.CanvasObject, pos fyne.Pos
 }
 
 // rippleAt spreads the ripple over the box at pos (in layer) of size, from
-// centre within it.
+// centre within it. It is drawn as the Kanban's sprint rows spread their gold:
+// a round spot that keeps to the box and takes the hover pill's rounded
+// corners where it reaches them, so no square corner ever lights round a
+// rounded target.
 func rippleAt(layer *fyne.Container, pos fyne.Position, size fyne.Size, centre fyne.Position) {
-	circle := canvas.NewCircle(color.Transparent)
-	box := newRippleClip(circle)
-	box.Move(pos)
-	box.Resize(size)
+	spot := canvas.NewRectangle(color.Transparent)
+	spot.Move(pos) // inside its box from the start, before it has a size
+	spot.Hide()
 	reach := float32(math.Hypot(float64(max(centre.X, size.Width-centre.X)), float64(max(centre.Y, size.Height-centre.Y))))
-	layer.Add(box)
-	anim := fyne.NewAnimation(RippleTime, func(done float32) {
-		radius := reach * done
-		circle.Move(fyne.NewPos(centre.X-radius, centre.Y-radius))
-		circle.Resize(fyne.NewSquareSize(2 * radius))
-		circle.FillColor = widgets.WithAlpha(widgets.LogoGold, 0.30*(1-done))
-		circle.Refresh()
-		if done >= 1 {
-			layer.Remove(box)
+	layer.Add(spot)
+	removed := false
+	steadyAnimation(RippleTime, easeOutQuart, func(done float32) {
+		if removed {
+			return
 		}
-	})
-	anim.Curve = easeOutQuart
-	anim.Start()
+		spot.FillColor = widgets.WithAlpha(widgets.LogoGold, 0.30*(1-done))
+		SpreadIn(spot, pos, size, centre, reach*done, rippleCorner)
+		if done >= 1 {
+			removed = true
+			layer.Remove(spot)
+		}
+	}).Start()
+}
+
+// rippleCorner is the rounding of what a ripple spreads over: the hover
+// pill's, which lights the same targets.
+const rippleCorner = 8
+
+// SpreadIn shapes spot as a round spot of radius r about centre, kept inside
+// the box at pos of size and rounded by corner where it meets the box's
+// corners. It hides spot while it has no size.
+func SpreadIn(spot *canvas.Rectangle, pos fyne.Position, size fyne.Size, centre fyne.Position, r, corner float32) {
+	if size.Width <= 0 || size.Height <= 0 || r <= 0.5 {
+		spot.Hide()
+		return
+	}
+	c := fyne.NewPos(min(max(centre.X, 0), size.Width), min(max(centre.Y, 0), size.Height))
+	left, top := max(c.X-r, 0), max(c.Y-r, 0)
+	right, bottom := min(c.X+r, size.Width), min(c.Y+r, size.Height)
+	spot.Move(pos.Add(fyne.NewPos(left, top)))
+	spot.Resize(fyne.NewSize(right-left, bottom-top))
+	most := min(right-left, bottom-top) / 2
+	end := min(corner, min(size.Width, size.Height)/2)
+	round := func(atX, atY bool) float32 {
+		if atX && atY {
+			return min(end, most)
+		}
+		return min(r, most)
+	}
+	spot.TopLeftCornerRadius = round(left == 0, top == 0)
+	spot.TopRightCornerRadius = round(right == size.Width, top == 0)
+	spot.BottomLeftCornerRadius = round(left == 0, bottom == size.Height)
+	spot.BottomRightCornerRadius = round(right == size.Width, bottom == size.Height)
+	spot.Show()
+	spot.Refresh()
 }
 
 // Wipe uncovers its content from the top down after a delay, so a column of
@@ -834,9 +947,14 @@ type Wipe struct {
 
 // NewWipe wraps content to be uncovered after delay.
 func NewWipe(content fyne.CanvasObject, delay time.Duration) *Wipe {
+	return NewWipeFor(content, delay, 280*time.Millisecond)
+}
+
+// NewWipeFor is NewWipe taking span to uncover.
+func NewWipeFor(content fyne.CanvasObject, delay, span time.Duration) *Wipe {
 	w := &Wipe{Content: content, clip: newClipBox(content)}
 	w.ExtendBaseWidget(w)
-	anim := fyne.NewAnimation(280*time.Millisecond, func(done float32) {
+	anim := fyne.NewAnimation(span, func(done float32) {
 		w.share = done
 		w.layout(w.Size())
 		canvas.Refresh(w)

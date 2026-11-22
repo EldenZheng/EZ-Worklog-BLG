@@ -128,7 +128,7 @@ func TestMeetingUpdateSummaryShowsSingleReviewBadges(t *testing.T) {
 	assertSummaryReview(t, ui.MeetingRowsHolder, backend.DailyCodeReviewTitle(ui.Cfg, "2026-08-25"), false)
 }
 
-// On a Log Work day card the tag follows the repo#number, not the minutes.
+// On a Log Work day card the tag follows the minutes, as Legacy does.
 func TestDayCardReviewTagStandsBesideTheRef(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
@@ -141,8 +141,8 @@ func TestDayCardReviewTagStandsBesideTheRef(t *testing.T) {
 			}
 		}
 	})
-	if line == nil || !contains(labels(line.Objects[0]), "repo#1") || !contains(labels(line.Objects[1]), "Code review") {
-		t.Fatalf("the tag should sit with the reference: %+v", line)
+	if line == nil || !contains(labels(line.Objects[0]), "30 min") || !contains(labels(line.Objects[1]), "Code review") {
+		t.Fatalf("the tag should sit with the minutes: %+v", line)
 	}
 
 	ref, tag := sizedBox(10, 20), sizedBox(80, 20)

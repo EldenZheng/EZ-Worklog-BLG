@@ -219,6 +219,11 @@ func (a *Arrival) CascadeFor(each time.Duration, delays []time.Duration, set fun
 // given delays, also calling then (if set) with each piece's share. A nil
 // Arrival hands the pieces back as they are.
 func (a *Arrival) Reveal(pieces []fyne.CanvasObject, delays []time.Duration, then func(i int, share float32)) []fyne.CanvasObject {
+	return a.RevealFor(arriveEach, pieces, delays, then)
+}
+
+// RevealFor is Reveal with each piece taking each to uncover.
+func (a *Arrival) RevealFor(each time.Duration, pieces []fyne.CanvasObject, delays []time.Duration, then func(i int, share float32)) []fyne.CanvasObject {
 	if a == nil {
 		return pieces
 	}
@@ -228,13 +233,26 @@ func (a *Arrival) Reveal(pieces []fyne.CanvasObject, delays []time.Duration, the
 		reveals[i] = NewReveal(p)
 		wrapped[i] = reveals[i]
 	}
-	a.Cascade(delays, func(i int, share float32) {
+	a.CascadeFor(each, delays, func(i int, share float32) {
 		reveals[i].SetShare(share)
 		if then != nil {
 			then(i, share)
 		}
 	})
 	return wrapped
+}
+
+// Left is how long a cascade over delays, each piece taking each, still has
+// to play from this draw: 0 once it is over, or for a nil Arrival.
+func (a *Arrival) Left(delays []time.Duration, each time.Duration) time.Duration {
+	if a == nil {
+		return 0
+	}
+	last := time.Duration(0)
+	for _, d := range delays {
+		last = max(last, d)
+	}
+	return max(0, last+each-a.elapsed)
 }
 
 // RevealIn is Reveal over a container's own objects, in place, one after

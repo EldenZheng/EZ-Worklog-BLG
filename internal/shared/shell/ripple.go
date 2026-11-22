@@ -4,9 +4,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/theme"
-	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/widgets"
 )
@@ -19,8 +17,55 @@ import (
 
 func init() { widgets.RippleAt = RippleIn }
 
-// RippleTime is how long a ripple takes to spread and fade.
-const RippleTime = 600 * time.Millisecond
+// RippleTime is how long a ripple takes to spread and fade: long enough to be
+// seen after a click that redraws a page full of cards holds up the frames.
+const RippleTime = 900 * time.Millisecond
+
+// A click that opens a heavy page (Log Work's week, the Kanban board) holds up
+// the frames that would have shown its ripple, and a motion timed by the clock
+// was over before the page was drawn. A steady motion is timed by the frames
+// actually drawn instead: one that comes late moves it on by an ordinary
+// frame, not by the time lost, so the ripple is still seen once the page is up.
+const (
+	steadyStall = 50 * time.Millisecond
+	steadyFrame = time.Second / 60
+)
+
+// steadyAnimation runs step from 0 to 1 over d of frames drawn (see above),
+// with ease applied. It gives up waiting after four times d.
+func steadyAnimation(d time.Duration, ease fyne.AnimationCurve, step func(p float32)) *fyne.Animation {
+	var last time.Time
+	var played time.Duration
+	finished := false
+	var anim *fyne.Animation
+	anim = fyne.NewAnimation(4*d, func(p float32) {
+		if finished {
+			return
+		}
+		now := time.Now()
+		if !last.IsZero() {
+			gap := now.Sub(last)
+			if gap > steadyStall {
+				gap = steadyFrame
+			}
+			played += gap
+		}
+		last = now
+		share := min(float32(played)/float32(d), 1)
+		if p >= 1 {
+			share = 1
+		}
+		step(ease(share))
+		if share >= 1 {
+			finished = true
+			if anim != nil {
+				anim.Stop()
+			}
+		}
+	})
+	anim.Curve = fyne.AnimationLinear
+	return anim
+}
 
 // RippleOnPage ripples area from at (window coordinates) on the window's top
 // layer. Nothing plays while a popup is open: the layer lies under it.
@@ -81,30 +126,3 @@ func RippleClearOf(area, box fyne.CanvasObject) float32 {
 func (t *Tappable) ripples() bool {
 	return t.onTap != nil && t.OnTapAt == nil && (t.Ripple || t.FadeOnTap || t.filterHover != nil || t.Feedback != nil)
 }
-
-// rippleClip shows only the part of its circle inside its own bounds. It is a
-// clip by its renderer alone, not a Scrollable, so the wheel still scrolls the
-// page under a ripple.
-type rippleClip struct {
-	widget.BaseWidget
-	circle *canvas.Circle
-}
-
-func newRippleClip(circle *canvas.Circle) *rippleClip {
-	c := &rippleClip{circle: circle}
-	c.ExtendBaseWidget(c)
-	return c
-}
-
-func (c *rippleClip) CreateRenderer() fyne.WidgetRenderer { return &rippleClipRenderer{c: c} }
-
-type rippleClipRenderer struct{ c *rippleClip }
-
-func (r *rippleClipRenderer) Layout(fyne.Size)             {}
-func (r *rippleClipRenderer) MinSize() fyne.Size           { return fyne.Size{} }
-func (r *rippleClipRenderer) Refresh()                     { canvas.Refresh(r.c.circle) }
-func (r *rippleClipRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.c.circle} }
-func (r *rippleClipRenderer) Destroy()                     {}
-
-// IsClip tells Fyne's painter to clip the circle to the box.
-func (r *rippleClipRenderer) IsClip() {}

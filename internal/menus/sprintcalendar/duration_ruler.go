@@ -67,10 +67,7 @@ func (r *DurationRulerRenderer) rebuild() {
 	r.Labels = nil
 	r.labelMinutes = nil
 	r.objects = nil
-	title := canvas.NewText("Minutes", theme.Color(theme.ColorNamePlaceHolder))
-	title.TextSize = 10
-	title.Move(fyne.NewPos(2, 20))
-	r.objects = append(r.objects, title)
+	// No "Minutes" title: each label says "…m" itself.
 	for _, m := range r.Marks {
 		alpha := float32(0.06)
 		if m%60 == 0 {

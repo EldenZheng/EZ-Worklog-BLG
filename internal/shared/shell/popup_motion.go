@@ -436,6 +436,15 @@ func captureClosingPress(c fyne.Canvas, popupPos fyne.Position, picture *image.N
 	draw.Draw(part, part.Bounds(), picture, area.Min, draw.Src)
 	surface := picture.At(area.Min.X, area.Min.Y)
 	draw.Draw(picture, area, image.NewUniform(surface), image.Point{}, draw.Src)
+	// Only the button shrinks, not the square of popup round it: cut the
+	// picture to the button's rounded shape, or its corners showed as a
+	// square box sinking inside the popup.
+	if button := popupButton(control); button != nil {
+		radius := min(button.Theme().Size(theme.SizeNameButtonRadius), min(size.Width, size.Height)/2)
+		_, px := c.PixelCoordinateForPosition(fyne.NewPos(0, radius))
+		_, zero := c.PixelCoordinateForPosition(fyne.Position{})
+		clearCorners(part, px-zero)
+	}
 	paint := canvas.NewImageFromImage(part)
 	paint.FillMode = canvas.ImageFillStretch
 	press := &closingButtonPress{image: paint, pos: pos.Subtract(popupPos), size: size, shrunk: 1}
@@ -477,7 +486,11 @@ func capturePopUp(c fyne.Canvas, pos fyne.Position, size fyne.Size) *image.NRGBA
 // captureArea copies the area at pos and size out of what c shows now, or nil
 // when any of it is off the canvas: a cut-off picture would be stretched.
 func captureArea(c fyne.Canvas, pos fyne.Position, size fyne.Size) *image.NRGBA {
-	if c == nil || size.IsZero() {
+	if c == nil || size.Width <= 0 || size.Height <= 0 {
+		return nil
+	}
+	bounds := c.Size()
+	if pos.X < 0 || pos.Y < 0 || pos.X+size.Width > bounds.Width || pos.Y+size.Height > bounds.Height {
 		return nil
 	}
 	shot := c.Capture()

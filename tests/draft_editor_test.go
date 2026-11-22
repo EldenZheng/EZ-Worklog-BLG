@@ -129,6 +129,8 @@ func TestDraftEditorEveryKindCanSplitAndReopen(t *testing.T) {
 			long := strings.Repeat("- completed some work\n", 70)
 			entry.SetText(long)
 			check.SetChecked(true)
+			const summary = "- completed the work"
+			splitRemarksEntry(t, form).SetText(summary)
 			tapButton(t, form, "Save")
 			rows, err := ui.Store.ReadRows()
 			if err != nil {
@@ -140,7 +142,7 @@ func TestDraftEditorEveryKindCanSplitAndReopen(t *testing.T) {
 					saved = row
 				}
 			}
-			if saved["issue_body"] != strings.TrimSpace(long) || saved["remarks"] == "" || len(saved["remarks"]) > backend.RemarkCap {
+			if saved["issue_body"] != strings.TrimSpace(long) || saved["remarks"] != summary {
 				t.Fatalf("split texts not saved intact: body=%d, remarks=%d", len(saved["issue_body"]), len(saved["remarks"]))
 			}
 			reopened := logwork.RowEditor(ui, saved, func() {}, nil).All()
@@ -149,6 +151,20 @@ func TestDraftEditorEveryKindCanSplitAndReopen(t *testing.T) {
 			}
 		})
 	}
+}
+
+func splitRemarksEntry(t *testing.T, form fyne.CanvasObject) *widget.Entry {
+	t.Helper()
+	var entry *widget.Entry
+	walk(form, func(o fyne.CanvasObject) {
+		if pane, ok := o.(*logwork.CommitTextPane); ok {
+			entry = multiLineEntry(pane.Remarks)
+		}
+	})
+	if entry == nil {
+		t.Fatal("split remarks editor is missing")
+	}
+	return entry
 }
 
 func TestDraftEditorPreservesLegacyDescriptionAsRemarks(t *testing.T) {

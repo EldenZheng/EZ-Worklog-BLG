@@ -18,6 +18,8 @@ package shell
 //	                                                Close anyway)
 //	SmallDeleteButton     small red rounded       a Delete that fades in while the
 //	                      rectangle                 pointer is on a calendar day or block
+//	FadeDeleteIcon        trash icon, red wash    a Delete icon that fades in with the
+//	                      under the pointer         row it sits on (Settings storage)
 //	(plain button)        gold, rounded           everything local: Save, Cancel, Close,
 //	                                                fetching or refreshing (reads only)
 //	QuietButton           no fill                 icon buttons and Back
@@ -178,6 +180,20 @@ func restyleHighButtons(o fyne.CanvasObject) bool {
 // For a Cancel / Delete pair use RemovalButtons, which places both.
 func DestructiveButton(button *widget.Button) fyne.CanvasObject {
 	return removalButton(button, true)
+}
+
+// FadeDeleteIcon is a trash icon that removes something, for a row that shows
+// it only while lit: hold it in a Fader and fade it with the row. Under the
+// pointer it washes red, the destructive colour, fading in and out as the Log
+// Work card's Delete does in gold.
+func FadeDeleteIcon(tapped func()) *FadeIconButton {
+	b := NewFadeIconButton(theme.DeleteIcon(), tapped)
+	b.hoverFill = func() color.Color {
+		c := color.NRGBAModel.Convert(theme.Color(theme.ColorNameError)).(color.NRGBA)
+		c.A = 0x66
+		return c
+	}
+	return b
 }
 
 // SmallDeleteButton is a Delete that shows while the pointer is on a Sprint
@@ -395,6 +411,14 @@ func QuietButton(button *widget.Button) fyne.CanvasObject {
 	return QuietButtonControl(button, button)
 }
 
+// FadeQuietButton uses the shared slow hover fade on a quiet button.
+func FadeQuietButton(button *widget.Button) fyne.CanvasObject {
+	if b, ok := any(button).(interface{ WorklogSetHoverFade(time.Duration) }); ok {
+		b.WorklogSetHoverFade(SlowFade)
+	}
+	return QuietButton(button)
+}
+
 // QuietButtonControl applies the quiet role to an extended button while keeping
 // its own event handlers, such as a refresh icon that spins only when clicked.
 func QuietButtonControl(control interface {
@@ -407,6 +431,6 @@ func QuietButtonControl(control interface {
 
 // DialogButtons lines a popup's buttons up at its bottom right, in the order
 // given. Put the way out (Close, Cancel) first and the action last.
-func DialogButtons(buttons ...fyne.CanvasObject) fyne.CanvasObject {
+func DialogButtons(buttons ...fyne.CanvasObject) *fyne.Container {
 	return container.NewHBox(append([]fyne.CanvasObject{layout.NewSpacer()}, buttons...)...)
 }

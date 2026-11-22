@@ -7,7 +7,6 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/shared/backend"
@@ -32,13 +31,15 @@ func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.
 			plan, pushErr = backend.PrepareDailyReviewPush(r)
 			return nil
 		}
+		// Merged commits are linked from the Worklog rather than rewritten.
+		r = ui.Store.CheckRowMerged(r)
 		body := strings.TrimSpace(backend.OrDefault(r["remarks"], r["description"]))
 		if r["type"] == backend.KindMeeting && (r["meeting_title"] != "" || r["meeting_recording"] != "") {
 			res, pushErr = backend.PushMeetingEntry(ui.Cfg, r, progress)
 			return nil
 		}
 		res, pushErr = backend.PushEntry(ui.Cfg, r["issue"], r["date"], r["owner"],
-			r.Minutes(), body, r["issue_body"], backend.RowPushMode(r), r["issue_url"],
+			r.Minutes(), body, backend.WorklogIssueBody(r, body), backend.RowPushMode(r), r["issue_url"],
 			backend.SubTitleBaseFor(r), progress)
 		return nil
 	}, func() {
@@ -61,21 +62,22 @@ func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.
 			push()
 			return
 		}
-		var d dialog.Dialog
+		var popup *widget.PopUp
 		cancel := widget.NewButton("Cancel", func() {
-			shell.CloseDialog(d, ui.Win)
+			shell.ClosePopUp(popup)
 			done(r, backend.PushResult{}, errReviewPushCancelled)
 		})
 		combine := widget.NewButton("Combine & push", func() {
-			shell.CloseDialog(d, ui.Win)
+			shell.ClosePopUp(popup)
 			push()
 		})
-		message := widget.NewLabel(fmt.Sprintf("Code reviews already exist for %s.\nCombine this entry with the reviews on GitHub?\n\nExisting PR lists: %d minutes\nCombined total: %d minutes\n\nThe description and worklog remarks will contain the combined PR list.\nPRs already included with the same minutes count once.", r["date"], plan.ExistingMinutes, plan.Minutes))
+		prs := "PR"
+		if plan.OtherCount != 1 {
+			prs = "PRs"
+		}
+		message := widget.NewLabel(fmt.Sprintf("GitHub already lists %d other %s for %s that this entry does not (%d minutes).\nCombine them with this entry?\n\nCombined total: %d minutes\n\nThe description and worklog remarks will contain the combined PR list.\nPRs in both lists count once.", plan.OtherCount, prs, r["date"], plan.OtherMinutes, plan.Minutes))
 		message.Wrapping = fyne.TextWrapWord
-		content := container.NewVBox(shell.IssueHyperlink(r["issue"]), message,
-			shell.DialogButtons(cancel, shell.GitHubButton(combine)))
-		d = dialog.NewCustomWithoutButtons("Combine code reviews?", shell.FitPopup(content), ui.Win)
-		d.Resize(ui.PopupSizeFor(content))
-		shell.ShowDialog(d, ui.Win)
+		content := container.NewVBox(shell.IssueHyperlink(r["issue"]), message)
+		popup = ui.ShowConfirmation("Combine code reviews?", content, shell.DialogButtons(cancel, shell.GitHubButton(combine)))
 	})
 }

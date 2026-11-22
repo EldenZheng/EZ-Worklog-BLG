@@ -27,17 +27,24 @@ type HoverPill struct {
 	Rect      *canvas.Rectangle
 	Animation *fyne.Animation
 	shown     float32
+	fillAlpha float32
+	edgeAlpha float32
 	on        bool
 	pos       fyne.Position
 	size      fyne.Size
 }
 
 func NewHoverPill() *HoverPill {
+	return NewHoverPillWithOpacity(0.16, 0.45)
+}
+
+// NewHoverPillWithOpacity sets the full-hover fill and outline opacities.
+func NewHoverPillWithOpacity(fill, outline float32) *HoverPill {
 	r := canvas.NewRectangle(color.Transparent)
 	r.CornerRadius = 8
 	r.StrokeWidth = 1
 	r.StrokeColor = color.Transparent
-	return &HoverPill{Rect: r}
+	return &HoverPill{Rect: r, fillAlpha: fill, edgeAlpha: outline}
 }
 
 func (p *HoverPill) Stop() {
@@ -69,8 +76,8 @@ func (p *HoverPill) Fit(pos fyne.Position, size fyne.Size) {
 }
 
 func (p *HoverPill) paint() {
-	p.Rect.FillColor = WithAlpha(LogoGold, 0.16*p.shown)
-	p.Rect.StrokeColor = WithAlpha(LogoGold, 0.45*p.shown)
+	p.Rect.FillColor = WithAlpha(LogoGold, p.fillAlpha*p.shown)
+	p.Rect.StrokeColor = WithAlpha(LogoGold, p.edgeAlpha*p.shown)
 	p.Rect.Refresh()
 }
 

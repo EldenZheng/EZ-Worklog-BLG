@@ -43,6 +43,7 @@ var controls = []control{
 type replacement struct{ original, replaced, review string }
 
 var buttonChanges = []replacement{
+	{"\"image/color\"", "\"image/color\"\n\t\"time\"", "the button hover duration type"},
 	// Button geometry is animated inside its renderer, keeping the widget's
 	// layout and hit area fixed for every role, native dialog and extended button.
 	{"b.tapAnim = newButtonTapAnimation(tapBG, b, th)\n\tb.tapAnim.Curve = fyne.AnimationEaseOut",
@@ -57,7 +58,7 @@ var buttonChanges = []replacement{
 	{"layout     fyne.Layout\n}",
 		"layout     fyne.Layout\n\tpress worklogPress\n\thover worklogHover\n}",
 		"the button press state"},
-	{"hovered, focused bool", "hovered, focused bool\n\tworklogHoverFade bool", "the optional button hover fade"},
+	{"hovered, focused bool", "hovered, focused bool\n\tworklogHoverFade time.Duration", "the optional button hover fade"},
 	{"bg.FillColor = bgColor", "r.worklogSetBackground(bgColor)", "the button hover paint"},
 	// An icon that turns up later resets the renderer's objects; the press
 	// picture stays on top of them.
@@ -136,7 +137,13 @@ func run(stage string) error {
 	if err := patchWheel(module.Dir, dependency); err != nil {
 		return err
 	}
+	if err := patchScrollBarInset(module.Dir, dependency); err != nil {
+		return err
+	}
 	if err := patchBlur(module.Dir, dependency); err != nil {
+		return err
+	}
+	if err := patchAnimationClock(module.Dir, dependency); err != nil {
 		return err
 	}
 	if err := copyPatchFiles("_fynepatch", dependency); err != nil {
@@ -195,6 +202,69 @@ func patchControl(source, dependency string, c control) error {
 		}
 	}
 	return writePatched(dependency, c.file, code)
+}
+
+// patchAnimationClock times every animation by the frames drawn rather than
+// the clock, so one is still seen after a click that drew a heavy page (see
+// _fynepatch/internal/animation/worklog_steady.go).
+func patchAnimationClock(source, dependency string) error {
+	for _, f := range []struct {
+		file    string
+		changes []replacement
+	}{
+		{"internal/animation/animation.go", []replacement{
+			{"\tstopped      bool\n}", "\tstopped      bool\n\n\tworklogLast  time.Time\n\tworklogHolds int\n}", "the animation's frame clock fields"},
+			{"\t\tpinTime:      now,\n\t}", "\t\tpinTime:      now,\n\t\tworklogLast:  now,\n\t}", "the animation's first frame time"},
+			{"\ta.start = now\n\ta.pinTime = now", "\ta.start = now\n\ta.pinTime = now\n\ta.worklogLast = now", "the animation's repeat"},
+		}},
+		{"internal/animation/runner.go", []replacement{
+			{"\tduration := a.a.Duration\n\tnow := time.Now()\n", "\tduration := a.a.Duration\n\tnow := time.Now()\n\ta.worklogSteady(now)\n", "the animation tick"},
+		}},
+	} {
+		code, err := readSource(source, f.file)
+		if err != nil {
+			return err
+		}
+		for _, change := range f.changes {
+			if strings.Count(code, change.original) != 1 {
+				return fmt.Errorf("review %s for this Fyne version", change.review)
+			}
+			code = strings.Replace(code, change.original, change.replaced, 1)
+		}
+		if err := writePatched(dependency, f.file, code); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// patchScrollBarInset lets a floating header cover a scroll's content while
+// its native scrollbar starts below the header.
+func patchScrollBarInset(source, dependency string) error {
+	const file = "internal/widget/scroller.go"
+	code, err := readSource(source, file)
+	if err != nil {
+		return err
+	}
+	for _, change := range []replacement{
+		{"scrollEndTimer *time.Timer", "scrollEndTimer *time.Timer\n\tworklogScrollBarTop float32", "the scroll inset field"},
+		{"r.vertArea.Resize(fyne.NewSize(r.vertArea.MinSize().Width, size.Height))\n\t\tr.vertArea.Move(fyne.NewPos(scrollerSize.Width-r.vertArea.Size().Width, 0))",
+			"barTop := min(r.scroll.worklogScrollBarTop, max(0, size.Height-r.vertArea.MinSize().Height))\n\t\tr.vertArea.Resize(fyne.NewSize(r.vertArea.MinSize().Width, size.Height-barTop))\n\t\tr.vertArea.Move(fyne.NewPos(scrollerSize.Width-r.vertArea.Size().Width, barTop))", "the inset scrollbar layout"},
+		{"cache.Renderer(r.vertArea).Layout(scrollSize)", "cache.Renderer(r.vertArea).Layout(r.vertArea.Size())", "the scrollbar area refresh"},
+		{"scrollBarSize := th.Size(theme.SizeNameScrollBar)\n\tif scrollLength < contentLength {",
+			"scrollBarSize := th.Size(theme.SizeNameScrollBar)\n\ttrackLength := scrollLength\n\tif r.area.orientation == scrollBarOrientationVertical {\n\t\ttrackLength = r.area.Size().Height\n\t}\n\tif scrollLength < contentLength {", "the inset thumb track"},
+		{"length = float32(int(scrollLength)) * portion\n\t\tlength = fyne.Max(length, scrollBarSize)\n\t} else {\n\t\tlength = scrollLength",
+			"length = float32(int(trackLength)) * portion\n\t\tlength = min(trackLength, fyne.Max(length, scrollBarSize))\n\t} else {\n\t\tlength = trackLength", "the inset thumb height"},
+		{"lengthOffset = (scrollLength - length) *", "lengthOffset = (trackLength - length) *", "the inset thumb travel"},
+		{"maxOffset := scrollLength - length\n\tif offset < 0 {",
+			"trackLength := scrollLength\n\tif a.orientation == scrollBarOrientationVertical {\n\t\ttrackLength = a.Size().Height\n\t}\n\tmaxOffset := trackLength - length\n\tif maxOffset <= 0 {\n\t\treturn 0\n\t}\n\tif offset < 0 {", "the inset thumb drag mapping"},
+	} {
+		if strings.Count(code, change.original) != 1 {
+			return fmt.Errorf("review %s for this Fyne version", change.review)
+		}
+		code = strings.Replace(code, change.original, change.replaced, 1)
+	}
+	return writePatched(dependency, file, code)
 }
 
 // patchWheel renames the window's own wheel handler out of the way, so the one in

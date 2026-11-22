@@ -3,6 +3,7 @@ package shell
 import (
 	"fmt"
 	"image/color"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -24,7 +25,12 @@ type PlannerDateTarget struct {
 	StrokeWidth float32
 }
 
-var PlannerAvailableBlue = color.NRGBA{R: 106, G: 186, B: 236, A: 255}
+// The active date's thicker outline responds before its tint finishes fading.
+const plannerOutlineResize = 240 * time.Millisecond
+
+func (d *PlannerDateTarget) fade(fill, stroke color.Color, width float32) {
+	fadeFrame(d.Frame, fill, stroke, width, false, plannerOutlineResize)
+}
 
 // The MEETING bubble is a local-only item that sits in the tray whatever sprint
 // is selected, so time can be set aside for meetings on any date. It belongs to
@@ -42,16 +48,8 @@ func PlannerMeetingCandidate() backend.SprintCandidate {
 	}
 }
 
-// PlannerBlockMark is a block on the calendar that can be edged in gold while
-// its issue's tray card is under the pointer.
+// PlannerBlockMark applies the gold highlight to a matching calendar block.
 type PlannerBlockMark interface{ SetMarked(on bool) }
-
-// MarkBlocks edges key's blocks on the calendar in gold, or clears them.
-func (k *KanbanUI) MarkBlocks(key string, on bool) {
-	for _, m := range k.BlockMarks[key] {
-		m.SetMarked(on)
-	}
-}
 
 type PlannerDragCard struct {
 	widget.BaseWidget
@@ -62,6 +60,7 @@ type PlannerDragCard struct {
 	lifted    bool
 	Hover     *PlannerDateTarget
 	Day       *PlannerDayHover
+	BlockMark PlannerBlockMark
 	// OnTap, when set, runs on a click in place of opening the issue.
 	OnTap func()
 	press *CardPress
@@ -240,30 +239,33 @@ func (c *PlannerDragCard) HighlightDates(at *fyne.Position) {
 	if k.CalendarResizing || k.CalendarDrag != nil && k.CalendarDrag != c || c.Index >= 0 && !c.lifted {
 		return
 	}
+	matches := c.markMatches(true)
 	for _, target := range k.Dates {
 		_, valid := backend.PlannerSlot(k.Plan, c.Candidate, c.Index, target.Date)
 		fill, stroke, width := target.Base, target.StrokeColor, target.StrokeWidth
 		if valid {
-			// A day already green stays green; blue fills only an empty one.
-			blank := true
+			complete := false
 			if target.Base != nil {
 				_, _, _, a := target.Base.RGBA()
-				blank = a == 0
+				complete = a != 0
 			}
-			if blank {
-				fill = widgets.WithAlpha(PlannerAvailableBlue, 0.13)
-			}
-			stroke, width = PlannerAvailableBlue, 2
+			opacity := float32(0.13)
+			stroke, width = widgets.LogoGold, 2
 			if at != nil && pointIn(target.Object, *at) && pointIn(k.CalendarClip, *at) {
 				c.Hover = target
-				if blank {
-					fill = widgets.WithAlpha(PlannerAvailableBlue, 0.25)
-				}
-				stroke, width = widgets.LogoGold, 4
+				opacity, width = 0.25, 4
+			}
+			if complete {
+				stroke = theme.Color(theme.ColorNameSuccess)
+			} else {
+				fill = widgets.WithAlpha(widgets.LogoGold, opacity)
 			}
 		}
+		if matches[target.Date] {
+			stroke, width = widgets.LogoGold, max(2, width)
+		}
 		// The outline fades in and out rather than snapping.
-		FadeFrame(target.Frame, fill, stroke, width)
+		target.fade(fill, stroke, width)
 	}
 }
 
@@ -274,10 +276,6 @@ func (c *PlannerDragCard) MouseIn(*desktop.MouseEvent) {
 	}
 	if c.Day != nil {
 		c.Day.Enter(c)
-	}
-	if c.Index < 0 {
-		// A tray card points out where its issue is already planned.
-		c.K.MarkBlocks(c.Candidate.Key, true)
 	}
 	if !c.lifted && c.Index < 0 && c.K.CalendarDrag == nil && !c.K.CalendarResizing {
 		c.HighlightDates(nil)
@@ -293,17 +291,49 @@ func (c *PlannerDragCard) MouseOut() {
 	if c.Day != nil {
 		c.Day.Leave(c)
 	}
-	if c.Index < 0 {
-		c.K.MarkBlocks(c.Candidate.Key, false)
-	}
 	if !c.lifted && c.Index < 0 && c.K.CalendarDrag == nil && !c.K.CalendarResizing {
 		c.ResetDates()
 	}
 }
 
 func (c *PlannerDragCard) ResetDates() {
+	c.markMatches(false)
+	c.paintMatchOutlines(nil)
+}
+
+// PreviewMatches keeps matching blocks and days marked while a scheduled
+// block or one of its controls is hovered. An active drag owns the preview.
+func (c *PlannerDragCard) PreviewMatches(on bool) {
+	if c.K.CalendarDrag != nil || c.K.CalendarResizing {
+		return
+	}
+	c.paintMatchOutlines(c.markMatches(on))
+}
+
+func (c *PlannerDragCard) markMatches(on bool) map[string]bool {
+	matches := map[string]bool{}
+	for date, cards := range c.K.DayCards {
+		for _, card := range cards {
+			if card.BlockMark == nil || card.Candidate.Key != c.Candidate.Key {
+				continue
+			}
+			matched := on && card != c
+			card.BlockMark.SetMarked(matched)
+			if matched {
+				matches[date] = true
+			}
+		}
+	}
+	return matches
+}
+
+func (c *PlannerDragCard) paintMatchOutlines(matches map[string]bool) {
 	for _, t := range c.K.Dates {
-		FadeFrame(t.Frame, t.Base, t.StrokeColor, t.StrokeWidth)
+		stroke, width := t.StrokeColor, t.StrokeWidth
+		if matches[t.Date] {
+			stroke, width = widgets.LogoGold, 2
+		}
+		t.fade(t.Base, stroke, width)
 	}
 }
 
@@ -327,9 +357,7 @@ func (c *PlannerDragCard) DragEnd() {
 	k.TrayDropLine = nil
 	slot, daySlot := k.TraySlot, k.DaySlot
 	k.TraySlot, k.DaySlot = KanbanSlot{}, KanbanSlot{}
-	for _, t := range k.Dates {
-		FadeFrame(t.Frame, t.Base, t.StrokeColor, t.StrokeWidth)
-	}
+	c.ResetDates()
 	target := c.Hover
 	c.Hover = nil
 	if target == nil {
@@ -342,7 +370,7 @@ func (c *PlannerDragCard) DragEnd() {
 			p := k.Plan
 			p.TrayOrder = backend.MoveTrayIssue(p.TrayOrder, shown, c.Candidate.Key, slot.AfterID)
 			if k.Save(p) {
-				Hooks.KanbanUIDrawKeepingCalendarScroll(k)
+				redrawPlannerDrop(k)
 			}
 		}
 		return
@@ -364,7 +392,23 @@ func (c *PlannerDragCard) DragEnd() {
 	}
 	if k.Save(p) {
 		k.SetMessage("Saved locally · GitHub estimates and dates were not changed.")
-		Hooks.KanbanUIDrawKeepingCalendarScroll(k)
+		redrawPlannerDrop(k)
+	}
+}
+
+// A successful drop rebuilds the calendar. Carry the current outline and
+// fill onto the new day frames so the 600 ms return fade can finish there.
+func redrawPlannerDrop(k *KanbanUI) {
+	previous := make(map[string]*canvas.Rectangle, len(k.Dates))
+	for _, day := range k.Dates {
+		previous[day.Date] = day.Frame
+	}
+	Hooks.KanbanUIDrawKeepingCalendarScroll(k)
+	for _, day := range k.Dates {
+		if old := previous[day.Date]; old != nil && old != day.Frame {
+			SetFrame(day.Frame, old.FillColor, old.StrokeColor, old.StrokeWidth)
+			day.fade(day.Base, day.StrokeColor, day.StrokeWidth)
+		}
 	}
 }
 

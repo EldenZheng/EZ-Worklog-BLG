@@ -16,40 +16,53 @@ import (
 // and a file to open. Both are built from the same fetched items the strip is
 // already showing, so what is sent is what was on screen.
 
-// WeekBoardLinks points each saved view at one week and one owner.
-//
-// Only the filterQuery is touched. It is rewritten wholesale from
-// worklogProjectFilter — the same string the app already sends to the API, so
-// the link and the fetch behind the numbers ask GitHub the same question — and
-// every other parameter is carried across untouched.
+// WeekBoardLinks keeps the configured views and rewrites their filterQuery
+// for the selected week. The Created filter is available for every week.
+// Dates before the SOP cutover also get a link using the old board fields.
 //
 // A link that cannot be parsed is passed through as it stands. It is a link to
 // paste in an email, and a broken one the reader can still see beats a silently
 // missing board.
 func WeekBoardLinks(cfg Config, owner, fromDate, toDate string) []string {
+	var historical, worklogs []string
+	owner = strings.TrimSpace(owner)
+	who := OrDefault(strings.TrimSpace(cfg.GithubAuthor), "@me")
+	worklogFilter := fmt.Sprintf(worklogBoardFilterPrefix+"%s created:%s..%s", who, fromDate, toDate)
 	boardViewURLs := cfg.BoardViewURLs
 	if len(boardViewURLs) == 0 {
 		boardViewURLs = ProjectURLs(cfg)
 	}
-	out := make([]string, 0, len(boardViewURLs))
 	for _, raw := range boardViewURLs {
 		u, err := url.Parse(raw)
 		if err != nil {
-			out = append(out, raw)
+			historical = append(historical, raw)
 			continue
 		}
 		q := u.Query()
-		filter := WorklogProjectFilter(strings.TrimSpace(owner), fromDate, toDate)
-		if ref, err := ParseProjectRef(raw); err == nil {
-			if fields, ok := knownWorklogFields.Load(worklogFieldsKey(ref)); ok {
-				filter = worklogFilterForFields(filter, fields.([]field))
-			}
+		if fromDate < SOPStart {
+			filter := WorklogProjectFilter(owner, fromDate, min(toDate, AddDays(SOPStart, -1)))
+			q.Set("filterQuery", historicalBoardFilter(raw, filter))
+			u.RawQuery = q.Encode()
+			historical = append(historical, u.String())
 		}
-		q.Set("filterQuery", filter)
+		q.Set("filterQuery", worklogFilter)
 		u.RawQuery = q.Encode()
-		out = append(out, u.String())
+		worklogs = append(worklogs, u.String())
 	}
-	return out
+	return append(historical, worklogs...)
+}
+
+const worklogBoardFilterPrefix = `type:"Worklog" assignee:`
+
+func historicalBoardFilter(boardURL, filter string) string {
+	if ref, err := ParseProjectRef(boardURL); err == nil {
+		if fields, ok := knownWorklogFields.Load(worklogFieldsKey(ref)); ok {
+			return worklogFilterForFields(filter, fields.([]field), true)
+		}
+	}
+	// Older exports can be copied before a fetch has cached the board fields.
+	// The migrated boards renamed Worklog Owner and kept Worklog (Date).
+	return worklogFilterForFields(filter, []field{{Name: "ZZZ (DEPRECATED) Worklog Owner (blg-xxxx)"}}, true)
 }
 
 // viewIDRe pulls the saved view out of a board URL. Two links to the same
@@ -68,6 +81,9 @@ func BoardLinkLabel(rawURL string) string {
 	label := fmt.Sprintf("%s · project %d", ref.Login, ref.Number)
 	if m := viewIDRe.FindStringSubmatch(rawURL); m != nil {
 		label += " · view " + m[1]
+	}
+	if link, err := url.Parse(rawURL); err == nil && strings.HasPrefix(link.Query().Get("filterQuery"), worklogBoardFilterPrefix) {
+		label += " · Worklog issues"
 	}
 	return label
 }

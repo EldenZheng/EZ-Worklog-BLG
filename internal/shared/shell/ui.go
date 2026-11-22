@@ -222,11 +222,13 @@ type UI struct {
 	// The week on show above the saved entries, its columns kept so a drop
 	// target can be lit, and the card currently in the air over them.
 	WeekStart string // Monday, YYYY-MM-DD
-	WeekCols  map[string]*DayColumn
-	HoverDay  string
-	DragRow   backend.Row
-	DragLayer *fyne.Container // above the tab, so the carried card is never buried
-	DragGhost *fyne.Container
+	// Date pickers currently mounted in Log Work and its open editors.
+	LogDayListeners map[fyne.CanvasObject]func()
+	WeekCols        map[string]*DayColumn
+	HoverDay        string
+	DragRow         backend.Row
+	DragLayer       *fyne.Container // above the tab, so the carried card is never buried
+	DragGhost       *fyne.Container
 
 	// Pending commits, held so a bubble can be re-rendered without refetching,
 	// plus the issue titles their refs resolve to.
@@ -519,6 +521,11 @@ func (ui *UI) LoadPending(force bool) {
 	var ferr error
 	ui.Async(func() error {
 		res, ferr = ui.Store.FetchPending(ui.Cfg, composer.Phase(pendingWeight))
+		if ferr == nil {
+			// Saved entries' commits may have been merged since: Saved
+			// locally, drawn once the titles are in, then says so.
+			_, _ = ui.Store.RefreshMergedRefs()
+		}
 		return nil
 	}, func() {
 		ui.PendingLoading = false
@@ -882,6 +889,13 @@ func (ui *UI) LoadProject(key, fromDate, toDate string, force bool) {
 	// where the month would be.
 	ui.Async(func() error {
 		items, err = backend.FetchWorklogsWithHistory(ui.Cfg, fromDate, toDate, progress)
+		if err == nil {
+			// GitHub search takes a moment to see a new Worklog; the ones just
+			// pushed from here are known already.
+			if rows, rerr := ui.Store.ReadRows(); rerr == nil {
+				items = backend.MergePushedRows(items, rows, ui.Cfg.WorklogOwner, fromDate, toDate)
+			}
+		}
 		return nil
 	}, func() {
 		defer finish()
@@ -1031,9 +1045,7 @@ func StaleRanges(loaded, loading map[string]bool, date string) map[string][2]str
 	return out
 }
 
-// Today is the working day, not the calendar one: it turns over at 08:00 so
-// work carried past midnight still lands on the day it belongs to. See
-// workDayStart in weekstrip.go for why.
+// Today changes at midnight in Malaysia.
 func Today() string { return backend.WorkDate(time.Now()) }
 
 func ThisMonth() string { return Today()[:7] }
@@ -1049,7 +1061,7 @@ func ThisMonth() string { return Today()[:7] }
 // The month is stepped by rebuilding the date rather than by adding a month to
 // today: adding one to the 31st of January lands on the 3rd of March, which
 // would skip February's period entirely.
-func CurrentPeriod() string { return PeriodOf(time.Now()) }
+func CurrentPeriod() string { return PeriodOf(time.Now().In(backend.MalaysiaTime)) }
 
 func PeriodOf(t time.Time) string {
 	m := t.Month()

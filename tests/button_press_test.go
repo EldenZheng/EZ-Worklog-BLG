@@ -19,6 +19,7 @@ import (
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
 	"worklog/internal/shared/shell"
+	"worklog/internal/shared/widgets"
 )
 
 func pressTestApp(t *testing.T) (fyne.App, *collectDriver) {
@@ -217,7 +218,7 @@ func TestButtonPressHonoursReducedMotion(t *testing.T) {
 }
 
 func TestCustomActionTagsAndSubtabsUseTheSamePressFeedback(t *testing.T) {
-	for _, kind := range []string{"tag", "subtab"} {
+	for _, kind := range []string{"tag", "parent", "subtab"} {
 		t.Run(kind, func(t *testing.T) {
 			a, driver := pressTestApp(t)
 			w := a.NewWindow("custom button press")
@@ -225,34 +226,53 @@ func TestCustomActionTagsAndSubtabsUseTheSamePressFeedback(t *testing.T) {
 			calls := 0
 			var button fyne.Widget
 			var tap fyne.Tappable
-			if kind == "tag" {
-				tag := shell.NewGoldTag("Show ignored", func() { calls++ })
-				tag.Wide = true
-				button, tap = tag, tag
-				w.SetContent(container.NewCenter(tag))
-			} else {
+			switch kind {
+			case "subtab":
 				tabs := shell.NewUnderlineTabs([]string{"Commits", "Meeting"}, func(string) { calls++ })
 				tabs.Selected = "Commits"
 				w.SetContent(container.NewCenter(tabs))
 				button = test.WidgetRenderer(tabs).Objects()[2].(fyne.Widget)
 				tap = button.(fyne.Tappable)
+			case "parent":
+				row := shell.ParentTag("Long parent issue title that must fit inside the Status sidebar", "https://github.com/org/repo/issues/42").(*fyne.Container)
+				tag := row.Objects[0].(*shell.HoverTag)
+				tag.OnTapped = func() { calls++ }
+				button, tap = tag, tag
+				w.SetContent(row)
+			default:
+				tag := shell.NewGoldTag("Show ignored", func() { calls++ })
+				tag.Wide = true
+				button, tap = tag, tag
+				w.SetContent(container.NewCenter(tag))
 			}
-			w.Resize(fyne.NewSize(420, 160))
+			w.Resize(fyne.NewSize(180, 160))
 			renderer := test.WidgetRenderer(button)
 			var label *canvas.Text
+			var fill *canvas.Rectangle
+			var picture *canvas.Image
 			for _, o := range renderer.Objects() {
-				if text, ok := o.(*canvas.Text); ok {
-					label = text
+				switch object := o.(type) {
+				case *canvas.Text:
+					label = object
+				case *canvas.Rectangle:
+					fill = object
+				case *canvas.Image:
+					picture = object
 				}
 			}
 			minimum, size, font := button.MinSize(), button.Size(), label.TextSize
-			// A tag shrinks its own label. A subtab hides its label and draws a
-			// picture of it instead, so what shrinks is the ink in that picture.
+			shown := label.Text
+			if kind == "parent" && shown == button.(*shell.HoverTag).Text {
+				t.Fatal("the parent title should be shortened to fit the sidebar")
+			}
 			drawn := func() float32 {
 				if kind == "subtab" {
 					return float32(pressedInk(button))
 				}
-				return label.TextSize
+				if picture != nil && picture.Visible() {
+					return picture.Size().Width
+				}
+				return 0
 			}
 			driver.anims = nil
 			tap.Tapped(nil)
@@ -268,8 +288,27 @@ func TestCustomActionTagsAndSubtabsUseTheSamePressFeedback(t *testing.T) {
 			if pressed <= 0 || button.MinSize() != minimum || button.Size() != size {
 				t.Fatal("custom button's paint should shrink while layout stays fixed")
 			}
-			if kind == "subtab" && (label.Visible() || label.TextSize != font) {
-				t.Fatal("a pressed subtab should show its picture in place of an unchanged label")
+			if label.Visible() || label.TextSize != font || label.Text != shown {
+				t.Fatal("the press should scale the picture of the label at its original font size and fit")
+			}
+			if kind != "subtab" {
+				if fill.Visible() || picture.Image == nil || pressed >= size.Width || picture.Position().X != (size.Width-pressed)/2 {
+					t.Fatal("the tag should shrink the fill and label together around its centre")
+				}
+				img := picture.Image
+				bounds := img.Bounds()
+				hasInk := false
+				for y := bounds.Min.Y; y < bounds.Max.Y && !hasInk; y++ {
+					for x := bounds.Min.X; x < bounds.Max.X; x++ {
+						if _, _, _, alpha := img.At(x, y).RGBA(); alpha>>8 > 200 {
+							hasInk = true // the translucent fill alone cannot reach this alpha
+							break
+						}
+					}
+				}
+				if !hasInk {
+					t.Fatal("the pressed tag picture should contain the label ink")
+				}
 			}
 			renderer.Layout(size)
 			if drawn() != pressed {
@@ -283,10 +322,40 @@ func TestCustomActionTagsAndSubtabsUseTheSamePressFeedback(t *testing.T) {
 			if label.TextSize != font || !label.Visible() || button.MinSize() != minimum {
 				t.Fatal("custom button should return to its original size")
 			}
-			if kind == "subtab" && pressedInk(button) != 0 {
-				t.Fatal("a subtab at rest should show its own label, not the picture")
+			if drawn() != 0 {
+				t.Fatal("the press picture should disappear at rest")
 			}
 		})
+	}
+}
+
+func TestLogWorkBackFadesHoverInAndOut(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	fyne.CurrentApp().Settings().SetTheme(shell.GoldTheme{Theme: theme.DefaultTheme()})
+	logwork.OpenGroupEditor(ui, backend.Group{Date: shell.Today()})
+	back := waitForButton(t, ui.Win, "Back")
+	driver := collectMotion(t)
+	back.Refresh()
+	fill := test.WidgetRenderer(back).Objects()[0].(*canvas.Rectangle)
+	rest := fill.FillColor
+	back.MouseIn(&desktop.MouseEvent{})
+	if len(driver.anims) != 1 || driver.anims[0].Duration != 600*time.Millisecond {
+		t.Fatal("Back should fade in over 600 ms")
+	}
+	driver.anims[0].Tick(1)
+	hover := fill.FillColor
+	back.MouseOut()
+	if sameColor(hover, rest) || len(driver.anims) != 2 || driver.anims[1].Duration != 600*time.Millisecond {
+		t.Fatal("Back should fade out over 600 ms")
+	}
+	driver.anims[1].Tick(.5)
+	if sameColor(fill.FillColor, hover) || sameColor(fill.FillColor, rest) {
+		t.Fatal("Back should remain partly highlighted halfway through its fade out")
+	}
+	driver.anims[1].Tick(1)
+	if !sameColor(fill.FillColor, rest) {
+		t.Fatal("Back should return to its resting fill")
 	}
 }
 
@@ -459,6 +528,144 @@ func TestPopupClosedByAClickGoesAtOnce(t *testing.T) {
 	if len(layer.Objects) != 0 {
 		t.Fatal("the closing picture should be gone at the end")
 	}
+}
+
+func TestMenuPillsAndSettingsGearFadeInAndOut(t *testing.T) {
+	a, driver := pressTestApp(t)
+	w := a.NewWindow("menu hover")
+	defer w.Close()
+	tabs := shell.NewPillTabs(
+		container.NewTabItem(shell.LogListTabName, widget.NewLabel("log list")),
+		container.NewTabItem(shell.KanbanTabName, widget.NewLabel("kanban")),
+		container.NewTabItemWithIcon(shell.SettingsTabName, theme.SettingsIcon(), widget.NewLabel("settings")),
+	)
+	w.SetContent(tabs)
+	w.Resize(fyne.NewSize(600, 200))
+	var controls []fyne.Widget
+	walkRendered(tabs, func(o fyne.CanvasObject) {
+		if button, ok := o.(interface {
+			fyne.Widget
+			SetIcon(fyne.Resource)
+		}); ok {
+			controls = append(controls, button)
+		}
+	})
+	if len(controls) != len(tabs.Items) {
+		t.Fatal("menu pills or Settings gear missing")
+	}
+	// The tabs, like the Projects list, share one gold pill that fades in on
+	// the tab under the pointer, glides from tab to tab and fades out.
+	pillFill := widgets.WithAlpha(widgets.LogoGold, 0.16)
+	pill := func() *canvas.Rectangle {
+		var found *canvas.Rectangle
+		walkRendered(tabs, func(o fyne.CanvasObject) {
+			if r, ok := o.(*canvas.Rectangle); ok && r.StrokeWidth == 1 && r.CornerRadius > 0 {
+				if _, _, _, alpha := r.FillColor.RGBA(); alpha > 0 && found == nil {
+					found = r
+				}
+			}
+		})
+		return found
+	}
+	centre := func(o fyne.CanvasObject) fyne.Position {
+		return a.Driver().AbsolutePositionForObject(o).Add(fyne.NewPos(o.Size().Width/2, o.Size().Height/2))
+	}
+	last := func(name string) *fyne.Animation {
+		t.Helper()
+		if len(driver.anims) == 0 {
+			t.Fatalf("%s: nothing animated", name)
+		}
+		anim := driver.anims[len(driver.anims)-1]
+		if anim.Duration != 600*time.Millisecond {
+			t.Fatalf("%s takes %v, want 600 ms", name, anim.Duration)
+		}
+		return anim
+	}
+	logList, kanban := tabs.Views[0], tabs.Views[1]
+	ownFill := test.WidgetRenderer(controls[0]).Objects()[0].(*canvas.Rectangle)
+	rest := ownFill.FillColor
+	driver.anims = nil
+	test.MoveMouse(w.Canvas(), centre(logList))
+	enter := last("the pill's fade-in")
+	enter.Tick(0.5)
+	if p := pill(); p == nil || sameColor(p.FillColor, pillFill) {
+		t.Fatal("the pill should be part way faded in")
+	}
+	enter.Tick(1)
+	p := pill()
+	if p == nil || !sameColor(p.FillColor, pillFill) {
+		t.Fatal("the gold pill should light the tab under the pointer")
+	}
+	if !sameColor(ownFill.FillColor, rest) {
+		t.Fatal("the tab's own hover wash should be off: the pill is the hover")
+	}
+	at := func(o fyne.CanvasObject) bool {
+		return a.Driver().AbsolutePositionForObject(p) == a.Driver().AbsolutePositionForObject(o) && p.Size() == o.Size()
+	}
+	if !at(logList) {
+		t.Fatal("the pill should stand on Log List")
+	}
+	driver.anims = nil
+	test.MoveMouse(w.Canvas(), centre(kanban))
+	glide := last("the glide to Kanban")
+	glide.Tick(0.5)
+	if x := a.Driver().AbsolutePositionForObject(p).X; x <= a.Driver().AbsolutePositionForObject(logList).X || x >= a.Driver().AbsolutePositionForObject(kanban).X {
+		t.Fatal("the pill should glide from Log List towards Kanban")
+	}
+	glide.Tick(1)
+	if !at(kanban) || !sameColor(p.FillColor, pillFill) {
+		t.Fatal("the pill should settle on Kanban, still lit")
+	}
+	// The gear takes the same hover.
+	gear := tabs.Views[2]
+	driver.anims = nil
+	test.MoveMouse(w.Canvas(), centre(gear))
+	last("the glide to the gear").Tick(1)
+	if !at(gear) {
+		t.Fatal("the pill should light the gear too")
+	}
+	driver.anims = nil
+	test.MoveMouse(w.Canvas(), fyne.Position{})
+	leave := last("the pill's fade-out")
+	leave.Tick(1)
+	if _, _, _, alpha := p.FillColor.RGBA(); alpha != 0 {
+		t.Fatal("the pill should fade out when the pointer leaves the bar")
+	}
+	checkFade := func(name string, control fyne.Widget, background *canvas.Rectangle) {
+		t.Helper()
+		rest := background.FillColor
+		driver.anims = nil
+		test.MoveMouse(w.Canvas(), centre(control))
+		enter := last(name + " fade-in")
+		enter.Tick(0.5)
+		middle := background.FillColor
+		enter.Tick(1)
+		hover := background.FillColor
+		if sameColor(middle, rest) || sameColor(middle, hover) {
+			t.Fatalf("%q should blend its hover colour", name)
+		}
+		driver.anims = nil
+		test.MoveMouse(w.Canvas(), fyne.Position{})
+		last(name + " fade-out").Tick(1)
+		if !sameColor(background.FillColor, rest) {
+			t.Fatalf("%q should return to its resting colour", name)
+		}
+	}
+	driver.anims = nil
+	tabs.ShowUpdate(true)
+	for _, anim := range driver.anims {
+		anim.Tick(1)
+	}
+	var badge *canvas.Rectangle
+	walkRendered(tabs, func(o fyne.CanvasObject) {
+		if r, ok := o.(*canvas.Rectangle); ok && sameColor(r.FillColor, shell.TagRestFill) {
+			badge = r
+		}
+	})
+	if badge == nil {
+		t.Fatal("Update Available capsule is missing")
+	}
+	checkFade("Settings with an update", controls[len(controls)-1], badge)
 }
 
 // The gear stands under the menu bar's own theme, where the accent is gold. Its

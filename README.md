@@ -485,8 +485,8 @@ push** sends it to GitHub. Drafts can be sorted by duration or earliest creation
 The same search narrows pending commits, saved entries and the Log Work calendar.
 The remarks editor counts towards the board's 1024-character limit. At the
 limit, **Separate worklog remarks** offers an animated checkbox; selecting it
-slides a short remarks field in from the right while preserving the full issue
-description. **Compact remarks** shortens text locally; no API key is needed.
+slides a second field in from the right. Edit the copy in that field to fit
+the remarks limit while keeping the full issue description.
 Regular worklogs, commits and single Code Reviews create sub-issues. Existing
 entries keep their original target when re-pushed. Every pushed worklog uses
 the **Worklog** GitHub issue type and writes the same minutes total to the
@@ -878,3 +878,40 @@ try {
 The Python finishing script requires Pillow. The other `TestReadme*DemoFrames`
 recordings also accept `DEMO_OUT` for still images; pass a temp folder there too,
 then copy only the finished documentation assets into `docs/`.
+
+#### v2.0.0 issue media
+
+Three captioned GIFs demonstrate the new features with fictional data:
+[Worklog and commit references](docs/v2-worklog-flow.gif),
+[the pull request offer](docs/v2-pull-request.gif), and
+[the Log Work calendar](docs/v2-logwork-calendar.gif).
+The [Repo folders screenshot](docs/screenshots/v2-repo-folders.png) shows the
+required setup under Settings > Sources.
+
+The demo executes the Worklog push against mocked GitHub responses and rewrites
+commits in a temporary clone whose remote is a temporary bare repository. It
+checks the Worklog's parent, type and minutes, the added commit references,
+preserved uncommitted edits, and the PR link. It never contacts GitHub or uses
+the app's real data. Captions are added outside the app capture.
+
+After preparing the build module, regenerate all four assets with:
+
+```powershell
+$v2Media = Join-Path $env:TEMP ('worklog-v2-media-' + [guid]::NewGuid())
+$previousFrames, $previousOut = $env:DEMO_FRAMES, $env:DEMO_OUT
+try {
+    $env:DEMO_FRAMES = Join-Path $v2Media 'frames'
+    $env:DEMO_OUT = Join-Path $v2Media 'screenshots'
+    go test -modfile .build/cursors/worklog.mod -tags cursors,demo ./tests -run '^TestReadmeV2DemoFrames$' -count=1
+    if ($LASTEXITCODE -ne 0) { throw 'v2 media capture failed' }
+    python docs/make_readme_media.py $env:DEMO_OUT $env:DEMO_FRAMES docs --only v2-worklog-flow v2-pull-request v2-logwork-calendar
+    if ($LASTEXITCODE -ne 0) { throw 'v2 media generation failed' }
+} finally {
+    $env:DEMO_FRAMES, $env:DEMO_OUT = $previousFrames, $previousOut
+    if (Test-Path -LiteralPath $v2Media) { Remove-Item -LiteralPath $v2Media -Recurse -Force }
+}
+```
+
+On Windows, use a C compiler installed at a path without spaces if the linker
+cannot resolve `default-manifest.o`; set `CC` for that shell session. This
+machine's alternate compiler is `C:\mingw64\bin\gcc.exe`.

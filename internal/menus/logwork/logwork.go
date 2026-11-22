@@ -10,9 +10,7 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -63,6 +61,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// the "which day" question the same way — with the month grid painted by
 	// how full each day already is.
 	mDate := NewWorklogDatePicker(ui, shell.Today())
+	mDate.followToday = true
 	// Meetings have an editable title; their notes use the text editor below.
 	mDesc := widget.NewEntry()
 	mDesc.SetPlaceHolder("Meeting title (e.g. Sprint planning)")
@@ -74,7 +73,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// The popup's remarks box, with its live count and, from remarkCap up, its
 	// Separate worklog remarks tick. Here the boxes grow with what is typed, a
 	// row at a time, instead of scrolling inside a box of four.
-	mText := CommitTextEditor(ui, "", "", mMsg)
+	mText := CommitTextEditor("", "")
 	mText.desc.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
 	mText.growWithText(4, func() { shell.Relayout(ui.LogBody) })
 	recordingRow := meetingRecordingField(mRecording)
@@ -496,8 +495,9 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 
 	saveBtn := widget.NewButton("Save draft", func() { mSave(false) })
 	pushBtn := widget.NewButton("Save & push", func() { mSave(true) })
+	mPushView := shell.GitHubButton(pushBtn)
 	// New worklogs always create sub-issues, so only the actions are needed.
-	actionRow := container.NewHBox(layout.NewSpacer(), saveBtn, shell.GitHubButton(pushBtn))
+	actionRow := container.NewHBox(layout.NewSpacer(), saveBtn, mPushView)
 
 	// Date on its own row so the picker's month can drop under it without
 	// fighting Minutes for width; Minutes rides alongside as a narrower field.
@@ -630,6 +630,9 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 	}
 
+	showPushOnItsDay(mPushView, mDate, false)
+	mDate.watchDay()
+
 	ui.RecentBox = container.NewVBox()
 	// The week sits under the saved entries: its columns grow as tall as the
 	// cards standing in them, so putting it first pushed the list itself off the
@@ -668,10 +671,16 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	var logScroll *container.Scroll
 	var page *fyne.Container
 	var recentCard *fyne.Container
+	var pinWeekdays func()
 	// Every frame of a slide re-lays the page from the scroll inwards, so the
 	// view follows the page as it grows or shrinks.
 	reflow := func(inner fyne.CanvasObject) func(bool) {
-		return func(final bool) { shell.Reflow(final, logScroll, ui.LogBody, page, inner) }
+		return func(final bool) {
+			shell.Reflow(final, logScroll, ui.LogBody, page, inner)
+			if pinWeekdays != nil {
+				pinWeekdays()
+			}
+		}
 	}
 	formReflow = reflow(logCard)
 	pendingReflow = formReflow
@@ -680,8 +689,9 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// Room above and below the title, so it reads as a heading between the
 	// form's panel and its divider rather than squeezed between them.
 	savedHeadRoom := container.New(layout.NewCustomPaddedLayout(gap, gap, 0, 0), savedHead)
-	recentCard = container.NewVBox(savedHeadRoom, shell.PanelDivider(), savedArea,
-		container.New(layout.NewCustomPaddedLayout(gap, 0, gap, gap), ui.WeekBox))
+	// No side margin of its own: the week lines up with the form panel above.
+	weekInset := container.New(layout.NewCustomPaddedLayout(gap, 0, 0, 0), ui.WeekBox)
+	recentCard = container.NewVBox(savedHeadRoom, shell.PanelDivider(), savedArea, weekInset)
 
 	// The dragging layer sits above the scroll rather than inside it: the card
 	// being carried has to pass over everything, and inside the scroll it would
@@ -698,7 +708,15 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	page = container.NewVBox(ui.LogProgress.View, logCard, recentCard)
 	ui.LogBody = shell.PageInset(page)
 	logScroll = shell.NewPageScroll(ui.LogBody, page, ui.LogBody)
-	return container.NewStack(logScroll, ui.DragLayer)
+	pinWeekdays = func() {
+		top := page.Position().Y + recentCard.Position().Y + weekInset.Position().Y + ui.WeekBox.Position().Y
+		pinWeekdayHeadings(ui, logScroll.Offset.Y-top)
+	}
+	ui.LogBody.Layout = &calendarPageLayout{body: ui.LogBody.Layout, pin: pinWeekdays}
+	logScroll.OnScrolled = func(fyne.Position) { pinWeekdays() }
+	// No shade at the scroll's top edge: it fell across the pinned weekday
+	// headings once the page scrolled.
+	return container.NewStack(shell.NoScrollShadow(logScroll), ui.DragLayer)
 }
 
 // NewDateEntryISO builds a calendar-backed date field seeded from a YYYY-MM-DD
@@ -983,7 +1001,7 @@ func sections(ui *shell.UI, groups []backend.Group, arrive *shell.Arrival) fyne.
 	var objs []fyne.CanvasObject
 	for i, s := range all {
 		if i > 0 {
-			objs = append(objs, container.NewPadded(sectionRule()))
+			objs = append(objs, container.NewPadded(widget.NewSeparator()))
 		}
 		// The loose tiles are "other" only when something named stands above
 		// them. With nothing grouped they are the whole list, and a heading
@@ -1027,13 +1045,6 @@ func sectionHeading(ui *shell.UI, s pendingSection) fyne.CanvasObject {
 	// The name is gold, "Other commits" included, as a panel's heading is.
 	gold := container.NewThemeOverride(heading, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	return container.NewVBox(gold, detail)
-}
-
-// sectionRule stays light grey even inside a panel with dark separators.
-func sectionRule() fyne.CanvasObject {
-	line := canvas.NewRectangle(color.NRGBA{R: 0x68, G: 0x68, B: 0x68, A: 0xff})
-	line.SetMinSize(fyne.NewSize(0, 1))
-	return line
 }
 
 // bubbleGrid is one block of tiles, wrapped into as many rows as the width
@@ -1169,6 +1180,13 @@ func GroupBubble(ui *shell.UI, g backend.Group, underHeading bool) fyne.CanvasOb
 	// row so it cannot squeeze every line of a long title into a narrow column.
 	// Its hover fades in and out as the saved cards' Delete does.
 	actionRow := container.NewHBox(layout.NewSpacer(), shell.FadeHover(skip))
+	for _, c := range g.Commits {
+		if c.Local {
+			// Only on this machine: its reference goes on before it is pushed.
+			actionRow = container.NewHBox(container.NewCenter(shell.PendingPushTag()), layout.NewSpacer(), shell.FadeHover(skip))
+			break
+		}
+	}
 	alignedFooter := container.New(layout.NewCustomPaddedLayout(0, 0, theme.InnerPadding(), theme.InnerPadding()), footer)
 	body := container.NewBorder(nil, container.NewVBox(alignedFooter, actionRow), nil, nil, titleLbl)
 
@@ -1201,15 +1219,15 @@ func ShortIssueLabel(info backend.IssueInfo, ref string) string {
 
 // OpenGroupEditor shows the full logging form for one group in a popup.
 func OpenGroupEditor(ui *shell.UI, g backend.Group) {
-	var d dialog.Dialog
+	var closeEditor func()
 	form := GroupEditor(ui, g,
 		// The list behind updates as soon as the row is written…
 		func(logged []backend.Commit) { DropLoggedCommits(ui, g, logged) },
 		// …but the popup only closes once there is no result left to read, so
 		// a push error or its URL is never hidden before it is seen.
 		func() {
-			if d != nil {
-				shell.CloseDialog(d, ui.Win)
+			if closeEditor != nil {
+				closeEditor()
 			}
 		})
 	heading := g.Date
@@ -1218,38 +1236,33 @@ func OpenGroupEditor(ui *shell.UI, g backend.Group) {
 	} else if g.Issue != "" {
 		heading = g.Date + "  ·  " + g.Issue
 	}
-	// No dismiss button: dialog.NewCustom parks it centred at the bottom, past
-	// the end of a long form. The back arrow rides at the top left instead,
-	// where it is reachable without scrolling.
-	back := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
-		if d != nil {
-			shell.CloseDialog(d, ui.Win)
-		}
-	})
-	back.Importance = widget.LowImportance
-	content := PopupShell(back, form)
-	d = dialog.NewCustomWithoutButtons(ui.PopupTitle(heading), shell.FitPopup(content), ui.Win)
-	d.Resize(ui.PopupSizeFor(content))
-	shell.ShowDialog(d, ui.Win)
+	closeEditor = showWorklogEditor(ui, heading, form)
 }
 
-// PopupShell puts Back and the form's actions on one line above the body, with
-// the result line under them. Both stay put while the form scrolls, so a push
-// result is readable from wherever the remarks were left.
-//
-// Below the bar the fields take the height they need and the remarks take the
-// rest, down to the bottom edge. The remarks used to sit inside the one scroll
-// that held the whole form, which nested the entry's own scroller inside
-// another — the wheel was swallowed by whichever one the pointer happened to be
-// over, and over the remarks that meant the form would not move at all. Now no
-// scroller contains another. topFill caps the fields at a share of the popup so
-// a group with a long commit list scrolls rather than eating the remarks.
-func PopupShell(back fyne.CanvasObject, form editorForm) fyne.CanvasObject {
+func showWorklogEditor(ui *shell.UI, heading string, form editorForm) func() {
+	stopWatching := form.date.watchDay()
+	var popup *widget.PopUp
+	closeEditor := func() {
+		if popup != nil {
+			shell.ClosePopUp(popup)
+			popup = nil
+			stopWatching()
+		}
+	}
+	back := shell.FadeQuietButton(widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), closeEditor))
+	popup = ui.ShowEditorPopup(heading, back, form.actions, PopupShell(form))
+	return closeEditor
+}
+
+// PopupShell lays out the form beneath the popup header. The status line stays
+// above the scrolling fields and the remarks use the remaining height.
+func PopupShell(form editorForm) fyne.CanvasObject {
 	fields := container.NewVScroll(form.Body)
-	bar := container.NewBorder(nil, nil, back, form.actions)
-	return container.NewBorder(
-		container.NewVBox(bar, form.msg), nil, nil, nil,
+	view := container.NewBorder(
+		form.msg.label, nil, nil, nil,
 		container.New(widgets.NewTopFill(0.45, form.Body), fields, form.remarks))
+	form.msg.view = view
+	return view
 }
 
 // DropLoggedCommits removes the commits just written from the cached result, so
@@ -1288,60 +1301,45 @@ func DropLoggedCommits(ui *shell.UI, g backend.Group, logged []backend.Commit) {
 	DrawRecent(ui)
 }
 
-// editorForm is what a popup editor hands back in pieces, so the popup can
-// place them itself. The action bar and the result line used to sit at the foot
-// of the form, where a full set of remarks pushed them under the fold and left
-// Back holding a line of its own at the top. Now Back, the buttons and the mode
-// dropdown share that one line, and neither the buttons nor the push result can
-// scroll out of sight. The remarks come out separately because they are the one
-// part sized to the popup rather than to its content.
+// editorForm hands the popup its title bar actions, status line, fields and
+// remarks pane so each can take the room it needs.
 type editorForm struct {
+	date    *WorklogDatePicker
 	Body    fyne.CanvasObject // the fields, sized to fit
 	remarks fyne.CanvasObject // stretches to the foot of the popup
 	actions fyne.CanvasObject
-	msg     fyne.CanvasObject
+	msg     *editorStatus
 }
 
 // All is the whole form as one object, for callers that place it themselves
 // rather than splitting it across a popup shell.
 func (f editorForm) All() fyne.CanvasObject {
-	return container.NewVBox(f.actions, f.msg, f.Body, f.remarks)
+	view := container.NewVBox(f.actions, f.msg.label, f.Body, f.remarks)
+	f.msg.view = view
+	return view
 }
 
-// remarksEditor builds the remarks box both editors share: a multi-line entry
-// that fills the foot of the popup, a live count against remarkCap, and a local
-// compaction button. The count hangs off OnChanged rather than being poked by
-// every caller, so text written from code — a rebuilt set of remarks, a compacted
-// result — updates it too. The middle return is the whole pane, caption and
-// box, ready to be handed the bottom of the popup.
-func remarksEditor(ui *shell.UI, text string, msg *widget.Label) (*widget.Entry, fyne.CanvasObject, *widget.Button) {
-	remE := widget.NewMultiLineEntry()
-	// A floor, not a height: the pane hands the box whatever room is left below
-	// the divider, which on any normal window is far more than six rows. Asking
-	// for sixteen here would only stop the divider being dragged up.
-	remE.SetMinRowsVisible(6)
-	// A multi-line entry clips by default, so a long bullet ran off to the right
-	// and scrolling down dragged the view sideways with it. Wrap instead: every
-	// line stays inside the box and the only scrolling left is vertical.
-	remE.Wrapping = fyne.TextWrapWord
-	counter := widget.NewLabel("")
-	update := func() { counter.SetText(fmt.Sprintf("%d / %d", len(remE.Text), backend.RemarkCap)) }
-	remE.OnChanged = func(string) { update() }
-	remE.SetText(text)
-	update() // empty text is not a change, so OnChanged never fired
+// editorStatus takes up space only when the form has feedback to show.
+type editorStatus struct {
+	label *widget.Label
+	view  *fyne.Container
+}
 
-	aiBtn := widget.NewButton("Compact remarks", func() {
-		before := len(remE.Text)
-		out := backend.CompactLocally(strings.Split(remE.Text, "\n"))
-		remE.SetText(out)
-		msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", before, len(out)))
-	})
-	// Border, not VBox: the caption keeps its own line and the box takes every
-	// pixel under it, however tall the pane turns out to be.
-	pane := container.NewBorder(
-		container.NewHBox(widget.NewLabel("Worklog remarks"), counter),
-		nil, nil, nil, remE)
-	return remE, pane, aiBtn
+func newEditorStatus() *editorStatus {
+	label := widget.NewLabel("")
+	label.Hide()
+	return &editorStatus{label: label}
+}
+
+func (s *editorStatus) SetText(text string) {
+	s.label.SetText(text)
+	visible := text != ""
+	if s.label.Visible() != visible {
+		shell.ShowIf(s.label, visible)
+		if s.view != nil {
+			s.view.Refresh()
+		}
+	}
 }
 
 // commitText is the text pane of a commit entry. Until the text outgrows
@@ -1349,15 +1347,12 @@ func remarksEditor(ui *shell.UI, text string, msg *widget.Label) (*widget.Entry,
 // sub-issue's description and the Worklog remarks field. Past remarkCap a
 // "Separate worklog remarks" tick appears; ticking it keeps the first box as
 // the description, free up to bodyCap, and opens a second box beside it for
-// the remarks, with a count of its own against remarkCap. That way a long
-// commit write-up lands on the issue in full instead of being cut or
-// compacted to fit a project field.
+// the remarks, with a count of its own against remarkCap.
 type commitText struct {
 	desc     *widget.Entry
 	Remarks  *widget.Entry
 	Separate *widget.Check
 	pane     fyne.CanvasObject
-	aiBtn    *widget.Button
 }
 
 // Split reports whether the remarks are their own text.
@@ -1424,7 +1419,7 @@ func (t *commitText) clear() {
 	t.Remarks.SetText("")
 }
 
-func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *commitText {
+func CommitTextEditor(remarks, body string) *commitText {
 	t := &commitText{}
 	descE := widget.NewMultiLineEntry()
 	descE.SetMinRowsVisible(6)
@@ -1467,10 +1462,9 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 		host.setSplit(t.Split(), !initializing)
 	}
 	t.Separate.OnChanged = func(on bool) {
-		// The remarks box starts from the description cut to fit, a bullet
-		// at a time, so there is something to edit rather than a blank box.
+		// Copy the original text into a new remarks box so the user can edit it.
 		if on && strings.TrimSpace(remE.Text) == "" {
-			remE.SetText(backend.CompactLocally(strings.Split(strings.TrimSpace(descE.Text), "\n")))
+			remE.SetText(descE.Text)
 		}
 		update()
 	}
@@ -1486,17 +1480,6 @@ func CommitTextEditor(ui *shell.UI, remarks, body string, msg *widget.Label) *co
 	}
 	update()
 	initializing = false
-
-	// Compaction stays local; a split keeps the full description intact.
-	t.aiBtn = widget.NewButton("Compact remarks", func() {
-		src, dst := descE.Text, descE
-		if t.Split() {
-			dst = remE
-		}
-		out := backend.CompactLocally(strings.Split(src, "\n"))
-		dst.SetText(out)
-		msg.SetText(fmt.Sprintf("Compacted %d chars to %d. Check before pushing.", len(src), len(out)))
-	})
 
 	t.pane = host
 	return t
@@ -1574,28 +1557,39 @@ func applyPushResult(ui *shell.UI, id string, res backend.PushResult) (string, b
 // so an entry can be corrected before it is pushed — or after, if the wrong
 // minutes went up.
 func openRowEditor(ui *shell.UI, r backend.Row, refresh func()) {
-	var d dialog.Dialog
+	var closeEditor func()
 	form := RowEditor(ui, r, refresh, func() {
-		if d != nil {
-			shell.CloseDialog(d, ui.Win)
+		if closeEditor != nil {
+			closeEditor()
 		}
 	})
-	heading := r["date"]
+	// The popup is named after the issue; its date, issue and commits are
+	// on the line under the heading.
+	heading := RowTitle(ui, r)
 	if r["type"] == backend.KindIndependent && strings.TrimSpace(r["parent_title"]) != "" {
-		heading = "Standalone task  ·  " + strings.TrimSpace(r["parent_title"])
-	} else if r["issue"] != "" {
-		heading += "  ·  " + r["issue"]
+		heading = strings.TrimSpace(r["parent_title"])
 	}
-	back := widget.NewButtonWithIcon("Back", theme.NavigateBackIcon(), func() {
-		if d != nil {
-			shell.CloseDialog(d, ui.Win)
-		}
-	})
-	back.Importance = widget.LowImportance
-	content := PopupShell(back, form)
-	d = dialog.NewCustomWithoutButtons(ui.PopupTitle(heading), shell.FitPopup(content), ui.Win)
-	d.Resize(ui.PopupSizeFor(content))
-	shell.ShowDialog(d, ui.Win)
+	if strings.TrimSpace(heading) == "" {
+		heading = r["date"]
+	}
+	closeEditor = showWorklogEditor(ui, heading, form)
+}
+
+// createdDate is the day an entry was saved here, from its logged_at stamp.
+func createdDate(loggedAt string) string {
+	at := strings.TrimSpace(loggedAt)
+	if len(at) >= 10 && backend.ValidPlannerDate(at[:10]) {
+		return at[:10]
+	}
+	return ""
+}
+
+// commitLine names the commit's date beside the entry's created date.
+func commitLine(date string) string {
+	if date == "" {
+		return ""
+	}
+	return "Committed " + date
 }
 
 // RowEditor is the group editor minus the commit picker: which commits the row
@@ -1605,6 +1599,8 @@ func openRowEditor(ui *shell.UI, r backend.Row, refresh func()) {
 func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) editorForm {
 	isIndependent := r["type"] == backend.KindIndependent
 	createsOwnIssue := backend.RowCreatesOwnIssue(r)
+	refs := backend.RowCommitRefs(r)
+	commitDate := savedCommitDate(ui, r["commit_date"], refs)
 	dateE := NewWorklogDatePicker(ui, r["date"])
 	ownE := widget.NewEntry()
 	ownE.SetText(backend.OrDefault(r["owner"], ui.Cfg.WorklogOwner))
@@ -1637,12 +1633,11 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	recordingE.SetPlaceHolder("https://… (meeting recording)")
 	recordingE.SetText(r["meeting_recording"])
 
-	msg := widget.NewLabel("")
+	msg := newEditorStatus()
 	// Older rows carry their work in description with no remarks yet. Seed
 	// from that original text, independently of the issue title shown above.
 	// Every kind can keep a full issue body separate from capped remarks.
-	text := CommitTextEditor(ui, backend.OrDefault(r["remarks"], r["description"]), r["issue_body"], msg)
-	remPane, aiBtn := text.pane, text.aiBtn
+	text := CommitTextEditor(backend.OrDefault(r["remarks"], r["description"]), r["issue_body"])
 
 	modeVal := func() string {
 		if createsOwnIssue && !isIndependent {
@@ -1683,6 +1678,9 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			"issue":       issue,
 			"owner":       strings.TrimSpace(ownE.Text),
 			"remarks":     remarks, "issue_body": issueBody, "mode": modeVal(),
+		}
+		if commitDate != "" {
+			patch["commit_date"] = commitDate
 		}
 		if r["type"] == backend.KindMeeting {
 			patch["display_title"] = ""
@@ -1761,14 +1759,28 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			if complete && onFinished != nil {
 				onFinished()
 			}
+			if complete && rowNeedsRefRun(r) {
+				addWorklogRefs(ui, refresh)
+			}
 		})
 	}
 
 	saveBtn := widget.NewButton("Save", func() { save(false) })
 	pushBtn := widget.NewButton("Save & push", func() { save(true) })
 
-	header := container.NewHBox(
-		widget.NewLabelWithStyle(r["date"], fyne.TextAlignLeading, fyne.TextStyle{Bold: true}))
+	// When the entry was saved here, then the commit's own date, then what it
+	// is for.
+	created := widget.NewLabel("")
+	if at := createdDate(r["logged_at"]); at != "" {
+		created.SetText("Created " + at)
+	} else {
+		created.Hide()
+	}
+	commitDateLabel := widget.NewLabelWithStyle(commitLine(commitDate), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	if commitDate == "" {
+		commitDateLabel.Hide()
+	}
+	header := container.NewHBox(created, commitDateLabel)
 	if createsOwnIssue {
 		label := "Standalone issue"
 		switch r["type"] {
@@ -1783,19 +1795,25 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	} else {
 		header.Add(shell.IssueHyperlink(r["issue"]))
 	}
-	// Each sha carries the repo it is in, so it links to the commit itself. Rows
-	// written before that was stored have the sha alone; for those the issue's
-	// repo is the only guess available, which is what the link used to be built
-	// from for every row — and why it so often 404'd. Without either, plain text.
-	fallback := ""
-	if owner, name, _, err := backend.SplitIssue(r["issue"]); err == nil {
-		fallback = owner + "/" + name
-	}
 	if !createsOwnIssue {
-		for _, ref := range backend.ParseCommitRefs(r["refs"]) {
-			header.Add(shell.CommitHyperlink(backend.Commit{
-				Repo: backend.OrDefault(ref.Repo, fallback), Sha: ref.Sha}))
+		for _, ref := range refs {
+			header.Add(shell.CommitHyperlink(backend.Commit{Repo: ref.Repo, Sha: ref.Sha}))
 		}
+	}
+	if commitDate == "" && len(refs) > 0 && len(ui.Cfg.RepoFolders) > 0 {
+		folders := append([]string(nil), ui.Cfg.RepoFolders...)
+		var date string
+		ui.Async(func() error {
+			date = localCommitDate(folders, refs)
+			return nil
+		}, func() {
+			if date != "" {
+				commitDate = date
+				commitDateLabel.SetText(commitLine(date))
+				commitDateLabel.Show()
+				header.Refresh()
+			}
+		})
 	}
 
 	var notes []fyne.CanvasObject
@@ -1832,17 +1850,17 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	}
 	fields := container.NewVBox(fieldRow, dayFillReadout(ui, dateE, minE, r["id"]))
 	descriptionField := shell.Labeled("Description (kept locally, not pushed)", descE)
+	remPane := text.pane
 	if r["type"] == backend.KindMeeting {
 		descE.SetPlaceHolder("Meeting title (e.g. Sprint planning)")
 		descriptionField = shell.Labeled("Meeting title", descE)
 		remPane = container.NewBorder(nil, meetingRecordingField(recordingE), nil, nil, remPane)
 	}
-	// Caption beside the dropdown rather than stacked over it: the bar shares a
-	// line with Back, and a two-row label would drag that whole line taller.
-	actionItems := []fyne.CanvasObject{aiBtn, saveBtn, shell.GitHubButton(pushBtn)}
-
-	actions := container.NewHBox(actionItems...)
+	pushView := shell.GitHubButton(pushBtn)
+	showPushOnItsDay(pushView, dateE, rowSent(r))
+	actions := container.NewHBox(saveBtn, pushView)
 	return editorForm{
+		date: dateE,
 		Body: container.NewVBox(append(notes,
 			header,
 			fields,
@@ -1884,9 +1902,9 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		return rowPlace(backend.Row{"issue": ref}), ""
 	}
 
-	msg := widget.NewLabel("")
-	text := CommitTextEditor(ui, g.Remarks, "", msg)
-	remE, remPane, aiBtn := text.desc, text.pane, text.aiBtn
+	msg := newEditorStatus()
+	text := CommitTextEditor(g.Remarks, "")
+	remE := text.desc
 
 	pickedCommits := func() []backend.Commit {
 		var picked []backend.Commit
@@ -1942,6 +1960,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		desc := shell.Truncate(RowLabel(ui, issue, picked), 200)
 		made, err := ui.Store.AppendRows([]backend.Row{{
 			"date": date, "minutes": strconv.Itoa(mins), "type": "commit",
+			"commit_date": backend.OrDefault(picked[0].Date, g.Date),
 			"description": desc, "refs": strings.Join(shas, ","),
 			"issue": issue, "owner": ownE.Text,
 			"remarks": remarks, "issue_body": issueBody, "mode": modeVal(),
@@ -1961,6 +1980,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 				onFinished()
 			}
 			ui.ShowDraftSavedInfo()
+			checkDraftsMerged(ui)
 			return
 		}
 		if row["issue"] == "" {
@@ -1977,8 +1997,9 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		var res backend.PushResult
 		var perr error
 		ui.Async(func() error {
+			row = ui.Store.CheckRowMerged(row)
 			res, perr = backend.PushEntry(ui.Cfg, row["issue"], row["date"], row["owner"], mins,
-				row["remarks"], row["issue_body"], row["mode"], row["issue_url"],
+				row["remarks"], backend.WorklogIssueBody(row, row["remarks"]), row["mode"], row["issue_url"],
 				backend.SubTitleBaseFor(row), pushProgress)
 			return nil // handle push error inline so the saved row is not lost
 		}, func() {
@@ -2012,6 +2033,9 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 			if res.Complete() && onFinished != nil {
 				onFinished()
 			}
+			if res.Complete() && rowNeedsRefRun(row) {
+				addWorklogRefs(ui, func() { DrawRecent(ui) })
+			}
 		})
 	}
 
@@ -2037,16 +2061,17 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		),
 		dayFillReadout(ui, dateE, minE, ""),
 	)
-	actions := container.NewHBox(
-		aiBtn, saveBtn, shell.GitHubButton(pushBtn),
-	)
+	pushView := shell.GitHubButton(pushBtn)
+	showPushOnItsDay(pushView, dateE, false)
+	actions := container.NewHBox(saveBtn, pushView)
 	return editorForm{
+		date: dateE,
 		Body: container.NewVBox(
 			header,
 			container.NewVBox(commitRows...),
 			fields,
 		),
-		remarks: remPane,
+		remarks: text.pane,
 		actions: actions,
 		msg:     msg,
 	}

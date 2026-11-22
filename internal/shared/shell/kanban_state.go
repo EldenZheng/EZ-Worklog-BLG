@@ -77,9 +77,6 @@ type KanbanUI struct {
 	// pointer, marked by the same gold line.
 	DayCards map[string][]*PlannerDragCard
 	DaySlot  KanbanSlot
-	// BlockMarks holds each issue's blocks drawn on the calendar, by key, so
-	// the tray card under the pointer can edge them in gold.
-	BlockMarks map[string][]PlannerBlockMark
 	// PRAsked is the pull requests looked up this session, answered or not,
 	// so a redraw does not ask GitHub again.
 	PRAsked           map[string]bool

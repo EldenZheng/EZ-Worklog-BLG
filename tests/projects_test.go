@@ -3,6 +3,7 @@ package tests
 import (
 	"encoding/csv"
 	"fmt"
+	"image/color"
 	"os"
 	"path/filepath"
 	"slices"
@@ -827,26 +828,25 @@ func TestPendingSectionHeadingsAndRulesAreGold(t *testing.T) {
 	gold := map[string]bool{}
 	rules := 0
 	walk(ui.PendingBox, func(c fyne.CanvasObject) {
-		themed, ok := c.(*container.ThemeOverride)
-		if !ok {
-			return
-		}
-		switch inner := themed.Content.(type) {
-		case *widget.Label:
-			if themed.Theme.Color(theme.ColorNameForeground, variant) == widgets.LogoGold {
+		switch x := c.(type) {
+		case *container.ThemeOverride:
+			if inner, ok := x.Content.(*widget.Label); ok && x.Theme.Color(theme.ColorNameForeground, variant) == widgets.LogoGold {
 				gold[inner.Text] = true
 			}
 		case *widget.Separator:
-			if themed.Theme.Color(theme.ColorNameSeparator, variant) == widgets.LogoGold {
-				rules++
-			}
+			// The rule is the theme's separator, which the app paints muted gold.
+			rules++
 		}
 	})
+	muted := shell.GoldTheme{Theme: theme.DefaultTheme()}.Color(theme.ColorNameSeparator, variant)
+	if muted != shell.BlendColor(widgets.LogoGold, color.Black, 0.25) {
+		t.Fatalf("the app's separators should be muted gold, got %v", muted)
+	}
 	if !gold["DOC ITEM ENHANCEMENT"] || !gold["Other commits"] {
 		t.Fatalf("both headings should be gold, got %v", gold)
 	}
 	if rules != 1 {
-		t.Fatalf("expected one gold rule between the two groups, got %d", rules)
+		t.Fatalf("expected one muted-gold rule between the two groups, got %d", rules)
 	}
 }
 

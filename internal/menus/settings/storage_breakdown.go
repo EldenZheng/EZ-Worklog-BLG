@@ -7,7 +7,8 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -32,10 +33,9 @@ var storageCategoryColours = map[backend.StorageKind]color.NRGBA{
 	backend.StorageOther:          {R: 0xe8, G: 0x79, B: 0xf9, A: 0xff},
 }
 
-func storageBreakdown(ui *shell.UI, cfg backend.Config, usage backend.StorageUsage, busy, open bool, clear func(backend.Config, backend.StorageCategory), toggled func(bool), reflow func(bool)) (fyne.CanvasObject, []*widget.Button) {
+func storageBreakdown(ui *shell.UI, cfg backend.Config, usage backend.StorageUsage, open bool, clear func(backend.Config, backend.StorageCategory), toggled func(bool), reflow func(bool)) fyne.CanvasObject {
 	var parts []shell.MeterPart
-	var rows []fyne.CanvasObject
-	var actions []*widget.Button
+	rows := newStorageRows()
 	for _, category := range usage.Categories {
 		ink := storageCategoryColours[category.Kind]
 		share := float32(0)
@@ -45,58 +45,228 @@ func storageBreakdown(ui *shell.UI, cfg backend.Config, usage backend.StorageUsa
 		if category.Bytes > 0 {
 			parts = append(parts, shell.MeterPart{Key: string(category.Kind), Fill: ink, Weight: share})
 		}
-		name := widget.NewLabelWithStyle(category.Name, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-		name.Wrapping = fyne.TextWrapWord
-		dot := canvas.NewRectangle(ink)
-		dot.CornerRadius = 3
-		dot.SetMinSize(fyne.NewSize(6, 6))
-		detail := fmt.Sprintf("%s · %.1f%%", backend.FormatBytes(uint64(category.Bytes)), float64(share)*100)
+		detail := backend.FormatBytes(uint64(category.Bytes))
 		if category.Unit != "" {
 			detail += fmt.Sprintf(" · %d %s", category.Count, category.Unit)
 		}
-		readout := widget.NewLabel(detail)
-		readout.Wrapping = fyne.TextWrapWord
+		entry := storageLegendEntry(ink, category.Name, fmt.Sprintf("%.1f%%", float64(share)*100), detail)
 		var action fyne.CanvasObject
+		var fade *shell.Fader
+		var del *shell.FadeIconButton
 		if category.CanClear {
 			category := category
-			button := settingsButton("Clear", func() { clear(cfg, category) })
-			if busy || category.Bytes == 0 {
-				button.Disable()
-			}
 			if category.Bytes > 0 {
-				actions = append(actions, button)
+				// The Delete shows only while the row is lit, fading in and out
+				// with the gold hover as on a saved Log Work card.
+				del = shell.FadeDeleteIcon(func() { clear(cfg, category) })
+				fade = shell.NewFader(del)
+				action = container.NewCenter(fade.View)
+			} else {
+				// Nothing to clear; keep the icon's room so the rows line up.
+				space := canvas.NewRectangle(color.Transparent)
+				space.SetMinSize(shell.NewFadeIconButton(theme.DeleteIcon(), nil).MinSize())
+				action = space
 			}
-			action = container.NewCenter(shell.DestructiveButton(button))
 		} else {
-			action = container.NewCenter(widget.NewLabel("Kept"))
+			kept := canvas.NewText("Kept", theme.Color(theme.ColorNamePlaceHolder))
+			kept.TextSize = theme.CaptionTextSize()
+			action = container.NewCenter(kept)
 		}
-		left := container.NewVBox(name, readout)
-		rows = append(rows, container.NewBorder(nil, nil, container.NewCenter(dot), action, left))
+		rows.add(container.NewBorder(nil, nil, nil, action, entry), fade, del)
 	}
 	caption := widget.NewLabel("Percentages of local data + backups (app executable excluded).")
 	caption.Wrapping = fyne.TextWrapWord
-	header := canvas.NewText("Data + backups", widgets.LogoGold)
-	header.TextSize, header.TextStyle.Bold = theme.TextSize()+4, true
-	total := widget.NewLabelWithStyle("Total: "+backend.FormatBytes(uint64(usage.StoredDataBytes)), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	total := widget.NewLabel("Total: " + backend.FormatBytes(uint64(usage.StoredDataBytes)))
 	total.Wrapping = fyne.TextWrapWord
 	bar := ui.ProgressBarParts("settings/storage-breakdown", ui.Store.Dir, parts, 6)
-	body := container.NewVBox(append([]fyne.CanvasObject{total, bar, caption}, rows...)...)
+	body := container.NewVBox(goldText(total), bar, caption, rows.View)
+	return storageFold("Data + Backups", body, open, toggled, reflow)
+}
+
+// storageFold is a storage section under a gold heading that folds it away
+// and back. The heading lights with the gold hover under the pointer and has
+// its underline on its own line below it.
+func storageFold(title string, body fyne.CanvasObject, open bool, toggled func(bool), reflow func(bool)) *fyne.Container {
+	header := canvas.NewText(title, widgets.LogoGold)
+	header.TextSize, header.TextStyle.Bold = theme.TextSize()+4, true
 	head, area := shell.CollapseLine(header, nil, body, open, 0, toggled, reflow)
-	heading := container.NewThemeOverride(container.NewVBox(head, widget.NewSeparator()), chunkySettingsTheme{Theme: theme.Current()})
-	return container.NewVBox(heading, area), actions
+	// Room inside the gold hover, so the title and arrow do not crowd its edge,
+	// and the usual gold ripple from a click.
+	tap := head.(*shell.Tappable)
+	pad := theme.Padding()
+	tap.Content = container.New(layout.NewCustomPaddedLayout(pad, pad, pad*2, pad*2), tap.Content)
+	tap.Ripple = true
+	lit := newStorageRows()
+	lit.light(tap, nil)
+	heading := container.NewThemeOverride(container.NewVBox(lit.View, widget.NewSeparator()), chunkySettingsTheme{Theme: theme.Current()})
+	return container.NewVBox(heading, area)
+}
+
+// storageRows is a column of rows with the Projects lists' hover: a soft gold
+// pill fades in behind the row under the pointer and slides from row to row
+// as the pointer moves down. View is what to place.
+type storageRows struct {
+	View    *fyne.Container
+	rows    *fyne.Container
+	pill    *widgets.HoverPill
+	hovered int
+}
+
+func newStorageRows() *storageRows {
+	l := &storageRows{rows: container.NewVBox(), pill: widgets.NewHoverPill(), hovered: -1}
+	l.View = container.New(&storageRowsLayout{l: l}, l.pill.Rect, l.rows)
+	return l
+}
+
+// add puts content in as a row that lights under the pointer. fade, when set,
+// shows the row's Delete while it is lit; del keeps the row lit while the
+// pointer is on it.
+func (l *storageRows) add(content fyne.CanvasObject, fade *shell.Fader, del *shell.FadeIconButton) {
+	row := shell.NewTappable(container.New(layout.NewCustomPaddedLayout(0, 0, 4, 4), content), nil)
+	row.Look = desktop.DefaultCursor
+	on := l.light(row, func(in bool) {
+		if fade != nil {
+			fade.FadeTo(in)
+		}
+	})
+	if del != nil {
+		del.SetHoverParent(on)
+	}
+}
+
+// light adds row to the column, lit under the pointer; also, when set, hears
+// the light come and go. It returns the row's hover, for controls on the row
+// that keep it lit.
+func (l *storageRows) light(row *shell.Tappable, also func(bool)) func(bool) {
+	i := len(l.rows.Objects)
+	on := func(in bool) {
+		l.hover(i, in)
+		if also != nil {
+			also(in)
+		}
+	}
+	row.OnHover = on
+	l.rows.Add(row)
+	return on
+}
+
+func (l *storageRows) hover(i int, in bool) {
+	switch {
+	case in:
+		l.moveTo(i)
+	case l.hovered == i:
+		l.moveTo(-1)
+	}
+}
+
+func (l *storageRows) moveTo(i int) {
+	if i >= len(l.rows.Objects) {
+		return
+	}
+	l.hovered = i
+	var pos fyne.Position
+	var size fyne.Size
+	if i >= 0 {
+		row := l.rows.Objects[i]
+		pos, size = row.Position(), row.Size()
+	}
+	l.pill.MoveTo(pos, size, i >= 0)
+}
+
+// storageRowsLayout gives the rows the whole area and keeps the pill on the
+// lit row; the pill places itself as it moves.
+type storageRowsLayout struct{ l *storageRows }
+
+func (s *storageRowsLayout) MinSize([]fyne.CanvasObject) fyne.Size { return s.l.rows.MinSize() }
+func (s *storageRowsLayout) Layout(_ []fyne.CanvasObject, size fyne.Size) {
+	l := s.l
+	l.rows.Move(fyne.Position{})
+	l.rows.Resize(size)
+	if l.hovered >= 0 && l.hovered < len(l.rows.Objects) {
+		row := l.rows.Objects[l.hovered]
+		l.pill.Fit(row.Position(), row.Size())
+	}
+}
+
+// storageLegendEntry follows the Projects status legend: a colour square, the
+// name and its figures on one line. Every row keeps the room of two lines, so
+// the rows stand apart, the gold hover has space round the text, and a row
+// whose figures must drop under its name is no taller than the rest.
+func storageLegendEntry(ink color.Color, name, percent, detail string) fyne.CanvasObject {
+	label := canvas.NewText(name, theme.Color(theme.ColorNameForeground))
+	label.TextStyle.Bold = true
+	share := canvas.NewText(percent, widgets.LogoGold)
+	share.TextSize, share.TextStyle.Bold = theme.CaptionTextSize(), true
+	readout := canvas.NewText(detail, theme.Color(theme.ColorNamePlaceHolder))
+	readout.TextSize = theme.CaptionTextSize()
+	figures := container.NewHBox(container.NewCenter(share), container.NewCenter(readout))
+	dot := canvas.NewRectangle(ink)
+	dot.CornerRadius = 3
+	dot.SetMinSize(fyne.NewSquareSize(10))
+	return container.New(&storageLegendLayout{name: name, label: label, figures: figures, dot: dot}, dot, label, figures)
+}
+
+type storageLegendLayout struct {
+	name    string
+	label   *canvas.Text
+	figures fyne.CanvasObject
+	dot     *canvas.Rectangle
+}
+
+func (l *storageLegendLayout) textHeight() float32 {
+	return fyne.MeasureText("M", l.label.TextSize, l.label.TextStyle).Height
+}
+
+func (l *storageLegendLayout) MinSize([]fyne.CanvasObject) fyne.Size {
+	height := l.textHeight() + 2 + l.figures.MinSize().Height
+	return fyne.NewSize(max(l.figures.MinSize().Width+22, 100), height+theme.Padding()*2)
+}
+
+func (l *storageLegendLayout) Layout(_ []fyne.CanvasObject, size fyne.Size) {
+	width := max(size.Width-22, 1)
+	textHeight := l.textHeight()
+	figures := l.figures.MinSize()
+	full := fyne.MeasureText(l.name, l.label.TextSize, l.label.TextStyle).Width
+	// As in the Projects status legend, the figures sit beside the name and
+	// move under it only when both do not fit. A folded section lays out at
+	// zero width; keep one line until it opens.
+	wrapped := size.Width > 22 && full+4+figures.Width > width
+	text := l.name
+	if wrapped {
+		text = shell.FitText(l.name, l.label.TextSize, l.label.TextStyle, width)
+	}
+	if l.label.Text != text {
+		l.label.Text = text
+		l.label.Refresh()
+	}
+	if !wrapped {
+		row := max(textHeight, figures.Height)
+		top := max((size.Height-row)/2, 0)
+		l.label.Move(fyne.NewPos(18, top+(row-textHeight)/2))
+		l.figures.Move(fyne.NewPos(22+full, top+(row-figures.Height)/2))
+		l.dot.Move(fyne.NewPos(4, top+(row-10)/2))
+	} else {
+		top := max((size.Height-textHeight-2-figures.Height)/2, 0)
+		l.label.Move(fyne.NewPos(18, top))
+		l.figures.Move(fyne.NewPos(18, top+textHeight+2))
+		l.dot.Move(fyne.NewPos(4, top+(textHeight-10)/2))
+	}
+	l.label.Resize(fyne.NewSize(width, textHeight))
+	l.figures.Resize(figures)
+	l.dot.Resize(fyne.NewSquareSize(10))
 }
 
 func confirmClearStorage(ui *shell.UI, cfg backend.Config, category backend.StorageCategory, busy func() bool, setBusy func(bool), status *widget.Label, measure func()) {
 	if busy() {
 		return
 	}
-	var d dialog.Dialog
-	cancel := settingsButton("Cancel", func() { shell.CloseDialog(d, ui.Win) })
+	var popup *widget.PopUp
+	cancel := settingsButton("Cancel", func() { shell.ClosePopUp(popup) })
 	confirm := settingsButton("Clear "+category.Name, func() {
 		if busy() {
 			return
 		}
-		shell.CloseDialog(d, ui.Win)
+		shell.ClosePopUp(popup)
 		setBusy(true)
 		status.SetText("Clearing " + category.Name + "…")
 		var operationErr error
@@ -131,10 +301,7 @@ func confirmClearStorage(ui *shell.UI, cfg backend.Config, category backend.Stor
 	amount.Wrapping = fyne.TextWrapWord
 	message := widget.NewLabel(category.Consequence)
 	message.Wrapping = fyne.TextWrapWord
-	body := container.NewVBox(amount, message, shell.RemovalButtons(cancel, confirm))
-	d = dialog.NewCustomWithoutButtons("Clear local data", body, ui.Win)
-	d.Resize(fyne.NewSize(550, body.MinSize().Height))
-	shell.ShowDialog(d, ui.Win)
+	popup = ui.ShowConfirmation("Clear local data", container.NewVBox(amount, message), shell.RemovalButtons(cancel, confirm))
 }
 
 func refreshAfterStorageClear(ui *shell.UI, kind backend.StorageKind) {

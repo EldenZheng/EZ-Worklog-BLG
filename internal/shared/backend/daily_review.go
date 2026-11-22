@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // DailyReviewPush is a proposed update of the day's shared review issue. The
@@ -13,9 +14,13 @@ type DailyReviewPush struct {
 	Body            string
 	Minutes         int
 	ExistingMinutes int
-	NeedsCombine    bool
-	row             Row
-	before          dailyReviewState
+	// OtherCount and OtherMinutes are the PRs GitHub already lists for the day
+	// that this entry does not.
+	OtherCount   int
+	OtherMinutes int
+	NeedsCombine bool
+	row          Row
+	before       dailyReviewState
 }
 
 type dailyReviewState struct {
@@ -149,10 +154,27 @@ func PrepareDailyReviewPush(row Row) (*DailyReviewPush, error) {
 	if len(body) > RemarkCap {
 		return nil, GhErr("The combined PR list is %d characters; worklog remarks allow %d. Nothing was overwritten.", len(body), RemarkCap)
 	}
+	// Only PRs on GitHub that this entry does not list need the user's say.
+	// A retry, or a push of the same list again, rewrites what is there.
+	own, err := MergeCodeReviewItems(row["issue_body"], row["remarks"])
+	if err != nil {
+		return nil, err
+	}
+	mine := map[string]bool{}
+	for _, item := range own {
+		mine[strings.ToLower(item.URL)] = true
+	}
+	var others []CodeReviewItem
+	for _, item := range existing {
+		if !mine[strings.ToLower(item.URL)] {
+			others = append(others, item)
+		}
+	}
 	return &DailyReviewPush{URL: state.URL, Body: body, Minutes: CodeReviewMinutes(items),
 		ExistingMinutes: CodeReviewMinutes(existing),
-		NeedsCombine:    state.Worklog.Minutes > 0 || state.Worklog.Remarks != "" || body != strings.TrimSpace(row["remarks"]),
-		row:             row, before: state}, nil
+		OtherCount:      len(others), OtherMinutes: CodeReviewMinutes(others),
+		NeedsCombine: len(others) > 0,
+		row:          row, before: state}, nil
 }
 
 // PushDailyReview rechecks the approved snapshot before updating both copies
@@ -167,10 +189,15 @@ func PushDailyReview(cfg Config, plan *DailyReviewPush, progress ...func(FetchPr
 		current.Worklog.Minutes != plan.before.Worklog.Minutes || current.Worklog.Remarks != plan.before.Worklog.Remarks {
 		return PushResult{}, GhErr("The code review changed on GitHub while you were choosing. Push again to check the new combined total.")
 	}
+	r := plan.row
+	// PushEntry refuses a new SOP Worklog off its own day. Check that before
+	// the description is rewritten, or the issue is left half updated.
+	if SOPApplies(r["date"]) && strings.TrimSpace(r["issue_url"]) == "" && r["date"] != WorkDate(time.Now()) {
+		return PushResult{}, GhErr("Under the worklog SOP a Worklog is created on its own day. Push this entry on %s.", r["date"])
+	}
 	if _, err := Gh([]string{"issue", "edit", plan.URL, "--body", plan.Body}); err != nil {
 		return PushResult{}, err
 	}
-	r := plan.row
 	return PushEntry(cfg, r["issue"], r["date"], r["owner"], plan.Minutes,
 		plan.Body, plan.Body, "issue", r["issue_url"], "", progress...)
 }

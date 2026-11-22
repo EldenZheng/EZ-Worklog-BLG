@@ -112,6 +112,12 @@ type Commit struct {
 	Full    string `json:"full"`
 	Issue   string `json:"issue"`
 	Branch  string `json:"branch,omitempty"`
+	// Worklog is the Worklog sub-issue the commit references, as the worklog
+	// SOP has commits do. Such a commit is logged already; Issue is then the
+	// Worklog's parent. See ResolveWorklogRefs.
+	Worklog string `json:"worklog,omitempty"`
+	// Local is a commit read from a clone and not on GitHub yet.
+	Local bool `json:"local,omitempty"`
 }
 
 // Group is unlogged commits bucketed by (date, issue).
@@ -131,46 +137,28 @@ type PendingResult struct {
 	Errors []string `json:"errors"`
 	Count  int      `json:"count"`
 	Range  []string `json:"range"`
+	// Local holds every commit only on this machine, logged ones too, by
+	// CommitRef.Key, so saved entries of them can say they wait for a push.
+	Local map[string]bool `json:"local,omitempty"`
 }
 
 // commitJQ shapes each commit into a compact JSON object; we decode it in Go
 // rather than juggling delimiters.
 const commitJQ = `[.[] | {sha: .sha[0:7], date: .commit.author.date, message: .commit.message}]`
 
-// CommitWorkDate is the working day a commit belongs to: its own timestamp in
-// the machine's zone, rolled over at workDayStart rather than at midnight.
-//
-// Midnight was the wrong line to draw. Work carried past it is still the
-// evening's work — the entry is logged against that day, and the worklog on the
-// board carries that date — but the commit's own timestamp had already turned
-// over, so a 1am commit was offered under tomorrow. On a Sunday night that is
-// not just the wrong day, it is the wrong week: the overtime leaked forward into
-// a week it was never part of, and the week being reported on came out short at
-// one end and long at the other.
-//
-// The same rollover the rest of the app uses, so the day a commit is offered
-// under is the day its worklog will be filed on.
+// CommitWorkDate uses the same Malaysia calendar day as the worklog date picker.
 func CommitWorkDate(ts string) string {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
-		if t, err := time.Parse(layout, ts); err == nil {
-			return WorkDate(t.Local())
-		}
-	}
-	// Unparseable: fall back to whatever localDate can make of it rather than
-	// losing the commit out of every bucket.
 	return LocalDate(ts)
 }
 
-// LocalDate renders a GitHub timestamp as YYYY-MM-DD in the machine's own zone.
+// LocalDate renders a GitHub timestamp as YYYY-MM-DD in Malaysia.
 // The two APIs disagree on format — search/commits returns an offset
 // ("2026-08-05T17:49:37.000+08:00") while repos/*/commits normalises to Z
 // ("2026-08-06T14:58:12Z") — so slicing the first ten characters buckets the
 // same commit on different days depending on which path found it.
 func LocalDate(ts string) string {
-	for _, layout := range []string{time.RFC3339Nano, time.RFC3339} {
-		if t, err := time.Parse(layout, ts); err == nil {
-			return t.Local().Format("2006-01-02")
-		}
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return WorkDate(t)
 	}
 	// Only fall back to slicing when the head really is a date, so an
 	// unexpected value is left intact rather than silently mangled.
@@ -598,10 +586,6 @@ func WorklogFromNode(content *ProjectItemContent, values []PvFieldValue) (Worklo
 // the configured project. GitHub applies the owner/date filters before sending
 // results, avoiding both a full-board scan and one request per issue.
 func FetchProjectWorklogs(cfg Config, ownerFilter, fromDate, toDate string, progress ...func(FetchProgress)) ([]WorklogItem, error) {
-	urls := ProjectURLs(cfg)
-	if len(urls) == 0 {
-		return nil, GhErr("Set the Worklog project URL in Settings to load Status and Report from GitHub.")
-	}
 	owner := strings.TrimSpace(ownerFilter)
 	if owner == "" {
 		u, err := GhCurrentUser()
@@ -618,9 +602,39 @@ func FetchProjectWorklogs(cfg Config, ownerFilter, fromDate, toDate string, prog
 	if err != nil || to.Before(from) {
 		return nil, GhErr("Invalid end date %q.", toDate)
 	}
-	filter := WorklogProjectFilter(owner, fromDate, toDate)
-
-	return FetchProjectBoards(urls, owner, filter, fetchOneProject, progress...)
+	// Worklogs before the SOP are read off the board by their Worklog Date and
+	// Owner fields; from SOPStart they are found by when they were created,
+	// which is the day under the SOP, whatever the board fields say.
+	var items []WorklogItem
+	if fromDate < SOPStart {
+		urls := ProjectURLs(cfg)
+		if len(urls) == 0 {
+			return nil, GhErr("Set the Worklog project URL in Settings to load Status and Report from GitHub.")
+		}
+		legacyTo := min(toDate, AddDays(SOPStart, -1))
+		filter := WorklogProjectFilter(owner, fromDate, legacyTo)
+		board, err := FetchProjectBoards(urls, owner, filter, fetchOneProject, progress...)
+		if err != nil {
+			return nil, err
+		}
+		items = board
+	}
+	if toDate >= SOPStart {
+		sop, err := FetchSOPWorklogs(owner, max(fromDate, SOPStart), toDate)
+		if err != nil {
+			return nil, err
+		}
+		seen := map[string]bool{}
+		for _, it := range items {
+			seen[it.URL] = true
+		}
+		for _, it := range sop {
+			if !seen[it.URL] {
+				items = append(items, it)
+			}
+		}
+	}
+	return items, nil
 }
 
 // Independent boards can load together. Keep a small concurrency limit and
@@ -716,7 +730,7 @@ func fetchOneProject(projectURL, owner, filter string) ([]WorklogItem, error) {
 	if err != nil {
 		return nil, err
 	}
-	filter = worklogFilterForFields(filter, fields)
+	filter = worklogFilterForFields(filter, fields, false)
 	query := strings.Replace(projectWorklogsQuery, "OWNER", rootField, 1)
 
 	var items []WorklogItem
@@ -1140,7 +1154,7 @@ func (s *Store) FetchPending(cfg Config, progress ...func(FetchProgress)) (Pendi
 	}
 	// Work in local days. Stamping a local date with "Z" shifted the window by
 	// the UTC offset, so commits near midnight fell outside it.
-	now := time.Now()
+	now := time.Now().In(MalaysiaTime)
 	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).
 		AddDate(0, 0, -(days - 1))
 	endExclusive := start.AddDate(0, 0, days)
@@ -1173,7 +1187,7 @@ func (s *Store) FetchPending(cfg Config, progress ...func(FetchProgress)) (Pendi
 	}
 	return PendingResult{
 		Groups: groups, Errors: errs, Count: live,
-		Range: []string{sinceDate, untilDate},
+		Range: []string{sinceDate, untilDate}, Local: localKeys(commits),
 	}, nil
 }
 
@@ -1183,11 +1197,11 @@ func (s *Store) FetchPending(cfg Config, progress ...func(FetchProgress)) (Pendi
 // the Commit List tab shows what shipped, regardless of whether an entry was
 // written for it.
 func (s *Store) FetchWeekCommits(cfg Config, from, to string, progress ...func(FetchProgress)) ([]Commit, []string, error) {
-	start, err := time.ParseInLocation("2006-01-02", from, time.Local)
+	start, err := time.ParseInLocation("2006-01-02", from, MalaysiaTime)
 	if err != nil {
 		return nil, nil, err
 	}
-	end, err := time.ParseInLocation("2006-01-02", to, time.Local)
+	end, err := time.ParseInLocation("2006-01-02", to, MalaysiaTime)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1228,8 +1242,8 @@ func (s *Store) FetchWeekCommits(cfg Config, from, to string, progress ...func(F
 // Returns raw commits with duplicates and merges left in — callers pick which
 // filters apply.
 func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time, progress ...func(FetchProgress)) ([]Commit, []string, error) {
-	since := start.Format(time.RFC3339)
-	until := endExclusive.Format(time.RFC3339)
+	since := start.UTC().Format(time.RFC3339)
+	until := endExclusive.Add(-time.Second).UTC().Format(time.RFC3339)
 
 	var (
 		commits []Commit
@@ -1247,8 +1261,15 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time, p
 		}
 	}
 
-	sinceDate := start.Format("2006-01-02")
-	untilDate := endExclusive.AddDate(0, 0, -1).Format("2006-01-02")
+	// The clones are read alongside GitHub: it is all local, and done long
+	// before the requests are.
+	var local []Commit
+	localDone := make(chan struct{})
+	go func() {
+		defer close(localDone)
+		local = LocalCommits(cfg, since, until)
+	}()
+
 	sem := make(chan struct{}, 8)
 	collect := func(got []Commit, e string) {
 		mu.Lock()
@@ -1341,7 +1362,7 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time, p
 		if strings.Contains(entry, "/") {
 			collect(repoCommits(entry, "", author, since, until))
 		} else {
-			collect(searchCommits(entry, author, sinceDate, untilDate))
+			collect(searchCommits(entry, author, since, until))
 		}
 	}
 	for _, entry := range cfg.Repos {
@@ -1430,8 +1451,14 @@ func (s *Store) gatherAuthorCommits(cfg Config, start, endExclusive time.Time, p
 	branchWG.Wait()
 	counter.seal()
 	wg.Wait()
+	<-localDone
+	commits = mergeLocal(commits, local)
 
 	counter.addPhase("Resolving linked issues", 1)
+	// Worklog references first: a commit naming its Worklog names the issue it
+	// was for through the Worklog's parent, and that beats a guess from the
+	// branch.
+	ResolveWorklogRefs(commits)
 	ResolveCommitBranchIssues(commits)
 	counter.finish()
 	return commits, errs, nil
@@ -1447,7 +1474,8 @@ func GroupPending(commits []Commit, done, ignored map[string]bool) []Group {
 	var pending []Commit
 	seenSha := map[string]bool{}
 	for _, c := range commits {
-		if done[c.Sha] || seenSha[c.Sha] {
+		// A commit referencing its Worklog was logged when the Worklog was.
+		if done[c.Sha] || seenSha[c.Sha] || c.Worklog != "" {
 			continue
 		}
 		seenSha[c.Sha] = true
@@ -1555,8 +1583,8 @@ func BuildRemarks(commits []Commit) string {
 		}
 	}
 	// Deliberately uncapped. Dropping bullets here lost real work silently; the
-	// editor shows a live character counter, refuses to push over remarkCap, and
-	// offers local compaction, so trimming is the author's call, not ours.
+	// editor shows a live character counter and requires the author to edit
+	// over-limit remarks before saving.
 	return strings.Join(lines, "\n")
 }
 
@@ -1572,51 +1600,6 @@ func IsMergeCommit(c Commit) bool {
 	return strings.HasPrefix(msg, "merge pull request ") ||
 		strings.HasPrefix(msg, "merge branch ") ||
 		strings.HasPrefix(msg, "merge remote-tracking branch ")
-}
-
-func CompactLocally(lines []string) string {
-	text := strings.Join(lines, "\n")
-	if len(text) <= RemarkCap {
-		return text
-	}
-	var kept []string
-	for _, ln := range lines {
-		trial := strings.Join(append(append([]string{}, kept...), ln), "\n")
-		if len(trial) > RemarkCap-20 {
-			break
-		}
-		kept = append(kept, ln)
-	}
-	dropped := len(lines) - len(kept)
-	if len(kept) == 0 && len(lines) > 0 {
-		return truncateRunes(lines[0], RemarkCap)
-	}
-	if dropped > 0 {
-		kept = append(kept, fmt.Sprintf("- (+%d more)", dropped))
-	}
-	res := strings.Join(kept, "\n")
-	if len(res) > RemarkCap {
-		res = truncateRunes(res, RemarkCap)
-	}
-	return res
-}
-
-func truncateRunes(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	if max <= 3 {
-		return s[:max]
-	}
-	var b strings.Builder
-	for _, r := range s {
-		part := string(r)
-		if b.Len()+len(part) > max-3 {
-			break
-		}
-		b.WriteString(part)
-	}
-	return b.String() + "..."
 }
 
 // SupportSetSize is how many qualifying issues make one complete weekend
@@ -1673,7 +1656,7 @@ const issueQuery = `
 query($owner:String!,$repo:String!,$num:Int!){
  repository(owner:$owner,name:$repo){
   issue(number:$num){ id number title url
-   subIssues(first:100){ nodes{ id number title url state } }
+   subIssues(first:100){ nodes{ id number title url state body } }
    projectItems(first:20){ nodes{ id
      project{ id number title
        fields(first:60){ nodes{
@@ -1749,6 +1732,7 @@ type SubIssue struct {
 	Title  string `json:"title"`
 	URL    string `json:"url"`
 	State  string `json:"state"`
+	Body   string `json:"body"`
 }
 
 type IssueNode struct {
@@ -1924,23 +1908,32 @@ func findField(fields []field, musts ...string) *field {
 	return fallback
 }
 
-func setFields(projectID, itemID string, fields []field, wdate, owner string, mins int, remarks string) (done, missing []string) {
+// A Worklog column taken off the board (current and ZZZ (DEPRECATED) both)
+// is not a failure: the push writes the rest and says the column is gone.
+func setFields(projectID, itemID string, fields []field, wdate, owner string, mins int, remarks string) (done, missing, gone []string) {
 	if len(remarks) > RemarkCap {
 		remarks = remarks[:RemarkCap]
 	}
+	// Worklog Date and Worklog Owner are still filled under the SOP, for now,
+	// beside the Worklog's own creation date and assignee.
 	type plan struct {
 		f     *field
+		name  string
 		flag  string
 		value string
 	}
 	plans := []plan{
-		{findField(fields, "worklog", "date"), "--date", wdate},
-		{findField(fields, "worklog", "owner"), "--text", owner},
-		{findField(fields, "worklog", "min"), "--number", fmt.Sprintf("%d", mins)},
-		{findField(fields, "worklog", "remark"), "--text", remarks},
+		{findField(fields, "worklog", "date"), "Worklog (Date)", "--date", wdate},
+		{findField(fields, "worklog", "owner"), "Worklog Owner", "--text", owner},
+		{findField(fields, "worklog", "min"), "Worklog (mins)", "--number", fmt.Sprintf("%d", mins)},
+		{findField(fields, "worklog", "remark"), "Worklog (Remarks)", "--text", remarks},
 	}
 	for _, p := range plans {
-		if p.f == nil || p.value == "" {
+		if p.value == "" {
+			continue
+		}
+		if p.f == nil {
+			gone = append(gone, "Project field "+p.name+" no longer exists on the board, so it was skipped.")
 			continue
 		}
 		_, err := Gh([]string{
@@ -2141,10 +2134,8 @@ func pushToProject(org, issueURL, contentID string, items []projectItem,
 	targetItem := addResp.Data.Add.Item.ID
 
 	emit(from+step, "Setting fields")
-	projectDone, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
-	if len(projectDone) == 0 {
-		problems = append(problems, "No Worklog fields matched on this project board.")
-	}
+	projectDone, failed, gone := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
+	notes = append(notes, gone...)
 	done = append(done, projectDone...)
 	problems = append(problems, failed...)
 
@@ -2229,6 +2220,12 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 			}
 		}
 	}
+	// Under the worklog SOP a Worklog's day is the day it is created, so a new
+	// one is made on its own day only. Resuming one an earlier attempt made
+	// creates nothing and may happen any day.
+	if SOPApplies(wdate) && strings.TrimSpace(resume) == "" && wdate != WorkDate(time.Now()) {
+		return PushResult{}, GhErr("Under the worklog SOP a Worklog is created on its own day. Push this entry on %s.", wdate)
+	}
 	emit(5, "Reading issue")
 	o, r, _, issue, err := GetIssueContext(ref)
 	if err != nil {
@@ -2266,7 +2263,40 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 		// item and overwrote its minutes and its remarks, so a 300 and a 240
 		// showed up as a 240 and the 300's remarks were gone. Two entries are
 		// two sub-issues now, and only the row that created one can claim it.
-		if existing := FindSubIssueByURL(issue, resume); existing != nil {
+		// The Worklog an earlier attempt made: under the parent by its URL or
+		// marker, or, when attaching it to the parent is what failed (or the
+		// reply to creating it never came), found directly and attached now.
+		// A lookup that fails stops the push: it cannot tell "no earlier
+		// Worklog" from "could not see it", and guessing the first makes a
+		// duplicate.
+		lookupFailed := func(err error) (PushResult, error) {
+			return PushResult{}, GhErr("Could not check GitHub for this entry's earlier Worklog, so nothing was created: %v. Push again.", err)
+		}
+		existing := FindSubIssueByURL(issue, resume)
+		if existing == nil && strings.TrimSpace(resume) != "" {
+			found, err := lookupIssue(resume)
+			if err != nil {
+				return lookupFailed(err)
+			}
+			existing, problems = adoptWorklog(issue, found, problems)
+		}
+		if existing == nil {
+			existing = FindSubIssueByMarker(issue, issueBody)
+		}
+		if existing == nil {
+			found, err := findIssueByMarker(o, r, issueBody, wdate)
+			if err != nil {
+				return lookupFailed(err)
+			}
+			existing, problems = adoptWorklog(issue, found, problems)
+		}
+		// A retry may run on any day only because it reuses the Worklog the
+		// first attempt made. When that Worklog cannot be found, a new one
+		// would carry today's date, not the entry's, so it waits for its day.
+		if existing == nil && SOPApplies(wdate) && wdate != WorkDate(time.Now()) {
+			return PushResult{}, GhErr("This entry's earlier Worklog was not found under %s, and a new one would be dated today rather than %s. Check the earlier Worklog on GitHub, or push again on %s.", ref, wdate, wdate)
+		}
+		if existing != nil {
 			notes = append(notes, fmt.Sprintf(
 				"Reused sub-issue #%d from an earlier attempt on this entry.", existing.Number))
 			emit(25, "Reusing sub-issue")
@@ -2351,10 +2381,8 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 	emit(30, "Setting fields")
 	done, issueFailed := setWorklogIssueFields(o, issue.ID, proj.Fields.Nodes, mins)
 	problems = append(problems, issueFailed...)
-	projectDone, failed := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
-	if len(projectDone) == 0 {
-		problems = append(problems, "No Worklog fields matched on this project board.")
-	}
+	projectDone, failed, gone := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
+	notes = append(notes, gone...)
 	done = append(done, projectDone...)
 	problems = append(problems, failed...)
 	emit(80, "Setting status")

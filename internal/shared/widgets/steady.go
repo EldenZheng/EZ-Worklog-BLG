@@ -17,6 +17,21 @@ const (
 	steadyHolds = 4
 )
 
+// SteadyGap is the time since *last, with a late frame counted as one
+// ordinary frame, and sets *last to now: for a motion that times itself across
+// redraws, as Steady times one animation.
+func SteadyGap(last *time.Time) time.Duration {
+	now := time.Now()
+	gap := now.Sub(*last)
+	if last.IsZero() || gap < 0 {
+		gap = 0
+	} else if gap > steadyStall {
+		gap = steadyFrame
+	}
+	*last = now
+	return gap
+}
+
 // Steady is an animation that waits for the frames it is drawn on. Fyne times
 // an animation by the clock from its Start, so when the click that starts one
 // also rebuilds the page, the frames that would have shown its opening are

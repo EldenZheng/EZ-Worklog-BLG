@@ -20,8 +20,10 @@ import (
 // gold reaches them, and its refresh button fades in. A row let go of drains
 // the same way back, its refresh button fading out. The click redraws the
 // whole board (and a sprint still to fetch redraws it again as it lands), so
-// each motion is kept by row and started time, and a row drawn again part way
-// picks the motion up where it stands.
+// each motion is kept by row and how far it has played, and a row drawn again
+// part way picks the motion up where it stands. It is timed by the frames
+// drawn (see widgets.SteadyGap): the board's redraw holds frames up, and a
+// motion timed by the clock was over before the board was back.
 
 // selectedInk is the words on a selected row, dark on the gold.
 var selectedInk = color.NRGBA{R: 24, G: 24, B: 24, A: 255}
@@ -32,7 +34,11 @@ const noSprintRow = "\x00no sprint"
 // rowMotion is a row on its way into its selected look, or out of it.
 type rowMotion struct {
 	selecting bool
-	start     time.Time
+	// played is how far the motion has got, timed by the frames drawn; last
+	// is when it was last moved on. owner is the row drawing it now.
+	played time.Duration
+	last   time.Time
+	owner  *selectLook
 	// centre is where the ripple spreads from, in the row; at its middle
 	// when the row was not the one clicked.
 	centre    fyne.Position
@@ -75,7 +81,7 @@ func selectRow(k *shell.KanbanUI, key string, at *fyne.Position, change func()) 
 	}
 	now := time.Now()
 	note := func(row string, selecting bool) {
-		m := &rowMotion{selecting: selecting, start: now}
+		m := &rowMotion{selecting: selecting, last: now}
 		if row == key && at != nil {
 			m.centre, m.hasCentre = *at, true
 		}
@@ -95,7 +101,7 @@ func motionFor(k *shell.KanbanUI, key string, selected bool) *rowMotion {
 	if m == nil {
 		return nil
 	}
-	if m.selecting != selected || time.Since(m.start) >= shell.RippleTime {
+	if m.selecting != selected || m.played >= shell.RippleTime {
 		delete(sprintMotions[k], key)
 		return nil
 	}
@@ -190,10 +196,19 @@ func (l *selectLook) placeFill(m *rowMotion, spread float32) {
 	l.fill.Refresh()
 }
 
-// play runs m from where it stands to its end.
+// play runs m from where it stands to its end. A row drawn again takes the
+// motion over; the old row's frames no longer move it.
 func (l *selectLook) play(m *rowMotion) {
-	step := func() bool {
-		p := min(float32(time.Since(m.start))/float32(shell.RippleTime), 1)
+	m.owner = l
+	step := func(done bool) bool {
+		if m.owner != l {
+			return true
+		}
+		m.played += widgets.SteadyGap(&m.last)
+		if done {
+			m.played = shell.RippleTime
+		}
+		p := min(float32(m.played)/float32(shell.RippleTime), 1)
 		eased := 1 - (1-p)*(1-p)*(1-p)*(1-p)
 		if m.selecting {
 			l.paint(m, eased, eased)
@@ -202,10 +217,15 @@ func (l *selectLook) play(m *rowMotion) {
 		}
 		return p >= 1
 	}
-	if step() {
+	if step(false) {
 		return
 	}
-	anim := fyne.NewAnimation(shell.RippleTime-time.Since(m.start), func(float32) { step() })
+	var anim *fyne.Animation
+	anim = fyne.NewAnimation(4*(shell.RippleTime-m.played), func(p float32) {
+		if step(p >= 1) {
+			anim.Stop()
+		}
+	})
 	anim.Curve = fyne.AnimationLinear
 	anim.Start()
 }

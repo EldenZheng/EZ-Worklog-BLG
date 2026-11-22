@@ -2026,12 +2026,8 @@ func (p *page) confirmDelete() {
 		return
 	}
 	id := cur.ID
-	body := widget.NewLabel("The project leaves this app only. Its issues on GitHub are not touched.")
-	body.Wrapping = fyne.TextWrapWord
-	var popup *widget.PopUp
-	cancel := widget.NewButton("Cancel", func() { shell.ClosePopUp(popup) })
-	confirm := widget.NewButton("Delete", func() {
-		shell.ClosePopUp(popup)
+	const message = "The project leaves this app only. Its issues on GitHub are not touched."
+	p.ui.ConfirmRemoval("Delete "+cur.Name+"?", message, "Delete", func() {
 		p.saved.Projects = slices.DeleteFunc(p.saved.Projects, func(project Project) bool { return project.ID == id })
 		p.saved.Selected = ""
 		delete(p.snaps, id)
@@ -2042,14 +2038,4 @@ func (p *page) confirmDelete() {
 		p.draw()
 		p.load(false)
 	})
-	heading := widget.NewLabelWithStyle(shell.Truncate("Delete "+cur.Name+"?", 60), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
-	content := shell.RemovalPopupContent(container.NewBorder(container.NewVBox(heading, body),
-		shell.RemovalButtons(cancel, confirm), nil, nil, nil))
-	window := p.ui.Win.Canvas()
-	popup = widget.NewModalPopUp(content, window)
-	size := p.ui.RemovalPopupSize(content)
-	popup.Resize(size)
-	popup.Show()
-	popup.Move(fyne.NewPos((window.Size().Width-size.Width)/2, (window.Size().Height-size.Height)/2))
-	shell.AnimateOpening(window)
 }

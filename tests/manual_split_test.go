@@ -81,6 +81,8 @@ func TestManualFormSplitsLongRemarks(t *testing.T) {
 				t.Fatal("over-cap remarks saved without the split")
 			}
 			check.SetChecked(true)
+			const summary = "- completed the work"
+			splitRemarksEntry(t, tab).SetText(summary)
 			tapButton(t, tab, "Save draft")
 			rows, err := ui.Store.ReadRows()
 			if err != nil {
@@ -95,7 +97,7 @@ func TestManualFormSplitsLongRemarks(t *testing.T) {
 					saved = row
 				}
 			}
-			if saved["issue_body"] != strings.TrimSpace(long) || saved["remarks"] == "" || len(saved["remarks"]) > backend.RemarkCap {
+			if saved["issue_body"] != strings.TrimSpace(long) || saved["remarks"] != summary {
 				t.Fatalf("split texts not saved intact: body=%d, remarks=%d", len(saved["issue_body"]), len(saved["remarks"]))
 			}
 			if check.Checked || check.Visible() || entry.Text != "" {

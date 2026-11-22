@@ -68,8 +68,11 @@ type gearTheme struct {
 }
 
 func (t gearTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
-	if (name == theme.ColorNameHover || name == theme.ColorNamePressed) && t.badge.shown {
-		return color.Transparent
+	if t.badge.shown {
+		switch name {
+		case theme.ColorNameButton, theme.ColorNameHover, theme.ColorNamePressed:
+			return color.Transparent
+		}
 	}
 	return t.Theme.Color(name, variant)
 }
@@ -81,28 +84,29 @@ func (t gearTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) co
 // Settings is open. A click anywhere on it ripples and opens Settings.
 type updateBadge struct {
 	widget.BaseWidget
-	gear     *gearButton
-	gearView fyne.CanvasObject
-	bg       *canvas.Rectangle
-	ripple   *canvas.Rectangle
-	rippling *fyne.Animation
-	label    *canvas.Text
-	clip     *clipBox
-	shown    bool    // an update is waiting
-	progress float32 // 0 is just the gear, 1 is the capsule fully open
-	anim     *fyne.Animation
-	hover    Glow
-	overSelf bool
-	overGear bool
-	selected bool // Settings is the open page
-	inked    bool // the gear is drawn dark, on bright gold
-	onTap    func()
-	onInk    func()           // the gear's colour has to change
-	relayout func(final bool) // the badge's width changed
+	gear        *gearButton
+	gearView    fyne.CanvasObject
+	bg          *canvas.Rectangle
+	ripple      *canvas.Rectangle
+	rippling    *fyne.Animation
+	label       *canvas.Text
+	clip        *clipBox
+	shown       bool    // an update is waiting
+	progress    float32 // 0 is just the gear, 1 is the capsule fully open
+	anim        *fyne.Animation
+	hover       Glow
+	overSelf    bool
+	overGear    bool
+	highlighted bool // target of the hover fade
+	selected    bool // Settings is the open page
+	inked       bool // the gear is drawn dark, on bright gold
+	onTap       func()
+	onInk       func()           // the gear's colour has to change
+	relayout    func(final bool) // the badge's width changed
 }
 
 func newUpdateBadge(gear *gearButton, base fyne.Theme) *updateBadge {
-	b := &updateBadge{gear: gear}
+	b := &updateBadge{gear: gear, hover: Glow{Duration: SlowFade}}
 	b.gearView = container.NewThemeOverride(gear, gearTheme{Theme: base, badge: b})
 	gear.hover = func(on bool) { b.overGear = on; b.pointer() }
 	gear.tap = func(at fyne.Position) { b.spread(at.Add(b.gearView.Position())) }
@@ -176,6 +180,10 @@ func (b *updateBadge) labelWidth() float32 {
 
 func (b *updateBadge) pointer() {
 	on := b.shown && (b.overSelf || b.overGear || b.selected)
+	if b.highlighted == on {
+		return
+	}
+	b.highlighted = on
 	target := float32(0)
 	if on {
 		target = 1

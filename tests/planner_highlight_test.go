@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 
 	"worklog/internal/menus/kanban"
 	"worklog/internal/menus/sprintcalendar"
@@ -11,6 +12,55 @@ import (
 	"worklog/internal/shared/shell"
 	"worklog/internal/shared/widgets"
 )
+
+func TestSprintCalendarHoverMarksMatchingBlocksAndDays(t *testing.T) {
+	ui, _, issue := plannerFixture(t)
+	k := ui.Kanban
+	first, later, other := k.Week, backend.AddDays(k.Week, 1), backend.AddDays(k.Week, 2)
+	k.Plan.Boards[0].Items = append(k.Plan.Boards[0].Items, backend.SprintItem{ID: "other", Title: "Unrelated", SprintID: issue.Sprint.ID, Effort: 60})
+	k.Plan.Tasks[issue.Key] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: first, Minutes: 90}, {Date: later, Minutes: 480}}}
+	k.Plan.Tasks["p/other"] = backend.SprintTask{Blocks: []backend.PlanBlock{{Date: other, Minutes: 60}}}
+	kanban.Draw(k)
+	for _, date := range []string{first, later, other} {
+		if len(k.DayCards[date]) != 1 {
+			t.Fatalf("expected a block on %s", date)
+		}
+	}
+	marked := func(card *shell.PlannerDragCard) bool {
+		var gold bool
+		walkRendered(card.Content, func(o fyne.CanvasObject) {
+			if r, ok := o.(*canvas.Rectangle); ok && r.StrokeWidth == 2 && sameColor(r.StrokeColor, widgets.LogoGold) {
+				gold = true
+			}
+		})
+		return gold
+	}
+	source, match := k.DayCards[first][0], k.DayCards[later][0]
+	source.MouseIn(nil)
+	shell.SettleFades()
+	if marked(source) || !marked(match) || marked(k.DayCards[other][0]) {
+		t.Fatal("only the other block for the hovered issue should be gold")
+	}
+	for _, date := range k.Dates {
+		if date.Date == later {
+			if !sameColor(date.Frame.StrokeColor, widgets.LogoGold) || !sameColor(date.Frame.FillColor, date.Base) {
+				t.Fatal("the matching date should have a gold outline over its green background")
+			}
+		} else if !sameColor(date.Frame.StrokeColor, date.StrokeColor) {
+			t.Fatalf("hovering a scheduled block changed the outline on %s", date.Date)
+		}
+	}
+	source.MouseOut()
+	shell.SettleFades()
+	if marked(match) {
+		t.Fatal("the block highlight should clear after leaving the source")
+	}
+	for _, date := range k.Dates {
+		if !sameColor(date.Frame.StrokeColor, date.StrokeColor) {
+			t.Fatalf("the outline on %s did not return to its resting color", date.Date)
+		}
+	}
+}
 
 func TestSprintHighlightsOnlySidebarHoverOrHeldMoveAndNeverResize(t *testing.T) {
 	ui, _, c := plannerFixture(t)
@@ -42,7 +92,7 @@ func TestSprintHighlightsOnlySidebarHoverOrHeldMoveAndNeverResize(t *testing.T) 
 	highlighted := func() bool {
 		shell.SettleFades() // the outlines fade; look at where they settle
 		for _, d := range k.Dates {
-			if d.Frame.FillColor == widgets.WithAlpha(shell.PlannerAvailableBlue, 0.13) || d.Frame.FillColor == widgets.WithAlpha(shell.PlannerAvailableBlue, 0.25) {
+			if d.Frame.FillColor == widgets.WithAlpha(widgets.LogoGold, 0.13) || d.Frame.FillColor == widgets.WithAlpha(widgets.LogoGold, 0.25) {
 				return true
 			}
 		}

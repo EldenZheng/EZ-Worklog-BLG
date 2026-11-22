@@ -19,7 +19,7 @@ import (
 
 // WeekGrid keeps all seven dates on one row. Wrapping card text and actions
 // determines the height after each column has received its actual width.
-type WeekGrid struct{}
+type WeekGrid struct{ columns []*shell.DayColumn }
 
 func (g *WeekGrid) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	if len(objects) == 0 {
@@ -29,6 +29,27 @@ func (g *WeekGrid) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	for i, o := range objects {
 		o.Move(fyne.NewPos(float32(i)*(w+theme.Padding()), 0))
 		o.Resize(fyne.NewSize(w, size.Height))
+	}
+	if w <= 2*theme.Padding() {
+		return
+	}
+	// Match the tallest natural height after wrapping at the column width:
+	// the heading sits inside the column's padding and its own.
+	height := float32(0)
+	for _, col := range g.columns {
+		if c, ok := col.HeadingContent.(*fyne.Container); ok {
+			if hl, ok := c.Layout.(*dayHeadingLayout); ok {
+				hl.width = max(0, w-4*theme.Padding())
+			}
+		}
+		height = max(height, col.HeadingContent.MinSize().Height)
+	}
+	for _, col := range g.columns {
+		if col.HeadingFill.MinSize().Height != height {
+			col.HeadingFill.SetMinSize(fyne.NewSize(0, height))
+			// Relayout even when the day itself stays the same size.
+			col.Body.Refresh()
+		}
 	}
 }
 
@@ -137,6 +158,32 @@ func (l *boundedDayCaptions) Layout(objects []fyne.CanvasObject, size fyne.Size)
 
 func (l *boundedDayCaptions) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	return l.base.MinSize(objects)
+}
+
+// heightAt is the captions' height at width w, measured on their full text
+// (the shown text may already be cut short): one line when they sit side by
+// side, two stacked, three when even the first is too wide for the day.
+func (l *boundedDayCaptions) heightAt(objects []fyne.CanvasObject, w float32) float32 {
+	if _, ok := l.base.(*dayCaptionLayout); !ok || len(objects) < 4 {
+		return l.base.MinSize(objects).Height
+	}
+	width := func(i int) float32 {
+		t := objects[i].(*canvas.Text)
+		text := t.Text
+		if i < len(l.full) {
+			text = l.full[i]
+		}
+		return fyne.MeasureText(text, t.TextSize, t.TextStyle).Width
+	}
+	line, pad := objects[2].MinSize().Height, theme.Padding()
+	switch whole := width(0); {
+	case whole+pad+width(1) <= w:
+		return line
+	case whole <= w:
+		return 2*line + pad
+	default:
+		return 3*line + 2*pad
+	}
 }
 
 // dayCaptionLayout is shell.SplitCaption for a day with work waiting on it. The

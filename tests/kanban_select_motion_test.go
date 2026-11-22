@@ -2,7 +2,6 @@ package tests
 
 import (
 	"testing"
-	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -63,7 +62,7 @@ func sprintFrame(t *testing.T, k *shell.KanbanUI, key string) *canvas.Rectangle 
 // ends.
 func TestPickingASprintSpreadsItsGold(t *testing.T) {
 	k := longBoardUI(t, 2)
-	collectMotion(t)
+	driver := collectMotion(t)
 	b := doneHistoryBoard()
 	k.Plan.Boards[0].Items = append(k.Plan.Boards[0].Items, backend.SprintItem{ID: "later", Title: "Later work",
 		URL: "https://github.com/exampleorg/repo/issues/99", Status: "Created", SprintID: "future"})
@@ -99,7 +98,11 @@ func TestPickingASprintSpreadsItsGold(t *testing.T) {
 		t.Fatal("the gold should be spreading from the click")
 	}
 
-	time.Sleep(shell.RippleTime + 50*time.Millisecond)
+	// Timed by the frames drawn, the motion ends with its last frame, not
+	// with the clock.
+	for _, a := range driver.anims {
+		a.Tick(1)
+	}
 	kanban.Draw(k)
 	if !sameColor(sprintFrame(t, k, future).FillColor, widgets.LogoGold) {
 		t.Fatal("once the motion ends the picked sprint should be gold")

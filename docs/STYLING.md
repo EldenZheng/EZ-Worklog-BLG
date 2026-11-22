@@ -35,15 +35,17 @@ References:
 ## Section headings and disclosure arrows
 
 - Use gold, bold section headings at `theme.TextSize()+4`.
-- Put a section's gold underline on its own line **below** the heading. Reuse
-  `shell.SectionTitle` for ordinary headings.
+- Put a section's underline on its own line **below** the heading. Use
+  `shell.SectionTitle` for ordinary headings. Its separator inherits the
+  app theme's muted gold, as does `widget.NewSeparator()` between content groups.
 - A collapsible section with no other trailing controls uses the whole heading
   width, with its disclosure arrow at the **far right**. Use
   `shell.CollapseLine(label, nil, body, ...)`.
 - Keep totals and explanatory text below the heading. Let prose wrap; do not
   stretch the sidebar to fit a path or long status message.
-- Give Settings' Storage, Data + backups and History backup sections
-  `theme.Padding()*4` of top padding. Data + backups starts collapsed and keeps
+- Give Settings' Storage, Data + Backups and History Backup sections
+  `theme.Padding()*4` of top padding. All three fold, light gold under the
+  pointer and show their total in gold. All three start collapsed and keep
   the user's open/closed choice while refreshing that Settings view.
 - The Updates bubble has a gold title and no extra divider around it.
 - Avoid redundant captions such as "Preferred backup folder" above a location
@@ -69,6 +71,22 @@ Keep storage refresh's glyph gold even though its button has no fill.
 Organisation colours identify organisations. Storage categories have their own
 stable, distinct palette: do not cycle the organisation palette across a longer
 list of categories. Use the same colour for a category's dot and meter segment.
+
+## Confirmations and startup notices
+
+- Use `ui.ShowConfirmation` for a decision and `ui.ConfirmRemoval` for a
+  plain-text removal prompt. The gold heading and full-gold underline sit
+  above an inset message panel. Buttons keep their role's height and radius.
+- Use `ui.ShowLongNotice` for multi-section notices such as “What's new”.
+  It uses the same frame with a taller reading area. The body scrolls while
+  the checkbox and acknowledgment button stay in the footer.
+- Use `ui.ShowEditorPopup` for full forms such as the Log Work editors.
+  Place Back and Save actions beside the title above the gold underline.
+  The inset form panel below it controls its own scrolling. Use
+  `shell.FadeQuietButton` for Back's 600 ms hover fade.
+- Wrap popup preference checkboxes with `shell.GoldTickChoice` to give the
+  box and its label the Kanban filter's gold hover and animated tick.
+- Push progress and push results use their dedicated status popups.
 
 ## Motion and feedback
 

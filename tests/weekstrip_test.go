@@ -11,6 +11,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
+	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/theme"
@@ -23,23 +24,38 @@ import (
 	"worklog/internal/shared/widgets"
 )
 
-// The day turns over at 08:00, not at midnight: work carried past midnight is
-// still yesterday's, which is the day it has to be logged against.
-func TestWorkDayTurnsOverAtEight(t *testing.T) {
-	at := func(h int) time.Time {
-		return time.Date(2026, 8, 12, h, 30, 0, 0, time.Local)
+func TestWorkDayTurnsOverAtMalaysiaMidnight(t *testing.T) {
+	midnight := time.Date(2026, 11, 20, 16, 0, 0, 0, time.UTC)
+	if got := backend.WorkDate(midnight.Add(-time.Nanosecond)); got != "2026-11-20" {
+		t.Fatalf("just before midnight MYT: %s", got)
 	}
-	if got := backend.WorkDate(at(1)); got != "2026-08-11" {
-		t.Fatalf("1:30am belongs to the day before, got %s", got)
+	for _, moment := range []time.Time{midnight, midnight.Add(7*time.Hour + 59*time.Minute)} {
+		if got := backend.WorkDate(moment); got != "2026-11-21" {
+			t.Fatalf("%s: Malaysia date = %s", moment, got)
+		}
 	}
-	if got := backend.WorkDate(at(7)); got != "2026-08-11" {
-		t.Fatalf("7:30am is still the night before, got %s", got)
+}
+
+func TestOpenWorklogFormFollowsTodayUntilADateIsChosen(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	today := shell.Today()
+	if len(ui.LogDayListeners) != 1 {
+		t.Fatalf("expected one mounted date picker, got %d", len(ui.LogDayListeners))
 	}
-	if got := backend.WorkDate(at(8)); got != "2026-08-12" {
-		t.Fatalf("8:30am starts the new day, got %s", got)
-	}
-	if got := backend.WorkDate(at(23)); got != "2026-08-12" {
-		t.Fatalf("late evening is its own day, got %s", got)
+	for object, refresh := range ui.LogDayListeners {
+		picker := object.(*logwork.WorklogDatePicker)
+		picker.Set(backend.AddDays(today, -1))
+		refresh()
+		if picker.ISO() != today {
+			t.Fatalf("new-entry default after midnight = %s", picker.ISO())
+		}
+		tomorrow := backend.AddDays(today, 1)
+		picker.Entry.SetText(tomorrow)
+		refresh()
+		if picker.ISO() != tomorrow {
+			t.Fatalf("explicitly selected date changed to %s", picker.ISO())
+		}
 	}
 }
 
@@ -763,12 +779,15 @@ func TestDroppingACardMovesItToThatDay(t *testing.T) {
 	target := ui.WeekCols["2026-08-12"]
 	target.MouseIn(&desktop.MouseEvent{})
 	shell.SettleFades() // the edge fades in; look at where it settles
-	// Green: the card leaves the day short of the target.
-	if target.Frame.StrokeColor != theme.Color(theme.ColorNameSuccess) {
-		t.Fatal("the day under the card should be edged green while the drop leaves it short")
+	if target.Frame.StrokeColor != widgets.LogoGold || target.Frame.StrokeWidth != 2 {
+		t.Fatal("the day under the card should be edged gold while the drop leaves it short")
 	}
-	if other := ui.WeekCols["2026-08-13"]; other.Frame.StrokeColor == theme.Color(theme.ColorNameSuccess) {
-		t.Fatal("only the day under the card should be lit")
+	target.Pulse.Tick(1)
+	if want := shell.BlendColor(theme.Color(theme.ColorNameBackground), widgets.LogoGold, backend.WeekDraftTint); !sameColor(target.Frame.FillColor, want) {
+		t.Fatal("the available drop target should pulse gold")
+	}
+	if other := ui.WeekCols["2026-08-13"]; other.Frame.StrokeColor != theme.Color(theme.ColorNameInputBorder) || other.Frame.StrokeWidth != 1 {
+		t.Fatal("other available days should retain their resting outline")
 	}
 	tile.DragEnd()
 
@@ -883,7 +902,7 @@ func TestWeekStripKeepsItsButtonsThroughARedraw(t *testing.T) {
 	defer fyne.CurrentApp().Quit()
 	ui.WeekStart = shell.ShiftWeek(backend.WeekStartOf(shell.Today()), -2)
 	logwork.DrawWeekStrip(ui)
-	for _, name := range []string{"This week", "Refresh calendar", "Export week for email"} {
+	for _, name := range []string{"This week", "Refresh calendar"} {
 		before := buttonNamed(ui.WeekBox, name)
 		if before == nil {
 			t.Fatalf("the strip has no %q button", name)
@@ -1055,8 +1074,8 @@ func TestDayCardStaysLitOverItsButtons(t *testing.T) {
 	}
 }
 
-// A card that would take the day to the target edges that day in gold.
-func TestADropThatFillsTheDayIsEdgedGold(t *testing.T) {
+// A card that would take the day to the target edges that day in green.
+func TestADropThatFillsTheDayIsEdgedGreen(t *testing.T) {
 	ui := weekUI(t)
 	defer fyne.CurrentApp().Quit()
 	if _, err := ui.Store.AppendRows([]backend.Row{{
@@ -1071,9 +1090,277 @@ func TestADropThatFillsTheDayIsEdgedGold(t *testing.T) {
 	target := ui.WeekCols["2026-08-12"]
 	target.MouseIn(&desktop.MouseEvent{})
 	shell.SettleFades()
-	if target.Frame.StrokeColor != widgets.LogoGold {
-		t.Fatal("a drop reaching 480 should edge the day in gold")
+	if target.Frame.StrokeColor != theme.Color(theme.ColorNameSuccess) {
+		t.Fatal("a drop reaching 480 should edge the day in green")
 	}
 	ui.DragRow, ui.HoverDay = nil, ""
 	logwork.MarkDropTargets(ui)
+}
+
+func TestLogWorkWeekdayHeadingsStayAtTheTopWhenScrolled(t *testing.T) {
+	ui := weekUI(t)
+	app := fyne.CurrentApp()
+	defer app.Quit()
+	var rows []backend.Row
+	for range 16 {
+		rows = append(rows, backend.Row{"date": "2026-08-10", "minutes": "15", "description": "saved work"})
+	}
+	if _, err := ui.Store.AppendRows(rows); err != nil {
+		t.Fatal(err)
+	}
+	logwork.DrawRecent(ui)
+	ui.Win.Resize(fyne.NewSize(1500, 500))
+	// The page scroll paints no shade over the pinned headings.
+	plain := ui.Win.Content().(*fyne.Container).Objects[0].(*container.ThemeOverride)
+	if c := plain.Theme.Color(theme.ColorNameShadow, theme.VariantDark); !sameColor(c, color.Transparent) {
+		t.Fatal("the page scroll should not shade the weekday headings")
+	}
+	scroll := plain.Content.(*container.Scroll)
+	head := ui.WeekCols["2026-08-10"].Heading
+	toolbar := ui.WeekBox.Objects[0]
+	top := app.Driver().AbsolutePositionForObject(scroll).Y
+	before := app.Driver().AbsolutePositionForObject(head).Y
+	if before <= top {
+		t.Fatal("the header should start above the calendar in the page")
+	}
+	scroll.ScrollToBottom()
+	pad := theme.Padding()
+	for day, column := range ui.WeekCols {
+		if y := app.Driver().AbsolutePositionForObject(column.Heading).Y; y != top+2*pad {
+			t.Fatalf("%s heading y=%v after scrolling, viewport starts at %v", day, y, top)
+		}
+		// The day's outline comes down with its heading, a padding above it.
+		if y := app.Driver().AbsolutePositionForObject(column.Frame).Y; y != top+pad {
+			t.Fatalf("%s outline starts at y=%v after scrolling, want %v", day, y, top)
+		}
+		// Its outline is drawn over the cards passing behind the heading.
+		if !column.Edge.Visible() || column.Edge.StrokeColor != column.Frame.StrokeColor || !column.Cover.Visible() {
+			t.Fatalf("%s: cards would run over the day's top edge", day)
+		}
+		// As in Kanban, cards are gone by the heading's middle line.
+		clipEnd := app.Driver().AbsolutePositionForObject(column.Clip).Y + column.Clip.Size().Height
+		headMid := app.Driver().AbsolutePositionForObject(column.Heading).Y + column.Heading.Size().Height/2
+		if !column.Clip.Visible() || clipEnd != headMid {
+			t.Fatalf("%s: cards are clipped at y=%v, the heading's middle is %v", day, clipEnd, headMid)
+		}
+	}
+	if !contains(labels(head), "nothing logged") {
+		t.Fatal("the day summary should scroll with its weekday heading")
+	}
+	if y := app.Driver().AbsolutePositionForObject(toolbar).Y; y+toolbar.Size().Height > top {
+		t.Fatal("the week toolbar should scroll off the page normally")
+	}
+	last := dragTilesIn(ui.WeekBox)[len(rows)-1]
+	if y := app.Driver().AbsolutePositionForObject(last).Y + last.Size().Height; y > top+scroll.Size().Height {
+		t.Fatalf("the last card ends below the scroll viewport at %v", y)
+	}
+	scroll.ScrollToTop()
+	if y := app.Driver().AbsolutePositionForObject(head).Y; y != before {
+		t.Fatalf("calendar header did not return to its place after scrolling up: y=%v, want %v", y, before)
+	}
+	if col := ui.WeekCols["2026-08-10"]; col.Frame.Position().Y != 0 || col.Edge.Visible() || col.Cover.Visible() || col.Clip.Visible() {
+		t.Fatal("the outline should return to the top of the day")
+	}
+}
+
+func TestLogWorkGoldDayPreviewFollowsTheHoveredDate(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	if _, err := ui.Store.AppendRows([]backend.Row{{"date": "2026-08-12", "minutes": "480", "description": "full day"}}); err != nil {
+		t.Fatal(err)
+	}
+	logwork.DrawRecent(ui)
+	day := ui.WeekCols["2026-08-11"]
+	if day.HeadingFill.CornerRadius != day.Frame.CornerRadius ||
+		!sameColor(day.HeadingFill.FillColor, shell.BlendColor(theme.Color(theme.ColorNameBackground), color.White, 0.12)) {
+		t.Fatal("the header should retain rounded corners and a lighter day surface")
+	}
+	dateLink := func(day *shell.DayColumn) *shell.Tappable {
+		t.Helper()
+		var dateLink *shell.Tappable
+		walk(day.Heading, func(o fyne.CanvasObject) {
+			if link, ok := o.(*shell.Tappable); ok && link.OnHover != nil {
+				dateLink = link
+			}
+		})
+		if dateLink == nil {
+			t.Fatal("the weekday heading should have a date link")
+		}
+		return dateLink
+	}
+	day.MouseIn(nil)
+	shell.SettleFades()
+	if day.DateHoverFrame.StrokeWidth != 0 {
+		t.Fatal("hovering the body of a day should leave the date preview clear")
+	}
+	day.MouseOut()
+	dateLink(day).MouseIn(nil)
+	shell.SettleFades()
+	for date, col := range ui.WeekCols {
+		frame := col.DateHoverFrame
+		if col == day {
+			if col.Frame.StrokeColor != widgets.LogoGold || frame.StrokeWidth != 0 || !sameColor(frame.FillColor, widgets.WithAlpha(widgets.LogoGold, 0.16)) {
+				t.Fatal("hovering a date should show a gold outline and overlay")
+			}
+		} else if frame.StrokeWidth != 0 || !sameColor(frame.FillColor, color.Transparent) {
+			t.Fatalf("hovering one date should leave %s clear", date)
+		}
+	}
+	dateLink(day).MouseOut()
+	shell.SettleFades()
+	if day.DateHoverFrame.StrokeWidth != 0 || !sameColor(day.DateHoverFrame.FillColor, color.Transparent) {
+		t.Fatal("the date preview should clear when the pointer leaves")
+	}
+	full := ui.WeekCols["2026-08-12"]
+	dateLink(full).MouseIn(nil)
+	shell.SettleFades()
+	green := theme.Color(theme.ColorNameSuccess)
+	headingBase := shell.BlendColor(full.BaseFill, green, 0.22)
+	if full.Frame.StrokeColor != green ||
+		!sameColor(full.HeadingFill.FillColor, shell.BlendColor(headingBase, green, 0.22)) ||
+		!sameColor(full.DateHoverFrame.FillColor, widgets.WithAlpha(green, 0.22)) {
+		t.Fatal("a completed day and its header should get a stronger green tint")
+	}
+	dateLink(full).MouseOut()
+	shell.SettleFades()
+	if l, d := luma(full.HeadingFill.FillColor), luma(full.BaseFill); l <= d {
+		t.Fatalf("a day filled by drafts keeps its brighter green heading, %v against %v", l, d)
+	}
+	// Logged in full, the heading turns a shade darker than its day.
+	withProject(ui, "2026-08")
+	ui.ProjItems[shell.StatusCacheKey("2026-08")] = []backend.WorklogItem{{Date: "2026-08-13", Minutes: 480}}
+	logwork.DrawRecent(ui)
+	done := ui.WeekCols["2026-08-13"]
+	if l, d := luma(done.HeadingFill.FillColor), luma(done.BaseFill); l >= d {
+		t.Fatalf("a logged day's heading should be darker than the day, %v against %v", l, d)
+	}
+}
+
+// The week lines up with the form panel above it, edge for edge.
+func TestLogWorkWeekLinesUpWithTheFormPanel(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	logwork.DrawRecent(ui)
+	d := fyne.CurrentApp().Driver()
+	var panel fyne.CanvasObject
+	walk(ui.LogBody, func(o fyne.CanvasObject) {
+		if r, ok := o.(*canvas.Rectangle); ok && panel == nil && r.CornerRadius > 0 && r.Size().Width > 0 {
+			panel = r
+		}
+	})
+	if panel == nil {
+		t.Fatal("no form panel")
+	}
+	left, right := d.AbsolutePositionForObject(panel).X, d.AbsolutePositionForObject(panel).X+panel.Size().Width
+	first, last := ui.WeekCols["2026-08-10"], ui.WeekCols["2026-08-16"]
+	if x := d.AbsolutePositionForObject(first).X; x != left {
+		t.Fatalf("Monday starts at %v, the panel at %v", x, left)
+	}
+	if end := d.AbsolutePositionForObject(last).X + last.Size().Width; end-right > 0.01 || right-end > 0.01 {
+		t.Fatalf("Sunday ends at %v, the panel at %v", end, right)
+	}
+	// The week's buttons end at its right edge, level with Sunday's; the
+	// email export is Log List's alone.
+	withProject(ui, "2026-08")
+	logwork.DrawRecent(ui)
+	var calendar fyne.CanvasObject
+	walk(ui.LogBody, func(o fyne.CanvasObject) {
+		if b, ok := o.(*widget.Button); ok {
+			switch b.Text {
+			case "Refresh calendar":
+				calendar = b
+			case "Export week for email":
+				t.Fatal("Export week for email belongs to Log List")
+			}
+		}
+	})
+	sunday := ui.WeekCols["2026-08-16"]
+	endOf := func(o fyne.CanvasObject) float32 { return d.AbsolutePositionForObject(o).X + o.Size().Width }
+	if calendar == nil || endOf(sunday)-endOf(calendar) > 0.5 || endOf(calendar)-endOf(sunday) > 0.5 {
+		t.Fatal("Refresh calendar should end level with the week's right edge")
+	}
+}
+
+// A long repo#number on a narrow card ends in an ellipsis inside its bubble.
+func TestLogWorkLongIssueRefStaysInsideItsBubble(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	row := backend.Row{"date": "2026-08-12", "minutes": "30", "description": "x",
+		"issue": "exampleorg/a-very-long-repository-name-for-a-narrow-card#12345"}
+	card := logwork.DayRowCard(ui, row, func() {})
+	w := test.NewWindow(card)
+	defer w.Close()
+	w.Resize(fyne.NewSize(160, 300))
+	var link *shell.HoverLink
+	walk(card, func(o fyne.CanvasObject) {
+		if l, ok := o.(*shell.HoverLink); ok && strings.Contains(l.Text, "#12345") {
+			link = l
+		}
+	})
+	if link == nil {
+		t.Fatal("no issue link on the card")
+	}
+	cardEnd := d0(card).X + card.Size().Width
+	if end := d0(link).X + link.Size().Width; end > cardEnd {
+		t.Fatalf("the link runs to %v, past the card's edge at %v", end, cardEnd)
+	}
+	if link.Truncation != fyne.TextTruncateEllipsis {
+		t.Fatal("a long reference should be cut short with an ellipsis")
+	}
+	// Given room for the whole reference, it is never cut.
+	w.Resize(fyne.NewSize(900, 300))
+	if link.Truncation != fyne.TextTruncateOff {
+		t.Fatal("a reference that fits should show in full")
+	}
+}
+
+func d0(o fyne.CanvasObject) fyne.Position {
+	return fyne.CurrentApp().Driver().AbsolutePositionForObject(o)
+}
+
+func TestLogWorkDayHeaderHeightsMatchAcrossScores(t *testing.T) {
+	ui := weekUI(t)
+	defer fyne.CurrentApp().Quit()
+	withProject(ui, "2026-08")
+	ui.ProjItems[shell.StatusCacheKey("2026-08")] = []backend.WorklogItem{{Date: "2026-08-11", Minutes: 480}}
+	if _, err := ui.Store.AppendRows([]backend.Row{{"date": "2026-08-12", "minutes": "240", "description": "draft"}}); err != nil {
+		t.Fatal(err)
+	}
+	logwork.DrawRecent(ui)
+	for _, width := range []float32{1100, 2300} {
+		ui.Win.Resize(fyne.NewSize(width, 650))
+		want := float32(0)
+		for _, col := range ui.WeekCols {
+			want = max(want, col.HeadingContent.MinSize().Height)
+		}
+		for date, col := range ui.WeekCols {
+			if got := col.Heading.Size().Height; got != want || col.HeadingFill.Size().Height != want {
+				t.Fatalf("%s at width %g has heading height %g, tallest natural height is %g", date, width, got, want)
+			}
+			content := col.HeadingContent.(*fyne.Container)
+			pad := theme.Padding()
+			if content.Position().X != pad || col.Heading.Size().Width-content.Size().Width != 2*pad {
+				t.Fatalf("%s at width %g should have equal padding inside the heading sides", date, width)
+			}
+			head, meter, caption := content.Objects[0], content.Objects[1], content.Objects[2]
+			if meter.Position().Y-head.Size().Height != pad/2 ||
+				caption.Position().Y-meter.Position().Y-meter.Size().Height != pad*1.5 {
+				t.Fatalf("%s at width %g should have compact gaps around the progress bar", date, width)
+			}
+			// The first line of every caption starts right under the bar,
+			// one line or two, side by side or stacked.
+			if first := caption.(*fyne.Container).Objects[0]; first.Visible() && first.Position().Y > 0.5 {
+				t.Fatalf("%s at width %g: caption starts %g lower than the others", date, width, first.Position().Y)
+			}
+			if below := content.Size().Height - caption.Position().Y - caption.Size().Height; below < logwork.HeadingFoot() {
+				t.Fatalf("%s at width %g: only %g under the caption", date, width, below)
+			}
+		}
+	}
+}
+
+// luma is a colour's brightness, for "darker than" checks.
+func luma(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	return 0.2126*float64(r) + 0.7152*float64(g) + 0.0722*float64(b)
 }

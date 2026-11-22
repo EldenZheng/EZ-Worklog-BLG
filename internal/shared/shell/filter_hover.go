@@ -37,7 +37,12 @@ func HoverCards(flow fyne.Layout, items ...fyne.CanvasObject) *fyne.Container {
 // HoverRows shares a highlight across explicit rows in a folding sidebar.
 // It leaves headings and controls alone and tracks rows inside open folds.
 func HoverRows(body *fyne.Container, rows []*Tappable) *fyne.Container {
-	g := &filterHover{pill: widgets.NewHoverPill(), frames: map[*Tappable]fyne.CanvasObject{}, overlay: true}
+	return HoverRowsWithPill(body, rows, widgets.NewHoverPill())
+}
+
+// HoverRowsWithPill applies a caller's highlight to the same row motion.
+func HoverRowsWithPill(body *fyne.Container, rows []*Tappable, pill *widgets.HoverPill) *fyne.Container {
+	g := &filterHover{pill: pill, frames: map[*Tappable]fyne.CanvasObject{}, overlay: true}
 	g.ExtendBaseWidget(g)
 	l := &hoverRowsLayout{body: body, hover: g, rows: map[*Tappable]bool{}}
 	for _, row := range rows {

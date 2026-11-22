@@ -1,14 +1,17 @@
 package tests
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
+	"worklog/internal/shared/shell"
 )
 
 // A commit is not in the repo its issue is in — the issue lives in a tracker
@@ -26,6 +29,88 @@ func TestCommitRefsCarryTheirOwnRepo(t *testing.T) {
 		if got := backend.FormatCommitRef(c.repo, c.sha); got != c.want {
 			t.Fatalf("formatCommitRef(%q, %q) = %q, want %q", c.repo, c.sha, got, c.want)
 		}
+	}
+}
+
+type savedLinkApp struct {
+	fyne.App
+	opened string
+}
+
+func (a *savedLinkApp) OpenURL(u *url.URL) error {
+	a.opened = u.String()
+	return nil
+}
+
+func TestSavedBubblesLinkTheIssueAndItsCommits(t *testing.T) {
+	ui := editorUI(t)
+	base := fyne.CurrentApp()
+	app := &savedLinkApp{App: base}
+	fyne.SetCurrentApp(app)
+	defer func() { fyne.SetCurrentApp(base); base.Quit() }()
+
+	const sha = "a8d412131d9acf87b6c2dc0989ed6a1f39e15179"
+	row := backend.Row{
+		"type": backend.KindCommit, "issue": "tracker/tasks#48",
+		"refs": "dev/applet@" + sha + ",dev/service@bbbc222,ccc3333",
+	}
+	for _, bubble := range []fyne.CanvasObject{
+		logwork.RowTile(ui, row, func() {}), logwork.DayRowCard(ui, row, func() {}),
+	} {
+		links := map[string]string{}
+		walk(bubble, func(o fyne.CanvasObject) {
+			switch l := o.(type) {
+			case *shell.HoverLink:
+				links[l.Text] = l.URL.String()
+			case *shell.HoverTag:
+				if l.Text == "tasks#48" {
+					t.Error("the issue should be a plain link, not a bubble")
+				}
+			}
+		})
+		for text, url := range map[string]string{
+			"tasks#48": "https://github.com/tracker/tasks/issues/48",
+			"a8d4121":  "https://github.com/dev/applet/commit/" + sha,
+			"bbbc222":  "https://github.com/dev/service/commit/bbbc222",
+		} {
+			if links[text] != url {
+				t.Errorf("%q links to %q, want %q", text, links[text], url)
+			}
+		}
+		if !contains(labels(bubble), "ccc3333") || links["ccc3333"] != "" {
+			t.Error("a legacy SHA with no recorded repo should be plain text")
+		}
+	}
+}
+
+func TestClickBesideSavedIssueOpensEditor(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	for _, pushed := range []string{"", "2026-11-21T08:30:00"} {
+		row := backend.Row{"date": "2026-11-21", "issue": "tracker/tasks#48", "pushed_at": pushed}
+		card := logwork.RowTile(ui, row, func() {})
+		ui.Win.SetContent(card)
+		ui.Win.Resize(fyne.NewSize(420, 220))
+		var issue *shell.HoverLink
+		walk(card, func(o fyne.CanvasObject) {
+			if link, ok := o.(*shell.HoverLink); ok && link.Text == "tasks#48" {
+				issue = link
+			}
+		})
+		if issue == nil {
+			t.Fatal("missing issue block")
+		}
+		p := fyne.CurrentApp().Driver().AbsolutePositionForObject(issue)
+		middle := fyne.NewPos(card.Size().Width/2, p.Y+issue.Size().Height/2)
+		if p.X+issue.Size().Width >= middle.X {
+			t.Fatalf("issue block covers the middle of the card: %v", issue.Size())
+		}
+		test.TapCanvas(ui.Win.Canvas(), middle)
+		overlay := ui.Win.Canvas().Overlays().Top()
+		if overlay == nil {
+			t.Fatalf("click beside issue did not open the editor (pushed_at=%q)", pushed)
+		}
+		ui.Win.Canvas().Overlays().Remove(overlay)
 	}
 }
 

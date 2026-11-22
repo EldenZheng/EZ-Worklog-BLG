@@ -166,20 +166,40 @@ type frameFade struct {
 
 var frameFades = map[*canvas.Rectangle]*frameFade{}
 
+// frameFollowers are told each time a frame's look changes here, for a copy
+// of it drawn elsewhere that has to keep up.
+var frameFollowers = map[*canvas.Rectangle]func(){}
+
+// FollowFrame calls fn whenever frame's look is changed by a fade or SetFrame;
+// a nil fn stops it.
+func FollowFrame(frame *canvas.Rectangle, fn func()) {
+	if fn == nil {
+		delete(frameFollowers, frame)
+		return
+	}
+	frameFollowers[frame] = fn
+}
+
+func frameChanged(frame *canvas.Rectangle) {
+	if fn := frameFollowers[frame]; fn != nil {
+		fn()
+	}
+}
+
 // FadeFrame blends frame's fill, edge and edge width to the ones given over
 // SlowFade, so an outline lights and dims gently rather than snapping. Asked
 // again for the look it is already heading to, it carries on undisturbed.
 func FadeFrame(frame *canvas.Rectangle, fill, stroke color.Color, width float32) {
-	fadeFrame(frame, fill, stroke, width, false)
+	fadeFrame(frame, fill, stroke, width, false, SlowFade)
 }
 
 // FadeEdge is FadeFrame for the edge alone, leaving the fill to whatever
 // else paints it.
 func FadeEdge(frame *canvas.Rectangle, stroke color.Color, width float32) {
-	fadeFrame(frame, nil, stroke, width, true)
+	fadeFrame(frame, nil, stroke, width, true, SlowFade)
 }
 
-func fadeFrame(frame *canvas.Rectangle, fill, stroke color.Color, width float32, edgeOnly bool) {
+func fadeFrame(frame *canvas.Rectangle, fill, stroke color.Color, width float32, edgeOnly bool, widthDuration time.Duration) {
 	if frame == nil {
 		return
 	}
@@ -212,14 +232,18 @@ func fadeFrame(frame *canvas.Rectangle, fill, stroke color.Color, width float32,
 	step := func(p float32) {
 		if p >= 1 {
 			from.land(frame)
+			frameChanged(frame)
 			return
 		}
+		shade := fyne.AnimationEaseInOut(p)
+		thickness := fyne.AnimationEaseInOut(min(1, p*float32(SlowFade)/float32(widthDuration)))
 		if !edgeOnly {
-			frame.FillColor = MixColor(from.fill, fill, p)
+			frame.FillColor = MixColor(from.fill, fill, shade)
 		}
-		frame.StrokeColor = MixColor(from.stroke, stroke, p)
-		frame.StrokeWidth = from.width + (width-from.width)*p
+		frame.StrokeColor = MixColor(from.stroke, stroke, shade)
+		frame.StrokeWidth = from.width + (width-from.width)*thickness
 		frame.Refresh()
+		frameChanged(frame)
 	}
 	if !animationsOn() {
 		step(1)
@@ -236,7 +260,7 @@ func fadeFrame(frame *canvas.Rectangle, fill, stroke color.Color, width float32,
 			delete(frameFades, frame)
 		}
 	})
-	anim.Curve = fyne.AnimationEaseInOut
+	anim.Curve = fyne.AnimationLinear
 	from.anim = anim
 	anim.Start()
 }
@@ -251,6 +275,7 @@ func SetFrame(frame *canvas.Rectangle, fill, stroke color.Color, width float32) 
 	}
 	frame.FillColor, frame.StrokeColor, frame.StrokeWidth = fill, stroke, width
 	frame.Refresh()
+	frameChanged(frame)
 }
 
 func sameColor(a, b color.Color) bool {

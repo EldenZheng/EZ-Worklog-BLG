@@ -27,6 +27,9 @@ RECORDINGS = {
     "support": "weekday-support.gif",
     "settings-storage": "settings-storage.gif",
     "meeting-worklog": "meeting-worklog.gif",
+    "v2-worklog-flow": "v2-worklog-flow.gif",
+    "v2-pull-request": "v2-pull-request.gif",
+    "v2-logwork-calendar": "v2-logwork-calendar.gif",
 }
 
 
@@ -87,6 +90,29 @@ def gif(frames_dir, dst):
     crop = tuple(round(v) for v in rec["crop"])
     scale = GIF_WIDTH / (crop[2] - crop[0])
     size = (GIF_WIDTH, round((crop[3] - crop[1]) * scale))
+    captioned = any(f.get("caption") for f in rec["frames"])
+    band = 104 if captioned else 0
+
+    def finish_frame(im, caption=""):
+        content = im.crop(crop).resize(size, Image.LANCZOS)
+        if not band:
+            return content
+        result = Image.new("RGB", (size[0], size[1] + band), (25, 26, 29))
+        result.paste(content, (0, band))
+        d = ImageDraw.Draw(result)
+        d.text((24, 12), "EZ WORKLOG  /  v2.0.0", font=font(17), fill=GOLD)
+        words, lines, line = caption.split(), [], ""
+        for word in words:
+            candidate = (line + " " + word).strip()
+            if d.textlength(candidate, font=font(20)) > size[0] - 48:
+                lines.append(line)
+                line = word
+            else:
+                line = candidate
+        lines.append(line)
+        d.multiline_text((24, 39), "\n".join(lines), font=font(20), fill=(238, 238, 238), spacing=4)
+        d.line((0, band - 1, size[0], band - 1), fill=GOLD, width=2)
+        return result
 
     cache, seq, durations = {}, [], []
     for f in rec["frames"]:
@@ -95,16 +121,19 @@ def gif(frames_dir, dst):
         im = cache[f["file"]].copy()
         if f.get("cursor"):
             pointer(im, f["cursor"], f.get("click", False), scale)
-        seq.append(im.crop(crop).resize(size, Image.LANCZOS))
+        seq.append(finish_frame(im, f.get("caption", "")))
         durations.append(f["ms"])
 
     # One palette for every frame, taken from all the distinct captures at once,
     # so the dark surfaces do not shimmer between frames.
-    sheet = Image.new("RGB", (size[0], size[1] * len(cache)))
+    # Small samples keep long motion demos from allocating a giant palette sheet.
+    sample_size = (290, max(1, round((size[1] + band) / 4))) if captioned else size
+    sheet = Image.new("RGB", (sample_size[0], sample_size[1] * len(cache)))
     for i, im in enumerate(cache.values()):
         im = im.copy()
         pointer(im, (crop[0] + 40, crop[1] + 40), True, scale)
-        sheet.paste(im.crop(crop).resize(size), (0, i * size[1]))
+        sample = finish_frame(im, "Sample caption") if captioned else im.crop(crop).resize(size)
+        sheet.paste(sample.resize(sample_size), (0, i * sample_size[1]))
     pal = sheet.quantize(colors=255, method=Image.Quantize.MEDIANCUT)
     out = [im.quantize(palette=pal, dither=Image.Dither.NONE) for im in seq]
     out[0].save(dst, save_all=True, append_images=out[1:], duration=durations,
@@ -121,7 +150,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.docs.mkdir(parents=True, exist_ok=True)
     crops = {}
-    for name in args.only or RECORDINGS:
+    for name in args.only or [name for name in RECORDINGS if not name.startswith("v2-")]:
         dst = args.docs / RECORDINGS[name]
         crops[name] = gif(args.frames / name, dst)
         print(f"{dst}: {dst.stat().st_size:,} bytes")
@@ -133,3 +162,27 @@ if __name__ == "__main__":
         crop = tuple(round(v) for v in json.loads(meta.read_text()))
         Image.open(path).convert("RGB").crop(crop).save(path)
         meta.unlink()
+    if any(name.startswith("v2-") for name in crops):
+        path = args.screenshots / "v2-repo-folders.png"
+        meta = path.with_suffix(".json")
+        if meta.exists():
+            im = Image.open(path).convert("RGB")
+            boxes = json.loads(meta.read_text())
+            box = boxes[0]
+            d = ImageDraw.Draw(im)
+            d.rounded_rectangle((box["X"] - 6, box["Y"] - 6,
+                                 box["X"] + box["W"] + 6, box["Y"] + box["H"] + 6),
+                                radius=8, outline=GOLD, width=3)
+            # Keep the setting's heading and hint, with enough surrounding UI
+            # to show where it sits in Sources. Omit unrelated storage details.
+            left = max(0, round(box["X"] - 26))
+            top = max(0, round(box["Y"] - 108))
+            right = min(im.width, round(box["X"] + box["W"] + 26))
+            bottom = min(im.height, round(box["Y"] + box["H"] + 12))
+            crop = im.crop((left, top, right, bottom))
+            result = Image.new("RGB", (crop.width, crop.height + 62), (25, 26, 29))
+            result.paste(crop, (0, 62))
+            ImageDraw.Draw(result).text((24, 20), "SETTINGS  /  SOURCES  /  REPO FOLDERS",
+                                       font=font(19), fill=GOLD)
+            result.save(args.docs / "screenshots" / path.name)
+            meta.unlink()

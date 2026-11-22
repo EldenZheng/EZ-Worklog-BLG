@@ -31,9 +31,10 @@ import (
 type WorklogDatePicker struct {
 	widget.BaseWidget
 
-	ui    *shell.UI
-	date  string // the chosen day, YYYY-MM-DD, empty for none
-	Month string // the month on show, YYYY-MM
+	ui          *shell.UI
+	date        string // the chosen day, YYYY-MM-DD, empty for none
+	Month       string // the month on show, YYYY-MM
+	followToday bool   // the new-entry default, until a date is chosen explicitly
 
 	// OnChanged fires with the new date whenever the choice moves, so the
 	// readout under the field can follow it.
@@ -88,6 +89,24 @@ func normalDate(iso string) string {
 // text is not the answer, since it can be half a date.
 func (p *WorklogDatePicker) ISO() string { return p.date }
 
+// watchDay keeps today's highlight and push eligibility current while this
+// picker is on screen. A selected draft date stays selected across midnight.
+func (p *WorklogDatePicker) watchDay() func() {
+	if p.ui.LogDayListeners == nil {
+		p.ui.LogDayListeners = make(map[fyne.CanvasObject]func())
+	}
+	p.ui.LogDayListeners[p] = func() {
+		if p.followToday && p.Entry.Text == p.date {
+			p.Set(shell.Today())
+		}
+		if p.CalendarOpen() {
+			p.Refresh()
+		}
+		p.fire()
+	}
+	return func() { delete(p.ui.LogDayListeners, p) }
+}
+
 // Set moves the choice, and the month with it when the new day is elsewhere.
 //
 // Something unreadable is ignored rather than taken as a request to clear: the
@@ -128,6 +147,7 @@ func (p *WorklogDatePicker) build() {
 	// but only a whole one moves the grid.
 	p.Entry.OnChanged = func(s string) {
 		if iso := normalDate(s); iso != "" && iso != p.date {
+			p.followToday = false
 			p.date = iso
 			p.Month = iso[:7]
 			p.Refresh()
@@ -451,6 +471,7 @@ func (p *WorklogDatePicker) dayCell(ds string, day int, byOrg map[string]int, dr
 		}
 	}
 	cell := shell.NewTappable(stack, func() {
+		p.followToday = false
 		p.date = ds
 		p.Entry.SetText(ds)
 		p.Refresh()
@@ -551,7 +572,13 @@ func dayFillReadout(ui *shell.UI, p *WorklogDatePicker, minE *widget.Entry, excl
 		}
 	}
 	update()
-	p.OnChanged = func(string) { update() }
+	prevDate := p.OnChanged
+	p.OnChanged = func(iso string) {
+		if prevDate != nil {
+			prevDate(iso)
+		}
+		update()
+	}
 	if minE != nil {
 		// Chain onto whatever the caller has already wired: validators, tests,
 		// autosave — none of those should stop firing because this readout also

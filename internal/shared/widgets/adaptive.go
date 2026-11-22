@@ -100,7 +100,12 @@ func (g *DayGridLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 
 // SidesLayout holds one group at each end of a row, or stacks them when they do
 // not both fit.
-type SidesLayout struct{ stacked bool }
+type SidesLayout struct {
+	stacked bool
+	// EndAligned keeps the right group at the right when it drops under the
+	// left one, instead of starting it at the left edge.
+	EndAligned bool
+}
 
 // NewSidesLayout starts from the width the row already has, if any.
 func NewSidesLayout(left, right fyne.CanvasObject, width float32) *SidesLayout {
@@ -118,8 +123,13 @@ func (l *SidesLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	left.Move(fyne.NewPos(0, 0))
 	if l.stacked {
 		left.Resize(fyne.NewSize(size.Width, lm.Height))
-		right.Move(fyne.NewPos(0, lm.Height+theme.Padding()))
-		right.Resize(fyne.NewSize(min(rm.Width, size.Width), rm.Height))
+		w := min(rm.Width, size.Width)
+		x := float32(0)
+		if l.EndAligned {
+			x = size.Width - w
+		}
+		right.Move(fyne.NewPos(x, lm.Height+theme.Padding()))
+		right.Resize(fyne.NewSize(w, rm.Height))
 		return
 	}
 	// The left group gets all the room the right leaves it, so one that wraps
