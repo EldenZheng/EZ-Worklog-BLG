@@ -107,8 +107,8 @@ type repoClone struct{ repo, dir string }
 
 // cloneList is every clone in folders with the repository it is of, in the
 // order found, so the first clone of a repository wins as before. The remotes
-// are read a core's worth at a time: a folder of forty clones is forty git
-// processes.
+// share the small local-scan budget with git log reads, so a folder with many
+// clones does not launch a core's worth of git processes at startup.
 func cloneList(folders []string) []repoClone {
 	var dirs []string
 	for _, folder := range folders {
@@ -128,7 +128,6 @@ func cloneList(folders []string) []repoClone {
 		}
 	}
 	repos := make([]string, len(dirs))
-	sem := make(chan struct{}, localScanLimit())
 	var wg sync.WaitGroup
 	for i, dir := range dirs {
 		if _, err := os.Stat(filepath.Join(dir, ".git")); err != nil {
@@ -137,8 +136,8 @@ func cloneList(folders []string) []repoClone {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			localScanSlots <- struct{}{}
+			defer func() { <-localScanSlots }()
 			if url, err := git(dir, "config", "--get", "remote.origin.url"); err == nil {
 				repos[i] = RepoFromRemote(url)
 			}

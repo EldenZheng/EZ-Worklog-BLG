@@ -582,7 +582,7 @@ func rowActions(ui *shell.UI, r backend.Row, refresh func()) (push, edit, del *s
 	if r["pushed_at"] != "" {
 		label = "Re-push"
 	}
-	// Push is nil off the entry's day: see backend.RowPushable.
+	// Future drafts wait until their day: see backend.RowPushable.
 	if PushDay == nil || backend.RowPushable(r, PushDay()) {
 		push = shell.NewHoverButton(label, nil, func() { pushRow(ui, r, refresh) })
 		if r["issue"] == "" && !backend.PushableWithoutIssue(r) {

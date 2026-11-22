@@ -142,6 +142,60 @@ func TestFoldingRevealAsksForItsShare(t *testing.T) {
 	}
 }
 
+// Finishing the startup reveal and pending-card resize only changes geometry.
+// Queuing either whole subtree for refresh makes Fyne discard all its cached
+// text and shapes just as the last stretch of the arrival settles.
+func TestStartupAnimationFinishPreservesContentCache(t *testing.T) {
+	for _, kind := range []string{"reveal", "pending resize"} {
+		t.Run(kind, func(t *testing.T) {
+			base := test.NewApp()
+			w := base.NewWindow("finish")
+			paint := &wipePaintCanvas{Canvas: w.Canvas()}
+			driver := &wipePaintDriver{Driver: base.Driver(), canvas: paint}
+			fyne.SetCurrentApp(&motionTestApp{App: base, driver: driver})
+			defer func() { fyne.SetCurrentApp(base); base.Quit() }()
+			content := canvas.NewRectangle(nil)
+			content.SetMinSize(fyne.NewSize(100, 200))
+			var finish func()
+			if kind == "reveal" {
+				r := shell.NewReveal(content)
+				paint.target = r
+				w.SetContent(r)
+				w.Resize(fyne.NewSize(300, 250))
+				r.SetShare(.99)
+				finish = func() {
+					r.SetShare(1)
+					if got := test.WidgetRenderer(r).Objects(); len(got) != 1 || got[0] != content {
+						t.Fatal("finished reveal did not remove its clip")
+					}
+				}
+			} else {
+				m := shell.NewMorph(content)
+				paint.target = m
+				w.SetContent(m)
+				w.Resize(fyne.NewSize(300, 250))
+				content.SetMinSize(fyne.NewSize(100, 400))
+				m.Change(0, nil)
+				driver.animation.Tick(.99)
+				finish = func() {
+					driver.animation.Tick(1)
+					if m.MinSize().Height != content.MinSize().Height {
+						t.Fatal("finished resize did not settle at its new height")
+					}
+				}
+			}
+			paint.refreshes, paint.dirty = 0, 0
+			finish()
+			if paint.refreshes != 0 {
+				t.Fatalf("final frame discarded the content cache %d times", paint.refreshes)
+			}
+			if paint.dirty == 0 {
+				t.Fatal("final geometry was not repainted")
+			}
+		})
+	}
+}
+
 // A week shown for the first time arrives day by day; redrawing the same week
 // leaves its days be.
 func TestWeekArrivesOnlyWhenItChanges(t *testing.T) {

@@ -56,8 +56,8 @@ func TestGoldAccentPreservesStatusColours(t *testing.T) {
 				t.Fatalf("brand accent changed status colour %s", name)
 			}
 		}
-		if gold.Color(theme.ColorNamePrimary, variant) != base.Color(theme.ColorNamePrimary, variant) {
-			t.Fatal("primary action buttons should retain their original accent")
+		if gold.Color(theme.ColorNamePrimary, variant) != widgets.LogoGold {
+			t.Fatal("input focus borders and carets should use logo gold")
 		}
 		if (shell.PillTheme{Theme: gold}).Color(theme.ColorNamePrimary, variant) != widgets.LogoGold {
 			t.Fatal("active navigation pill should retain logo gold")

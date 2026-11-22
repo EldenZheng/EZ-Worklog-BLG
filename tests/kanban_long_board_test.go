@@ -143,6 +143,13 @@ func TestKanbanRedrawWaitsUntilShown(t *testing.T) {
 // clearing the field redraws at once.
 func TestKanbanSearchWaitsForAPause(t *testing.T) {
 	k := longBoardUI(t, 3)
+	// The real driver queues the debounce callback on the UI thread. Fyne's
+	// test driver calls it on the timer goroutine instead; observing Body while
+	// that callback was still drawing raced the text shaper with the clear.
+	base := fyne.CurrentApp()
+	driver := &kanbanSearchUIDriver{Driver: base.Driver(), queued: make(chan func(), 256)}
+	fyne.SetCurrentApp(&motionTestApp{App: base, driver: driver})
+	defer fyne.SetCurrentApp(base)
 	var search *widget.Entry
 	everything(k.Root, func(o fyne.CanvasObject) {
 		if e, ok := o.(*widget.Entry); ok && e.PlaceHolder == "Search issues or project" {
@@ -157,9 +164,15 @@ func TestKanbanSearchWaitsForAPause(t *testing.T) {
 	if k.Body.Objects[0] != before {
 		t.Fatal("a key should not redraw the board straight away")
 	}
-	deadline := time.Now().Add(5 * kanban.SearchPause)
-	for k.Body.Objects[0] == before && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
+	deadline := time.NewTimer(5 * kanban.SearchPause)
+	defer deadline.Stop()
+	for k.Body.Objects[0] == before {
+		select {
+		case apply := <-driver.queued:
+			apply()
+		case <-deadline.C:
+			t.Fatal("search did not redraw after the pause")
+		}
 	}
 	if cards, _ := boardCards(k); cards != 1 {
 		t.Fatalf("after the pause the board should show the one match, got %d cards", cards)
@@ -169,3 +182,10 @@ func TestKanbanSearchWaitsForAPause(t *testing.T) {
 		t.Fatalf("clearing should redraw at once, got %d cards", cards)
 	}
 }
+
+type kanbanSearchUIDriver struct {
+	fyne.Driver
+	queued chan func()
+}
+
+func (d *kanbanSearchUIDriver) DoFromGoroutine(apply func(), _ bool) { d.queued <- apply }

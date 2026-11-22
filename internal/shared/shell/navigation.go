@@ -39,11 +39,11 @@ func (t GoldTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) co
 		}
 	}
 	switch name {
-	case theme.ColorNameButton, theme.ColorNameHyperlink:
+	case theme.ColorNamePrimary, theme.ColorNameButton, theme.ColorNameHyperlink:
 		return widgets.LogoGold
 	case theme.ColorNameSeparator:
 		return BlendColor(widgets.LogoGold, color.Black, 0.25)
-	case theme.ColorNameForegroundOnWarning:
+	case theme.ColorNameForegroundOnPrimary, theme.ColorNameForegroundOnWarning:
 		return color.NRGBA{R: 0x1c, G: 0x18, B: 0x0d, A: 0xff}
 	case theme.ColorNameFocus, theme.ColorNameSelection:
 		return widgets.WithAlpha(widgets.LogoGold, 0.30)

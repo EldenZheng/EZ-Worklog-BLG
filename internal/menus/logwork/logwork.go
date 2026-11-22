@@ -630,7 +630,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 	}
 
-	showPushOnItsDay(mPushView, mDate, false)
+	showPushWhenDue(mPushView, mDate, false)
 	mDate.watchDay()
 
 	ui.RecentBox = container.NewVBox()
@@ -824,7 +824,11 @@ func RenderPending(ui *shell.UI) {
 	// Log List counts these commits in its pending column, so it is redrawn
 	// whenever the list behind it changes — otherwise that column keeps saying
 	// "reading your commits" after they have arrived.
-	defer shell.Hooks.DrawLogList(ui)
+	defer func() {
+		if ui.TabVisible(shell.LogListTabName) {
+			shell.Hooks.DrawLogList(ui)
+		}
+	}()
 
 	res := ui.Pending
 	arriveDelay := pendingArriveDelay // for the ignored tiles too; the list clears it
@@ -1857,7 +1861,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 		remPane = container.NewBorder(nil, meetingRecordingField(recordingE), nil, nil, remPane)
 	}
 	pushView := shell.GitHubButton(pushBtn)
-	showPushOnItsDay(pushView, dateE, rowSent(r))
+	showPushWhenDue(pushView, dateE, rowSent(r))
 	actions := container.NewHBox(saveBtn, pushView)
 	return editorForm{
 		date: dateE,
@@ -2062,7 +2066,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		dayFillReadout(ui, dateE, minE, ""),
 	)
 	pushView := shell.GitHubButton(pushBtn)
-	showPushOnItsDay(pushView, dateE, false)
+	showPushWhenDue(pushView, dateE, false)
 	actions := container.NewHBox(saveBtn, pushView)
 	return editorForm{
 		date: dateE,

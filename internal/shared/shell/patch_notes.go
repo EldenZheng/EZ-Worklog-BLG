@@ -17,8 +17,8 @@ var patchNoteSections = []struct {
 	Points  []string
 }{
 	{"The new worklog SOP (from 21 Nov 2026)", []string{
-		"Each entry is pushed as a Worklog issue under the issue it belongs to. Its minutes go in Actual Worklog (mins).",
-		"A Worklog's date is the day it is created, so an entry is pushed on its own day only. Push shows on that day; an entry for a later day waits for it, and a past day cannot be pushed.",
+		"Each entry is pushed as a Worklog issue under the issue it belongs to. Its minutes go in Worklog Reported(mins).",
+		"Today's and past entries can be pushed. Future entries wait until their date. A late Worklog's description starts with 'Logged for YYYY-MM-DD', a blank line, then the work details; GitHub's creation date remains the day it is pushed.",
 		"Entries dated before 21 Nov 2026 keep the old method.",
 	}},
 	{"Commits name their Worklog", []string{
@@ -33,6 +33,9 @@ var patchNoteSections = []struct {
 	}},
 	{"Reading your time", []string{
 		"Status, Report and Log List read Worklog issues from 21 Nov 2026, and the project board before it.",
+		"Late Worklogs count on their first-line 'Logged for' date, including plain descriptions created outside the app and pushes after the selected month or payroll period. Older app footer dates still work. Worklogs without a date note use their Malaysia creation day.",
+		"The SOP allows up to 15 hours logged per day. Each Worklog's 'Logged for' date backfills that day before pay is capped at 480 minutes per day. Additional time stays visible without increasing that day's pay; unmarked excess stays on its creation day.",
+		"Status and Report each have a Worklog dropdown beside Refresh from GitHub, switching their totals between Worklog Reported(mins) and Worklog Approved(mins). Reported is the default; an unset approval counts as zero. The menu stays open after selection while the check, calendars, chart and figures animate.",
 	}},
 }
 

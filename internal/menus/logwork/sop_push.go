@@ -11,7 +11,7 @@ import (
 	"worklog/internal/shared/shell"
 )
 
-// PushDay is the day entries may be pushed on: today. Tests that are not
+// PushDay is the latest date entries may be pushed for: today. Tests that are not
 // about the rule stand in a day of their own.
 var PushDay = shell.Today
 
@@ -44,14 +44,11 @@ func WatchDay(ui *shell.UI, previous string, closed <-chan struct{}) {
 	}
 }
 
-// showPushOnItsDay keeps an editor's Save & push to the day its entry is for.
-// Under the worklog SOP a Worklog's day is the day it is created, so pushing on
-// any other day would log the work on the wrong one. sent is an entry already
-// pushed, wholly or in part: pushing it again creates nothing and is allowed
-// any day. Call it after anything else that sets the picker's OnChanged.
-func showPushOnItsDay(push fyne.CanvasObject, date *WorklogDatePicker, sent bool) {
+// showPushWhenDue allows today's and past entries, hiding Save & push only
+// for future/invalid dates. Sent entries remain retryable on any day.
+func showPushWhenDue(push fyne.CanvasObject, date *WorklogDatePicker, sent bool) {
 	update := func(iso string) {
-		if sent || PushDay == nil || iso == PushDay() {
+		if sent || PushDay == nil || backend.RowPushable(backend.Row{"date": iso}, PushDay()) {
 			push.Show()
 		} else {
 			push.Hide()

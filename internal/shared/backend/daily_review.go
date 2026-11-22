@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // DailyReviewPush is a proposed update of the day's shared review issue. The
@@ -104,7 +103,7 @@ func MergeCodeReviewItems(lists ...string) ([]CodeReviewItem, error) {
 		if strings.TrimSpace(text) == "" {
 			continue
 		}
-		items, err := ParseCodeReviewItems(text)
+		items, err := ParseCodeReviewItems(WorklogRemarks(text))
 		if err != nil {
 			return nil, GhErr("Cannot safely combine code reviews: %v. Check the existing description and worklog remarks first.", err)
 		}
@@ -190,14 +189,15 @@ func PushDailyReview(cfg Config, plan *DailyReviewPush, progress ...func(FetchPr
 		return PushResult{}, GhErr("The code review changed on GitHub while you were choosing. Push again to check the new combined total.")
 	}
 	r := plan.row
-	// PushEntry refuses a new SOP Worklog off its own day. Check that before
+	// PushEntry refuses a future SOP Worklog. Check that before
 	// the description is rewritten, or the issue is left half updated.
-	if SOPApplies(r["date"]) && strings.TrimSpace(r["issue_url"]) == "" && r["date"] != WorkDate(time.Now()) {
-		return PushResult{}, GhErr("Under the worklog SOP a Worklog is created on its own day. Push this entry on %s.", r["date"])
+	if err := worklogPushDateError(r["date"], r["issue_url"]); err != nil {
+		return PushResult{}, err
 	}
-	if _, err := Gh([]string{"issue", "edit", plan.URL, "--body", plan.Body}); err != nil {
+	body := loggedForBody(plan.Body, r["date"])
+	if _, err := Gh([]string{"issue", "edit", plan.URL, "--body", body}); err != nil {
 		return PushResult{}, err
 	}
 	return PushEntry(cfg, r["issue"], r["date"], r["owner"], plan.Minutes,
-		plan.Body, plan.Body, "issue", r["issue_url"], "", progress...)
+		plan.Body, body, "issue", r["issue_url"], "", progress...)
 }

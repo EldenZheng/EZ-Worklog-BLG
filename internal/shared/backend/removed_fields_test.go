@@ -24,7 +24,7 @@ func TestPushWithWorklogColumnsRemovedNotesThemAndStillSetsStatus(t *testing.T) 
 				switch {
 				case strings.Contains(q, "subIssues(first:"):
 					return fmt.Sprintf(`{"data":{"repository":{"issue":{"id":"parent","url":"https://github.com/%s/repo/issues/1","subIssues":{"nodes":[]},"projectItems":{"nodes":[{"id":"board-item","project":{"id":"board","fields":{"nodes":[
- {"id":"actual-project-column","name":"Actual Worklog (mins)","isIssueField":true,"issueField":{"id":"actual-issue-field","name":"Actual Worklog (mins)"}},
+ {"id":"actual-project-column","name":"Worklog Reported(mins)","isIssueField":true,"issueField":{"id":"actual-issue-field","name":"Worklog Reported(mins)"}},
  {"id":"status","name":"Status","options":[{"id":"done","name":"Done"}]}
 ]}}}]}}}}}`, org), nil
 				case len(args) > 1 && args[0] == "issue" && args[1] == "create":

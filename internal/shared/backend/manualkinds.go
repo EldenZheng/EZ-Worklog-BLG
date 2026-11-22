@@ -275,7 +275,7 @@ func EnsureMeetingIssue(cfg Config, date, body string) (string, error) {
 	} else if ref != "" {
 		return ref, nil
 	}
-	_, ref, err := createTypedIssue(repo, title, body, meetingIssueType)
+	_, ref, err := createTypedIssue(repo, title, loggedForBody(body, date), meetingIssueType)
 	if ref == "" {
 		return "", err
 	}
@@ -300,7 +300,7 @@ func EnsureCodeReviewIssue(cfg Config, date, body string) (string, error) {
 	} else if ref != "" {
 		return ref, nil
 	}
-	_, ref, err := createTypedIssue(repo, title, body, codeReviewIssueType)
+	_, ref, err := createTypedIssue(repo, title, loggedForBody(body, date), codeReviewIssueType)
 	if ref == "" {
 		return "", err
 	}

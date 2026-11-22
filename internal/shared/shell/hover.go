@@ -940,9 +940,12 @@ func SpreadIn(spot *canvas.Rectangle, pos fyne.Position, size fyne.Size, centre 
 // nothing around it moves.
 type Wipe struct {
 	widget.BaseWidget
-	Content fyne.CanvasObject
-	clip    *clipBox
-	share   float32
+	Content   fyne.CanvasObject
+	clip      *clipBox
+	share     float32
+	animation *fyne.Animation
+	timer     *time.Timer
+	stopped   bool
 }
 
 // NewWipe wraps content to be uncovered after delay.
@@ -955,17 +958,41 @@ func NewWipeFor(content fyne.CanvasObject, delay, span time.Duration) *Wipe {
 	w := &Wipe{Content: content, clip: newClipBox(content)}
 	w.ExtendBaseWidget(w)
 	anim := fyne.NewAnimation(span, func(done float32) {
+		if w.stopped {
+			return
+		}
 		w.share = done
 		w.layout(w.Size())
-		canvas.Refresh(w)
+		// Only the clipping edge moves. Preserve the card's cached text and
+		// shapes rather than invalidating its whole subtree on every frame.
+		Repaint(w)
 	})
 	anim.Curve = easeOutQuart
+	w.animation = anim
 	if delay <= 0 {
 		anim.Start()
 	} else {
-		time.AfterFunc(delay, func() { fyne.Do(anim.Start) })
+		w.timer = time.AfterFunc(delay, func() {
+			fyne.Do(func() {
+				if !w.stopped {
+					anim.Start()
+				}
+			})
+		})
 	}
 	return w
+}
+
+// Stop cancels a wipe whose card has been replaced, including a start already
+// queued on the UI thread. Discarded cards must not keep animating off screen.
+func (w *Wipe) Stop() {
+	w.stopped = true
+	if w.timer != nil {
+		w.timer.Stop()
+	}
+	if w.animation != nil {
+		w.animation.Stop()
+	}
 }
 
 func (w *Wipe) layout(size fyne.Size) {

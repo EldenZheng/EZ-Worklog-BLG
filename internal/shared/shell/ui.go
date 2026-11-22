@@ -161,6 +161,9 @@ type UI struct {
 	// are wanted back.
 	ShowPushed *widget.Check
 	DraftSort  string // Duration or Created (earliest first)
+	// Count choices belong to Status and Report. Both default to reported.
+	StatusApproved, ReportApproved bool
+	CalCount, RepCount             *GoldSelect
 
 	CalTitle        *widget.Label
 	CalSummary      *widget.Label
@@ -541,12 +544,13 @@ func (ui *UI) LoadPending(force bool) {
 		ui.PendingLoaded = true
 		ui.PendingAt = time.Now()
 		ui.Pending = res
-		Hooks.RenderPending(ui)
-		// Saved locally waits for the titles as well, then draws once.
+		// Keep the loading message (or the previous list) until titles land,
+		// then build both lists once instead of rebuilding during their arrival.
 		ui.PendingTitlesLoading = true
 		ui.loadIssueInfos(composer, titlesWeight, func() {
 			finish()
 			ui.PendingTitlesLoading = false
+			Hooks.RenderPending(ui)
 			Hooks.DrawRecent(ui)
 		})
 	})
@@ -673,8 +677,8 @@ func (ui *UI) LearnIssueInfos(infos map[string]backend.IssueInfo) {
 	Hooks.DrawRecent(ui)
 }
 
-// loadIssueInfos fills in the issue titles behind the pending refs, then
-// re-renders. Bubbles appear immediately and gain their title a moment later.
+// loadIssueInfos fills the pending title cache before the caller draws the
+// finished list. It does not trigger intermediate pending or saved-list draws.
 //
 // Runs inside the pending fetch's own progress job as a final phase in the
 // caller's composer — the bar reads as one continuous 0-to-100 climb rather
@@ -704,8 +708,9 @@ func (ui *UI) loadIssueInfos(composer *ProgressComposer, weight float64, finish 
 	}, func() {
 		composer.Advance(weight)
 		defer finish()
-		ui.LearnIssueInfos(infos)
-		Hooks.RenderPending(ui)
+		for ref, info := range infos {
+			ui.IssueInfo[ref] = info
+		}
 	})
 }
 
@@ -861,6 +866,21 @@ func (ui *UI) ItemsFor(key string) ([]backend.WorklogItem, bool) {
 	return ui.ProjItems[key], true
 }
 
+// TabVisible keeps data callbacks from rebuilding an unopened view. Each tab
+// draws current cached data when selected. A standalone menu has no tab bar.
+func (ui *UI) TabVisible(name string) bool {
+	return ui.Tabs == nil || ui.Tabs.Selected() == nil || ui.Tabs.Selected().Text == name
+}
+
+func (ui *UI) redrawVisibleTimeViews() {
+	if ui.TabVisible(StatusTabName) {
+		Hooks.DrawCalendar(ui)
+	}
+	if ui.TabVisible(ReportTabName) {
+		Hooks.DrawReport(ui)
+	}
+}
+
 // LoadProject fetches only the requested date range and caches it by screen.
 func (ui *UI) LoadProject(key, fromDate, toDate string, force bool) {
 	ui.EnsureProjectCache()
@@ -876,8 +896,7 @@ func (ui *UI) LoadProject(key, fromDate, toDate string, force bool) {
 	if len(backend.ProjectURLs(ui.Cfg)) == 0 {
 		ui.ProjErr[key] = backend.GhErr(
 			"Set the Worklog project URL in Settings to load Status and Report from GitHub.")
-		Hooks.DrawCalendar(ui)
-		Hooks.DrawReport(ui)
+		ui.redrawVisibleTimeViews()
 		return
 	}
 	ui.ProjLoading[key] = true
@@ -905,8 +924,7 @@ func (ui *UI) LoadProject(key, fromDate, toDate string, force bool) {
 			ui.ProjItems[key] = items
 			ui.ProjLoaded[key] = true
 		}
-		Hooks.DrawCalendar(ui)
-		Hooks.DrawReport(ui)
+		ui.redrawVisibleTimeViews()
 		// The Log tab scores today against this same data, so it has to be
 		// redrawn when a month lands or it stays stuck on "checking…".
 		Hooks.DrawRecent(ui)

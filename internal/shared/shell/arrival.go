@@ -342,7 +342,7 @@ func (r *Reveal) SetShare(share float32) {
 	}
 	// Partway in, only the cut moves: lay it out and ask for a frame, rather
 	// than throw away and redraw everything in the piece (see Repaint). The
-	// first and last steps swap the clip in and out, and need a full refresh.
+	// first and last steps swap the clip in and out through the renderer too.
 	partway := r.share < 1 && share < 1 && share > 0
 	r.share = share
 	if partway {
@@ -412,7 +412,10 @@ func (rr *revealRenderer) Refresh() {
 		}
 	}
 	rr.Layout(rr.r.Size())
-	canvas.Refresh(rr.r)
+	// The render tree reads Objects on each frame, so swapping the clip does
+	// not require discarding the content's cached text and shapes. Doing that
+	// on completion caused a second expensive paint at the end of the arrival.
+	Repaint(rr.r)
 }
 
 func (rr *revealRenderer) Objects() []fyne.CanvasObject {

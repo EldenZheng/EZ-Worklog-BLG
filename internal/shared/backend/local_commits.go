@@ -14,9 +14,11 @@ import (
 // remote-tracking branch. Pushed in the meantime, a commit comes back from
 // GitHub as well, and GitHub's copy wins.
 
-// localScanLimit is how many clones are read at once: one per core keeps a
-// burst of git processes from stalling the machine, and is as quick.
-func localScanLimit() int { return max(1, runtime.NumCPU()) }
+// Reserve CPU time for the UI and other applications. Discovery and log reads
+// share this budget, including overlapping scans from different menus.
+func localScanLimit() int { return min(2, max(1, runtime.NumCPU()/2)) }
+
+var localScanSlots = make(chan struct{}, localScanLimit())
 
 // Key is how a commit is matched across the refs column, GitHub and the
 // clones: repo and short sha, without case.
@@ -33,14 +35,13 @@ func LocalCommits(cfg Config, since, until string) []Commit {
 		}
 	}
 	results := make([][]Commit, len(todo))
-	sem := make(chan struct{}, localScanLimit())
 	var wg sync.WaitGroup
 	for i, c := range todo {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+			localScanSlots <- struct{}{}
+			defer func() { <-localScanSlots }()
 			results[i] = unpushedCommits(c.dir, c.repo, since, until)
 		}()
 	}

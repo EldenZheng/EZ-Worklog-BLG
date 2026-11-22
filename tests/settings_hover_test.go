@@ -11,7 +11,84 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/test"
 	"fyne.io/fyne/v2/widget"
+
+	"worklog/internal/menus/settings"
+	"worklog/internal/shared/widgets"
 )
+
+func TestSettingsOrgMenuGoldChasesHoveredControl(t *testing.T) {
+	ui, _ := storageSettingsFixture(t)
+	base := fyne.CurrentApp()
+	ui.Cfg.Repos = []string{"exampleorg", "Example-Support"}
+	view := settings.BuildSettingsTab(ui)
+	ui.Win.SetContent(view)
+	ui.Win.Resize(fyne.NewSize(1500, 1000))
+	var buttons []*widget.Button
+	walk(view, func(o fyne.CanvasObject) {
+		if b, ok := o.(*widget.Button); ok && b.Text == "..." {
+			buttons = append(buttons, b)
+		}
+	})
+	if len(buttons) < 2 {
+		t.Fatal("need two org colour controls")
+	}
+	driver := collectMotion(t)
+	at := func(b *widget.Button) fyne.Position {
+		return base.Driver().AbsolutePositionForObject(b).Add(fyne.NewPos(b.Size().Width/2, b.Size().Height/2))
+	}
+	test.MoveMouse(ui.Win.Canvas(), at(buttons[0]))
+	if len(driver.anims) == 0 {
+		t.Fatal("org menu has no shared gold hover")
+	}
+	enter := driver.anims[len(driver.anims)-1]
+	if enter.Duration != widgets.HoverDuration {
+		t.Fatal("org hover must use the shared timing")
+	}
+	enter.Tick(1)
+	var pill *canvas.Rectangle
+	walkRendered(view, func(o fyne.CanvasObject) {
+		if rect, ok := o.(*canvas.Rectangle); ok && sameColor(rect.FillColor, widgets.WithAlpha(widgets.LogoGold, .42)) && rect.StrokeWidth == 1 {
+			pill = rect
+		}
+	})
+	if pill == nil {
+		t.Fatal("gold hover pill missing")
+	}
+	if !sameColor(pill.StrokeColor, widgets.WithAlpha(widgets.LogoGold, .95)) {
+		t.Fatal("org menu highlight must have a strong gold edge")
+	}
+	start := pill.Position()
+	test.MoveMouse(ui.Win.Canvas(), at(buttons[1]))
+	slide := driver.anims[len(driver.anims)-1]
+	if slide == enter || slide.Duration != widgets.HoverDuration {
+		t.Fatal("moving between menu controls must move one shared gold pill")
+	}
+	slide.Tick(.5)
+	middle := pill.Position()
+	enter.Tick(1)
+	if pill.Position() != middle {
+		t.Fatal("a stale hover frame interrupted the chase")
+	}
+	slide.Tick(1)
+	if middle == start || middle == pill.Position() || pill.Position().Y == start.Y {
+		t.Fatal("gold must travel between org menu controls instead of independently fading")
+	}
+	for _, b := range buttons {
+		background := test.WidgetRenderer(b).Objects()[0].(*canvas.Rectangle)
+		if _, _, _, a := background.FillColor.RGBA(); a != 0 {
+			t.Fatal("the button's stock wash must stay clear under the shared gold pill")
+		}
+	}
+	test.MoveMouse(ui.Win.Canvas(), fyne.NewPos(0, 0))
+	driver.anims[len(driver.anims)-1].Tick(1)
+	if _, _, _, a := pill.FillColor.RGBA(); a != 0 {
+		t.Fatal("leaving org controls must fade the shared gold out")
+	}
+	buttons[1].OnTapped()
+	if ui.Win.Canvas().Overlays().Top() == nil || waitForButton(t, ui.Win, "Confirm") == nil {
+		t.Fatal("org menu no longer opens the colour picker")
+	}
+}
 
 func TestNewSettingsButtonsFadeHoverInAndOut(t *testing.T) {
 	for _, group := range []string{"sidebar", "menu", "reallocate", "clear"} {

@@ -29,7 +29,7 @@ var liveGitHub = false
 func TestMain(m *testing.M) {
 	assemble.WireHooks()
 	shell.RunAsyncInline = true
-	// Fixtures are dated wherever suits them. The SOP's push-on-its-day rule
+	// Fixtures are dated wherever suits them. The future-date push rule
 	// is tested on its own (sop_test.go), which puts it back.
 	logwork.PushDay = nil
 	if !liveGitHub {

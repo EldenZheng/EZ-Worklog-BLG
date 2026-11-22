@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func pushFieldArg(args []string, name string) string {
@@ -23,7 +24,7 @@ func pushFieldArg(args []string, name string) string {
 // The project field ID and organisation issue field ID intentionally differ.
 // Sending the mirrored column's ID to either wrong API must fail this test.
 func TestWorklogPushWritesIssueAndProjectMinutesOnCreateDirectAndRetry(t *testing.T) {
-	for _, mode := range []string{"create", "direct", "retry"} {
+	for _, mode := range []string{"create", "direct", "retry", "late"} {
 		t.Run(mode, func(t *testing.T) {
 			previous := Gh
 			t.Cleanup(func() { Gh = previous })
@@ -31,6 +32,13 @@ func TestWorklogPushWritesIssueAndProjectMinutesOnCreateDirectAndRetry(t *testin
 			issueURL := "https://github.com/" + org + "/repo/issues/2"
 			creates, types, actualWrites, projectWrites := 0, 0, 0, 0
 			failActual := mode == "retry"
+			date := "2026-11-19"
+			if mode == "late" {
+				date = AddDays(WorkDate(time.Now()), -1)
+				if !SOPApplies(date) {
+					t.Skip("SOP has not started")
+				}
+			}
 			target := "worklog-issue"
 			if mode == "direct" {
 				target = "parent"
@@ -47,14 +55,22 @@ func TestWorklogPushWritesIssueAndProjectMinutesOnCreateDirectAndRetry(t *testin
  {"id":"owner","name":"ZZZ (DEPRECATED) Worklog Owner (blg-xxxx)"},
  {"id":"legacy-minutes","name":"ZZZ (DEPRECATED) Worklog (mins)"},
  {"id":"remarks","name":"ZZZ (DEPRECATED) Worklog (Remarks)"},
- {"id":"actual-project-column","name":"Actual Worklog (mins)","isIssueField":true,"issueField":{"id":"actual-issue-field","name":"Actual Worklog (mins)"}},
+ {"id":"actual-project-column","name":"Worklog Reported(mins)","isIssueField":true,"issueField":{"id":"actual-issue-field","name":"Worklog Reported(mins)"}},
  {"id":"status","name":"Status","options":[{"id":"done","name":"Done"}]}
 ]}}}]}}}}}`, org, issueURL), nil
 				case len(args) > 1 && args[0] == "issue" && args[1] == "create":
+					if mode == "late" && !strings.HasPrefix(pushFieldArg(args, "--body"), "Logged for "+date+"\n\n") {
+						t.Fatal("past Worklog creation must start with its intended date")
+					}
 					creates++
 					return issueURL, nil
 				case len(args) > 1 && args[0] == "issue" && args[1] == "view":
 					return `{"id":"worklog-issue"}`, nil
+				case len(args) > 1 && args[0] == "issue" && args[1] == "edit":
+					if !strings.HasPrefix(pushFieldArg(args, "--body"), "Logged for "+date) {
+						t.Fatal("direct worklog must start with its logged-for date")
+					}
+					return `{}`, nil
 				case strings.Contains(q, "issueTypes(first:"):
 					return `{"data":{"organization":{"issueTypes":{"nodes":[{"id":"worklog-type","name":"Worklog"}]}}}}`, nil
 				case strings.Contains(q, "updateIssueIssueType"):
@@ -99,7 +115,7 @@ func TestWorklogPushWritesIssueAndProjectMinutesOnCreateDirectAndRetry(t *testin
 			if mode == "direct" {
 				pushMode = "issue"
 			}
-			res, err := pushEntry(Config{}, org+"/repo#1", "2026-11-19", "team-alex", 90, "- notes", "", pushMode, resume, "")
+			res, err := pushEntry(Config{}, org+"/repo#1", date, "team-alex", 90, "- notes", "", pushMode, resume, "")
 			if err != nil || types != 1 || actualWrites != 1 || projectWrites != 1 {
 				t.Fatalf("push failed: %+v %v; types=%d actual=%d project=%d", res, err, types, actualWrites, projectWrites)
 			}
@@ -123,7 +139,7 @@ func TestWorklogPushWritesIssueAndProjectMinutesOnCreateDirectAndRetry(t *testin
 	}
 }
 
-func TestMissingWorklogTypeOrActualFieldIDRemainsRetryable(t *testing.T) {
+func TestMissingWorklogTypeOrReportedFieldIDRemainsRetryable(t *testing.T) {
 	previous := Gh
 	t.Cleanup(func() { Gh = previous })
 	Gh = func(args []string, _ ...string) (string, error) {
@@ -134,7 +150,7 @@ func TestMissingWorklogTypeOrActualFieldIDRemainsRetryable(t *testing.T) {
 		return "", nil
 	}
 	var fields []field
-	if err := json.Unmarshal([]byte(`[{"id":"column","name":"Actual Worklog (mins)","isIssueField":true}]`), &fields); err != nil {
+	if err := json.Unmarshal([]byte(`[{"id":"column","name":"Worklog Reported(mins)","isIssueField":true}]`), &fields); err != nil {
 		t.Fatal(err)
 	}
 	done, problems := setWorklogIssueFields("missing-type-and-id-tests", "issue", fields, 45)
@@ -143,7 +159,7 @@ func TestMissingWorklogTypeOrActualFieldIDRemainsRetryable(t *testing.T) {
 	}
 }
 
-func TestActualWorklogIsSetEvenWhenNotDisplayedOnTheProject(t *testing.T) {
+func TestReportedWorklogIsSetEvenWhenNotDisplayedOnTheProject(t *testing.T) {
 	previous := Gh
 	t.Cleanup(func() { Gh = previous })
 	pages, writes := 0, 0
@@ -157,12 +173,12 @@ func TestActualWorklogIsSetEvenWhenNotDisplayedOnTheProject(t *testing.T) {
 		case strings.Contains(query, "issueFields(first:"):
 			pages++
 			if pages == 1 {
-				return `{"data":{"organization":{"issueFields":{"nodes":[{"id":"unrelated","name":"Estimate"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`, nil
+				return `{"data":{"organization":{"issueFields":{"nodes":[{"id":"unrelated","name":"Estimate"},{"id":"old-field","name":"Actual Worklog (mins)"}],"pageInfo":{"hasNextPage":true,"endCursor":"next"}}}}}`, nil
 			}
 			if pushFieldArg(args, "after") != "next" {
 				t.Fatal("issue-field discovery lost its pagination cursor")
 			}
-			return `{"data":{"organization":{"issueFields":{"nodes":[{"id":"org-field","name":"Actual Worklog (mins)"}],"pageInfo":{"hasNextPage":false}}}}}`, nil
+			return `{"data":{"organization":{"issueFields":{"nodes":[{"id":"org-field","name":"Worklog Reported(mins)"}],"pageInfo":{"hasNextPage":false}}}}}`, nil
 		case strings.Contains(query, "setIssueFieldValue"):
 			if pushFieldArg(args, "issue") != "entry" || pushFieldArg(args, "field") != "org-field" || pushFieldArg(args, "minutes") != "0" {
 				t.Fatal("must overwrite the issue field with the given total, including zero")
@@ -177,6 +193,41 @@ func TestActualWorklogIsSetEvenWhenNotDisplayedOnTheProject(t *testing.T) {
 	done, problems := setWorklogIssueFields("actual-without-column-tests", "entry", []field{{Name: "ZZZ (DEPRECATED) Worklog (mins)"}}, 0)
 	if len(problems) != 0 || len(done) != 2 || pages != 2 || writes != 1 {
 		t.Fatalf("issue field was lost when not displayed: %v %v pages=%d writes=%d", done, problems, pages, writes)
+	}
+}
+
+func TestWorklogIssueFieldPrefersReportedAndKeepsFormerNameCompatible(t *testing.T) {
+	oldGh := Gh
+	t.Cleanup(func() { Gh = oldGh })
+	Gh = func(args []string, _ ...string) (string, error) {
+		t.Fatalf("a mirrored issue field should not need another lookup: %v", args)
+		return "", nil
+	}
+	for _, tc := range []struct {
+		name, fields, want string
+	}{
+		{"reported first", `[
+ {"name":"Worklog Reported(mins)","isIssueField":true,"issueField":{"id":"reported"}},
+ {"name":"Actual Worklog (mins)","isIssueField":true,"issueField":{"id":"old"}}
+]`, "reported"},
+		{"reported last with other minute fields", `[
+ {"name":"Worklog Reported(mins)","id":"project-only"},
+ {"name":"Worklog Estimated(mins)","isIssueField":true,"issueField":{"id":"estimate"}},
+ {"name":"Actual Worklog (mins)","isIssueField":true,"issueField":{"id":"old"}},
+ {"name":"worklog reported (MINS)","isIssueField":true,"issueField":{"id":"reported"}}
+]`, "reported"},
+		{"former name", `[{"name":"Actual Worklog (mins)","isIssueField":true,"issueField":{"id":"old"}}]`, "old"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var fields []field
+			if err := json.Unmarshal([]byte(tc.fields), &fields); err != nil {
+				t.Fatal(err)
+			}
+			id, _, err := worklogIssueField("field-rename-tests", fields)
+			if err != nil || id != tc.want {
+				t.Fatalf("picked %q, %v; want %q", id, err, tc.want)
+			}
+		})
 	}
 }
 

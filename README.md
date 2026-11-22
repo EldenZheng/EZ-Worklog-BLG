@@ -37,6 +37,24 @@ Tapping an organisation in the shared Log Work / Log List / Status / Report colo
 Each key ends with Drafts Logs (yellow) and Planned Issues (purple), which hide
 those the same way.
 
+**Status** and **Report** each have a **Worklog** dropdown beside **Refresh from
+GitHub**. It defaults to **Reported**, using **Worklog Reported(mins)**; choose
+**Approved** to use **Worklog Approved(mins)** for that page's totals, calendar
+or chart, and detail figures. Report's CSV uses its selected count too. Blank
+approvals count as zero, and legacy board entries keep their single total.
+Each page keeps its own choice while browsing and refreshing, and starts at
+Reported again when the app opens. These two menus stay open after selection,
+showing the animated gold row and check. Click outside, press Escape or click
+the field again to close them. Saved locally and Log Work's date picker
+continue to show reported minutes.
+
+Option dropdowns throughout the app share the gold outline, rounded dark menu
+and selected gold row with a right-hand check. The gold hover glides between
+options; a click spreads gold from the pointer and draws the new check as the
+menu automatically folds away, without a confirmation pause. The Worklog
+selectors above stay open for comparing values. Search and keyboard selection
+keep the same behavior.
+
 ### Reading bubbles, bars and colours
 
 A **bubble** is a card for a commit group, saved entry, issue or planned block.
@@ -490,10 +508,31 @@ the remarks limit while keeping the full issue description.
 Regular worklogs, commits and single Code Reviews create sub-issues. Existing
 entries keep their original target when re-pushed. Every pushed worklog uses
 the **Worklog** GitHub issue type and writes the same minutes total to the
-issue's **Actual Worklog (mins)** field and the project's worklog minutes field,
+issue's **Worklog Reported(mins)** field and the project's worklog minutes field,
 including its deprecated version. A failed type or field update keeps the row
 retryable. Editing the saved popup's local description also updates its bubble
 title without renaming the parent issue on GitHub.
+
+Entries dated today or in the past can be pushed; future drafts wait until
+their date. A late Worklog's description starts with **Logged for YYYY-MM-DD**,
+then a blank line and the work details. The date is kept out of worklog remarks
+and is not duplicated on retry; retries move older footer dates to the top.
+Status, Report and Log List count late Worklogs on that logged-for date, even
+when pushed after the selected month or payroll period. Both Reported and
+Approved totals use it. Plain first-line dates on Worklogs created outside the
+app are recognised too, as are the app's older footer dates. Worklogs without
+a date note use their Malaysia creation day; GitHub's creation timestamp stays
+on the actual push day.
+
+The SOP allows up to **15 hours / 900 minutes logged per day**. Status and
+Report retain those logged hours; **payable time is capped at 480 minutes /
+8 hours per day**, across all that day's Worklogs. Additional logged hours do
+not increase that day's pay. Both Reported and Approved use the same pay cap.
+Backfill follows each Worklog's **Logged for** date before applying that cap.
+For example, 300 minutes on Monday plus a 180-minute Worklog created Tuesday
+but marked **Logged for Monday's date** completes Monday's 480 minutes. That
+Worklog is counted once, on Monday. Unmarked excess stays on Tuesday and does
+not fill another day's shortage.
 
 ![Meeting worklog: edit the title, add an optional recording link, then slide out separate remarks for long notes](docs/meeting-worklog.gif)
 
@@ -761,6 +800,7 @@ or hosted Worklog server. GitHub remains the source for pushed records.
 | Support payment per set | Payment in the salary currency per seven qualifying issues. Blank means unset; incomplete sets still carry across periods. |
 | Currency / Display in | Search dropdowns of the codes `open.er-api.com` has rates for. Display in is converted with a rate fetched from it, at most once a day; untick it to hide the conversion. |
 | Look back (days) | How far back the pending-commit scan goes. |
+| Repo folders | Folders containing your local clones. Clone discovery and local Git log scans share at most two workers, or one on machines with one or two logical CPUs, to reduce startup contention. |
 | Clean up after (days) | Forgets ignored commits and commit details on pushed entries after this many days (or the lookback, if longer). The worklog entries stay. Blank keeps everything. |
 | Finished report range (months) | Months per page in Projects' Finished report; clicking its month label opens all weeks. |
 | History backup | Back up the legacy worklog range, inspect storage, or use **…** to move/clear the archive. No push-mode or Anthropic-key setting is needed. |
@@ -771,9 +811,11 @@ The project the issues sit on must carry worklog fields. The app matches
 `worklog` plus `date`, `owner`, `min` and `remark`, case-insensitively, and
 supports names prefixed with `ZZZ (DEPRECATED)`. Populated current fields take
 precedence for reads. Project field writes use project-field IDs; the mirrored
-Actual Worklog field uses its underlying issue-field ID and the issue-field
-API. The app also finds Actual Worklog directly on the organisation when the
-board does not display that column.
+**Worklog Reported(mins)** field uses its underlying issue-field ID and the
+issue-field API. The app also finds it directly on the organisation when the
+board does not display that column. Status, Report and Log List read the same
+issue field for SOP worklogs. The former **Actual Worklog (mins)** name remains
+supported; the reported field takes precedence when both are present.
 A `Status` field with a `Done` option is required for a
 completed push; the app verifies the board item is Done before marking the
 local entry pushed.

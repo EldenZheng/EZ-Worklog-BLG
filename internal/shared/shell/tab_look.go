@@ -32,6 +32,10 @@ type tabLook struct {
 	centre    fyne.Position
 	hasCentre bool
 	anim      *fyne.Animation
+	// Dropdown choices share the menu's spread, with their own rounding and
+	// a check mark that follows the selected share.
+	radius  float32
+	onShare func(float32)
 	// at and size are where the tab stands in the layer behind the bar.
 	at   fyne.Position
 	size fyne.Size
@@ -113,9 +117,19 @@ func (l *tabLook) place(pos fyne.Position, size fyne.Size) {
 	l.at, l.size = pos, size
 	l.bg.Move(pos)
 	l.bg.Resize(size)
-	l.bg.CornerRadius = tabRadius(size)
+	l.bg.CornerRadius = l.corner(size)
 	l.bg.Refresh()
 	l.placeFill()
+	if l.onShare != nil {
+		l.onShare(l.share)
+	}
+}
+
+func (l *tabLook) corner(size fyne.Size) float32 {
+	if l.radius > 0 {
+		return min(l.radius, size.Height/2)
+	}
+	return tabRadius(size)
 }
 
 func tabRadius(size fyne.Size) float32 {
@@ -128,6 +142,9 @@ func (l *tabLook) paint() {
 	l.over.Theme = tabInkTheme{Theme: l.base, ink: MixColor(l.base.Color(theme.ColorNameForeground, v), tabSelectedInk, l.share)}
 	l.over.Refresh()
 	l.placeFill()
+	if l.onShare != nil {
+		l.onShare(l.share)
+	}
 }
 
 // placeFill spreads the gold over the tab: a circle from the centre, cut to
@@ -143,7 +160,7 @@ func (l *tabLook) placeFill() {
 		c = fyne.NewPos(min(max(l.centre.X, 0), size.Width), min(max(l.centre.Y, 0), size.Height))
 	}
 	reach := float32(math.Hypot(float64(max(c.X, size.Width-c.X)), float64(max(c.Y, size.Height-c.Y))))
-	SpreadIn(l.fill, l.at, size, c, reach*l.share, tabRadius(size))
+	SpreadIn(l.fill, l.at, size, c, reach*l.share, l.corner(size))
 }
 
 // lookLayer holds the tabs' surfaces behind the bar, each under its tab.

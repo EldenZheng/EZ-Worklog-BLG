@@ -72,6 +72,23 @@ Organisation colours identify organisations. Storage categories have their own
 stable, distinct palette: do not cycle the organisation palette across a longer
 list of categories. Use the same colour for a category's dot and meter segment.
 
+Field focus uses the app's gold in every menu and popup. `GoldTheme` supplies
+gold for the primary accent (Fyne uses it for input borders and carets), with a
+translucent gold focus wash and text selection. Keep validation errors red and
+use the button roles for green GitHub actions and destructive red actions.
+
+All option dropdowns use `shell.NewGoldSelect`: a muted gold field with a
+rounded outline and gold chevron, opening a dark inset menu with a gold edge.
+The selected row is gold with dark words and a bare check at the right. Keep
+one travelling gold hover across the rows. Selection uses the top menu's
+click-origin gold spread and ink transition, draining the previous row and
+drawing the new check. By default the action runs immediately and the popup
+starts folding at once, with no confirmation pause. Preserve search, keyboard navigation, status
+colour dots, disabled states and reduced motion through the shared control.
+Set `StayOpen` for Status and Report's **Worklog** selectors: selecting an
+option animates the row and check while leaving the menu open. Outside click,
+Escape and clicking the field again dismiss it with the usual closing motion.
+
 ## Confirmations and startup notices
 
 - Use `ui.ShowConfirmation` for a decision and `ui.ConfirmRemoval` for a
@@ -92,6 +109,9 @@ list of categories. Use the same colour for a category's dot and meter segment.
 
 - Reuse `shell.Fold` through the collapse helpers. Relayout with `shell.Reflow`
   on each frame so nearby content follows the section, as in Log Work.
+- Geometry-only animations keep cached text and shapes through their final
+  frame. Use `shell.Repaint` after layout; a full subtree refresh at completion
+  can cause a hitch just as the motion settles.
 - Keep collapse state when refreshing a section's data.
 - Use the shared hover, press, tick and popup motion. Do not substitute a snap
   transition or a separate timing for the same kind of control.

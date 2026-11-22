@@ -121,6 +121,9 @@ func DrawWeekStrip(ui *shell.UI) {
 	if ui.WeekBox == nil {
 		return
 	}
+	for _, col := range ui.WeekCols {
+		stopWeekCardWipes(col.Body)
+	}
 	if ui.WeekStart == "" {
 		ui.WeekStart = backend.WeekStartOf(shell.Today())
 	}
@@ -277,7 +280,22 @@ func DrawWeekStrip(ui *shell.UI) {
 
 	// The boards and the week read by issue live on Log List now. They follow the
 	// same week as this strip, so walking the arrows here moves both.
-	shell.Hooks.DrawLogList(ui)
+	if ui.TabVisible(shell.LogListTabName) {
+		shell.Hooks.DrawLogList(ui)
+	}
+}
+
+// A title or board fetch can redraw the week during its arrival. Its old card
+// timers belong to discarded widgets and must not overlap the new cards' wipes.
+func stopWeekCardWipes(o fyne.CanvasObject) {
+	switch content := o.(type) {
+	case *shell.Wipe:
+		content.Stop()
+	case *fyne.Container:
+		for _, child := range content.Objects {
+			stopWeekCardWipes(child)
+		}
+	}
 }
 
 // weekdayHeadingLayout reserves the weekday heading's space and draws it
@@ -362,7 +380,9 @@ func (l *calendarPageLayout) Layout(objects []fyne.CanvasObject, size fyne.Size)
 // the strip, and a button built again by its own click is a new one, at rest:
 // the one that was pressed is gone before it has shrunk. So they are built once
 // and every draw puts the same ones back, with what they do set for that draw.
-type weekHead struct{ prev, next, here, refresh *widget.Button }
+type weekHead struct {
+	prev, next, here, refresh *widget.Button
+}
 
 var weekHeads = map[*shell.UI]*weekHead{}
 
@@ -745,7 +765,7 @@ func dayRowCard(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) *sh
 	// carries no Edit; its Delete icon shows only while the card is lit,
 	// fading in and out with the light.
 	push, _, _ := rowActions(ui, r, refresh)
-	// The layout keeps Push's place first; off the entry's day it is empty.
+	// The layout keeps Push's place first; a future draft leaves it empty.
 	actionItems := []fyne.CanvasObject{shell.VGap(0)}
 	if push != nil {
 		actionItems[0] = shell.CompactGitHubHoverButton(push)

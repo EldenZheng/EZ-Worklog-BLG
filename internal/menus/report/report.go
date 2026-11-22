@@ -45,8 +45,13 @@ func BuildReportTab(ui *shell.UI) fyne.CanvasObject {
 		ui.LoadReport(true)
 	})
 	navigation := container.NewHBox(prev, ui.RepTitle, next)
-	actions := container.NewHBox(layout.NewSpacer(), refresh, exportBtn)
-	head := container.New(widgets.NewFlowGrid(360, 0, 40), navigation, actions)
+	ui.RepCount = shell.NewWorklogCount(ui.ReportApproved, func(approved bool) {
+		ui.ReportApproved = approved
+		ui.ReplayArrival("report")
+		DrawReport(ui)
+	})
+	actions := container.NewHBox(layout.NewSpacer(), widget.NewLabel("Worklog"), ui.RepCount, refresh, exportBtn)
+	head := container.New(widgets.NewFlowGrid(max(float32(360), actions.MinSize().Width), 0, 40), navigation, actions)
 
 	ui.RepBox = container.NewStack()
 	ui.ReportProgress = shell.NewLoadingIndicator()
@@ -87,6 +92,8 @@ func DrawReport(ui *shell.UI) {
 	// period is worth a different amount depending on whose work is in it, and
 	// showing one employer's chart over both employers' pay would be a lie in
 	// the only place on the tab that has to be right.
+	reportedAll := all
+	all = shell.CountedWorklogItems(all, ui.ReportApproved)
 	items := ui.ShownItems(all)
 	if !cached {
 		ui.EnsureProjectCache()
@@ -132,9 +139,9 @@ func DrawReport(ui *shell.UI) {
 	for d, m := range totals {
 		projectedTotals[d] = m
 	}
-	plannedByDay := ui.PlannedByDay(fromDate, toDate, all)
+	plannedByDay := ui.PlannedByDay(fromDate, toDate, reportedAll)
 	plannedTotal, pendingTotal := 0, 0
-	supportByDay := ui.SupportPlaceholdersByDay(fromDate, toDate, all)
+	supportByDay := ui.SupportPlaceholdersByDay(fromDate, toDate, reportedAll)
 	for _, pending := range []map[string]int{draftByDay, supportByDay, plannedByDay} {
 		for d, m := range pending {
 			projectedTotals[d] += m
@@ -402,6 +409,7 @@ func exportCSV(ui *shell.UI) {
 	// a file named after one period.
 	fromDate, toDate, _ := backend.ReportBounds(ui.RepMonth)
 	fetched, _ := ui.ItemsFor(shell.ReportCacheKey(ui.RepMonth))
+	fetched = shell.CountedWorklogItems(fetched, ui.ReportApproved)
 	var items []backend.WorklogItem
 	for _, it := range fetched {
 		if it.Date >= fromDate && it.Date <= toDate {

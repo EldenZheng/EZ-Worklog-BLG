@@ -454,8 +454,14 @@ func (v *view) issueList() section {
 	})
 	fill()
 
+	// The Issues/Gantt tabs are taller than the fields beside them; keep the
+	// search, dropdown and button at their own height, centred on that row,
+	// rather than stretched with their text riding at the top.
+	middle := func(o fyne.CanvasObject) fyne.CanvasObject {
+		return container.NewVBox(layout.NewSpacer(), o, layout.NewSpacer())
+	}
 	controls := container.NewBorder(nil, nil, mode,
-		container.NewHBox(shell.WideSelect(state), export), search)
+		middle(container.NewHBox(shell.WideSelect(state), export)), middle(search))
 	body := container.NewVBox(shell.VGap(theme.Padding()), controls,
 		shell.VGap(theme.Padding()), slide)
 
@@ -597,10 +603,12 @@ func (v *view) people(it Item) []string {
 }
 
 // listSelect is a list cell's drop-down: searchable, so a long list of
-// people or sprints is found by typing.
+// people or sprints is found by typing. Its field keeps the stock look, so
+// Status cells take their Kanban colour from the tint around them.
 func listSelect(options []string) *shell.GoldSelect {
 	choice := shell.NewGoldSelect(options, nil)
 	choice.Searchable = true
+	choice.PlainField = true
 	return choice
 }
 

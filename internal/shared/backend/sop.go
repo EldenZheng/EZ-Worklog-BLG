@@ -11,8 +11,8 @@ import (
 )
 
 // SOPStart is the first day of the worklog SOP. From then on a worklog is a
-// Worklog sub-issue whose day is the day it was created and whose owner is its
-// assignee, and reads take both from the issue itself. Pushes still fill the
+// Worklog sub-issue whose day is its logged-for date (or creation day) and whose
+// owner is its assignee. Reads take both from the issue itself. Pushes still fill the
 // board's Worklog Date and Worklog Owner for now. Entries dated before it keep
 // the old method.
 const SOPStart = "2026-11-21"
@@ -20,16 +20,21 @@ const SOPStart = "2026-11-21"
 // SOPApplies reports whether an entry dated date falls under the SOP.
 func SOPApplies(date string) bool { return strings.TrimSpace(date) >= SOPStart }
 
-// RowPushable reports whether r may be pushed today. A Worklog's day is the
-// day it is created, so an entry is first pushed on its own day and no other:
-// not early, which would log it on the wrong day, and not late, which would
-// backdate it. An entry already sent, wholly or in part, can always be pushed
-// again: that writes to the Worklog it already has and creates nothing.
+// RowPushable allows today's and past entries. Future drafts wait for their
+// date. An entry already sent, wholly or in part, remains retryable any day.
 func RowPushable(r Row, today string) bool {
 	if strings.TrimSpace(r["pushed_at"]) != "" || strings.TrimSpace(r["issue_url"]) != "" {
 		return true
 	}
-	return strings.TrimSpace(r["date"]) == today
+	date := strings.TrimSpace(r["date"])
+	return ValidPlannerDate(date) && date <= today
+}
+
+func worklogPushDateError(date, resume string) error {
+	if SOPApplies(date) && strings.TrimSpace(resume) == "" && date > WorkDate(time.Now()) {
+		return GhErr("This entry is dated %s, in the future. Push it on or after that day.", date)
+	}
+	return nil
 }
 
 // RowIsLegacy reports whether r was waiting to be pushed when the SOP began,
@@ -69,12 +74,65 @@ func (s *Store) TagLegacyDrafts() (int, error) {
 const worklogAppSection = "<!-- worklog-app -->"
 
 var entryMarkerRe = regexp.MustCompile(`<!-- worklog-entry:([0-9A-Za-z-]+) -->`)
+var loggedForLineRe = regexp.MustCompile(`(?m)^Logged for \d{4}-\d{2}-\d{2}[ \t]*\r?$`)
+
+// splitLoggedForHeader recognises the plain first-line date used in Worklogs,
+// including issues written outside the app. Dates elsewhere in remarks are text.
+func splitLoggedForHeader(body string) (date, rest string) {
+	line, rest, _ := strings.Cut(strings.TrimSpace(body), "\n")
+	line = strings.TrimSpace(line)
+	if loggedForLineRe.MatchString(line) {
+		date = strings.TrimSpace(strings.TrimPrefix(line, "Logged for "))
+		if ValidPlannerDate(date) {
+			return date, strings.TrimSpace(rest)
+		}
+	}
+	return "", body
+}
+
+// A late push cannot backdate GitHub's creation timestamp. Put its intended
+// day first, keeping remarks and retry metadata separate. Old footer dates are
+// moved to the header on retry, without duplicating the note.
+func loggedForBody(body, date string) string {
+	if !ValidPlannerDate(date) || date >= WorkDate(time.Now()) {
+		return body
+	}
+	_, body = splitLoggedForHeader(body)
+	prefix, tail := body, ""
+	footer := ""
+	if i := strings.Index(body, worklogAppSection); i >= 0 {
+		prefix, tail = body[:i], body[i+len(worklogAppSection):]
+		tail = loggedForLineRe.ReplaceAllString(tail, "")
+		footer = worklogAppSection
+		if tail = strings.TrimSpace(tail); tail != "" {
+			footer += "\n" + tail
+		}
+	}
+	header := "Logged for " + date
+	reserved := len(header)
+	if footer != "" {
+		reserved += len(footer) + 2
+	}
+	prefix = strings.TrimSpace(prefix)
+	if len(prefix)+reserved+2 > BodyCap {
+		prefix = prefix[:max(0, BodyCap-reserved-2)]
+	}
+	parts := []string{header}
+	if prefix != "" {
+		parts = append(parts, prefix)
+	}
+	if footer != "" {
+		parts = append(parts, footer)
+	}
+	return strings.Join(parts, "\n\n")
+}
 
 func entryMarker(id string) string { return "<!-- worklog-entry:" + id + " -->" }
 
 // WorklogIssueBody is the description to push r's Worklog with, given the
 // remarks the push would otherwise use. It is "" when the entry needs nothing
-// added, so pushes outside the SOP send exactly what they always did.
+// added. Legacy rows keep their supplied body; the push adds a logged-for
+// header separately when their date is in the past.
 func WorklogIssueBody(r Row, remarks string) string {
 	if !SOPApplies(r["date"]) || RowPushMode(r) != "subissue" || strings.TrimSpace(r["id"]) == "" {
 		return r["issue_body"]
@@ -90,9 +148,9 @@ func WorklogIssueBody(r Row, remarks string) string {
 	}
 	lines = append(lines, entryMarker(r["id"]))
 	if base == "" {
-		return strings.Join(lines, "\n")
+		return loggedForBody(strings.Join(lines, "\n"), r["date"])
 	}
-	return base + "\n\n" + strings.Join(lines, "\n")
+	return loggedForBody(base+"\n\n"+strings.Join(lines, "\n"), r["date"])
 }
 
 func commitLink(c CommitRef) string {
@@ -102,12 +160,33 @@ func commitLink(c CommitRef) string {
 	return fmt.Sprintf("https://github.com/%s/commit/%s", c.Repo, c.Sha)
 }
 
-// WorklogRemarks is a Worklog description without the part the app added.
+// WorklogRemarks removes the date header and the app's metadata footer.
 func WorklogRemarks(body string) string {
+	_, body = splitLoggedForHeader(body)
 	if i := strings.Index(body, worklogAppSection); i >= 0 {
 		body = body[:i]
 	}
 	return strings.TrimSpace(body)
+}
+
+// worklogDay reads a leading Logged for date or the app's older footer format.
+// Other remarks, malformed dates and dates after creation cannot move its day.
+func worklogDay(body string, created time.Time) string {
+	day := WorkDate(created)
+	if date, _ := splitLoggedForHeader(body); date != "" {
+		if date <= day {
+			return date
+		}
+		return day
+	}
+	if i := strings.Index(body, worklogAppSection); i >= 0 {
+		line := loggedForLineRe.FindString(body[i+len(worklogAppSection):])
+		date := strings.TrimSpace(strings.TrimPrefix(line, "Logged for "))
+		if ValidPlannerDate(date) && date <= day {
+			return date
+		}
+	}
+	return day
 }
 
 // WorklogRef is how a commit message references a Worklog, for copying.
@@ -121,9 +200,8 @@ func WorklogRef(issueURL string) string {
 
 // ---- reading SOP worklogs ----
 
-// sopWorklogsQuery finds the signed-in user's Worklog issues by when they were
-// created. Search is used because SOP worklogs carry no board date to filter
-// on; it covers every repository at once and returns the minutes with them.
+// sopWorklogsQuery finds the signed-in user's Worklog issues across repositories
+// and returns their descriptions, creation times and both minutes fields.
 const sopWorklogsQuery = `
 query($q:String!,$after:String){
  search(query:$q,type:ISSUE,first:100,after:$after){
@@ -180,30 +258,46 @@ type sopWorklogsResponse struct {
 // searchResultCap is the most results GitHub's search returns for one query.
 const searchResultCap = 1000
 
-// FetchSOPWorklogs reads the signed-in user's Worklog issues created on the
-// working days from..to. A worklog's day is WorkDate of its creation time, the
-// same day the app pushed it on. owner is written on each item, as the board
-// reader does, so callers filtering by owner keep working.
+// FetchSOPWorklogs reads Worklog issues for working days from..to. A late
+// Worklog belongs to its Logged for date; others use their Malaysia
+// creation day. owner is written on each item, as the board reader does.
 func FetchSOPWorklogs(owner, from, to string) ([]WorklogItem, error) {
 	// GitHub reads created: dates in UTC, and a working day can start on the
 	// UTC day before or after, so ask for a day either side and keep only the
 	// worklogs whose working day is in range.
-	items, err := searchSOPWorklogs(owner, AddDays(from, -1), AddDays(to, 1))
+	createdTo := AddDays(to, 1)
+	items, err := searchSOPWorklogs(owner, AddDays(from, -1), createdTo, false)
 	if err != nil {
 		return nil, err
 	}
+	// A late issue may be created after the requested month/payroll period.
+	// Search only descriptions with the date note in that later interval, so
+	// looking back does not require downloading every subsequent worklog.
+	if today := WorkDate(time.Now()); createdTo < today {
+		late, err := searchSOPWorklogs(owner, AddDays(createdTo, 1), today, true)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, late...)
+	}
 	var out []WorklogItem
+	seen := map[string]bool{}
 	for _, it := range items {
-		if it.Date >= from && it.Date <= to {
+		key := strings.ToLower(strings.TrimSpace(it.URL))
+		if it.Date >= from && it.Date <= to && !seen[key] {
 			out = append(out, it)
+			seen[key] = true
 		}
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Date < out[j].Date })
 	return out, nil
 }
 
-func searchSOPWorklogs(owner, from, to string) ([]WorklogItem, error) {
+func searchSOPWorklogs(owner, from, to string, lateOnly bool) ([]WorklogItem, error) {
 	q := fmt.Sprintf("is:issue type:Worklog assignee:@me created:%s..%s", from, to)
+	if lateOnly {
+		q += ` in:body "Logged for"`
+	}
 	var items []WorklogItem
 	after := ""
 	for {
@@ -224,11 +318,11 @@ func searchSOPWorklogs(owner, from, to string) ([]WorklogItem, error) {
 		// more, so nothing past the cap is silently left out of the totals.
 		if after == "" && search.IssueCount > searchResultCap && from < to {
 			mid := midDate(from, to)
-			first, err := searchSOPWorklogs(owner, from, mid)
+			first, err := searchSOPWorklogs(owner, from, mid, lateOnly)
 			if err != nil {
 				return nil, err
 			}
-			second, err := searchSOPWorklogs(owner, AddDays(mid, 1), to)
+			second, err := searchSOPWorklogs(owner, AddDays(mid, 1), to, lateOnly)
 			if err != nil {
 				return nil, err
 			}
@@ -242,9 +336,12 @@ func searchSOPWorklogs(owner, from, to string) ([]WorklogItem, error) {
 			if err != nil {
 				continue
 			}
+			// Assign each log before daily aggregation and the pay cap. A
+			// marked late log backfills its day even when creation-day totals
+			// exceed 480; unmarked excess stays on its creation day.
 			it := WorklogItem{
 				ID: n.ID, Body: n.Body, Title: n.Title, URL: n.URL, Owner: owner,
-				Date:    WorkDate(created),
+				Date:    worklogDay(n.Body, created),
 				Remarks: WorklogRemarks(n.Body),
 			}
 			if n.Parent != nil {
@@ -253,9 +350,14 @@ func searchSOPWorklogs(owner, from, to string) ([]WorklogItem, error) {
 			for _, a := range n.Assignees.Nodes {
 				it.Assignees = append(it.Assignees, a.Login)
 			}
+			minutesPriority := 0
 			for _, v := range n.IssueFieldValues.Nodes {
-				if v.Value != nil && nameHas(v.Field.Name, "actual", "worklog", "min") {
+				if v.Value != nil && nameHas(v.Field.Name, "worklog", "approved", "min") && !deprecatedWorklogField(v.Field.Name) {
+					it.ApprovedMinutes = int(*v.Value)
+				}
+				if priority := worklogMinutesFieldPriority(v.Field.Name); v.Value != nil && priority > minutesPriority {
 					it.Minutes = int(*v.Value)
+					minutesPriority = priority
 				}
 			}
 			if strings.EqualFold(n.State, "closed") {

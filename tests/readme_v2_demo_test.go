@@ -170,7 +170,7 @@ func recordV2Worklog(t *testing.T) {
 		case strings.Contains(q, "filterBy:{createdBy:"):
 			return `{"data":{"repository":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}}`, nil
 		case strings.Contains(q, "subIssues(first:100)"):
-			return `{"data":{"repository":{"issue":{"id":"PARENT","number":412,"title":"Invoice export to PDF","url":"https://github.com/acme-corp/web-app/issues/412","subIssues":{"nodes":[]},"projectItems":{"nodes":[{"id":"PI","project":{"id":"PROJECT","number":1,"fields":{"nodes":[{"id":"STATUS","name":"Status","options":[{"id":"DONE","name":"Done"}]},{"id":"DATE","name":"Worklog (Date)"},{"id":"OWNER","name":"Worklog Owner"},{"id":"MINUTES","name":"Worklog (mins)"},{"id":"REMARKS","name":"Worklog (Remarks)"},{"id":"ACTUAL-COLUMN","name":"Actual Worklog (mins)","isIssueField":true,"issueField":{"id":"ACTUAL","name":"Actual Worklog (mins)"}}]}}}]}}}}}`, nil
+			return `{"data":{"repository":{"issue":{"id":"PARENT","number":412,"title":"Invoice export to PDF","url":"https://github.com/acme-corp/web-app/issues/412","subIssues":{"nodes":[]},"projectItems":{"nodes":[{"id":"PI","project":{"id":"PROJECT","number":1,"fields":{"nodes":[{"id":"STATUS","name":"Status","options":[{"id":"DONE","name":"Done"}]},{"id":"DATE","name":"Worklog (Date)"},{"id":"OWNER","name":"Worklog Owner"},{"id":"MINUTES","name":"Worklog (mins)"},{"id":"REMARKS","name":"Worklog (Remarks)"},{"id":"ACTUAL-COLUMN","name":"Worklog Reported(mins)","isIssueField":true,"issueField":{"id":"ACTUAL","name":"Worklog Reported(mins)"}}]}}}]}}}}}`, nil
 		case strings.HasPrefix(q, "issue create"):
 			created = true
 			return "https://github.com/acme-corp/web-app/issues/6001", nil
@@ -250,7 +250,7 @@ func recordV2Worklog(t *testing.T) {
 	if !created || !parented || !typed || !minutesSet {
 		t.Fatalf("SOP steps missing: create=%v parent=%v type=%v minutes=%v; popup=%v", created, parented, typed, minutesSet, labels(ui.Win.Canvas().Overlays().Top()))
 	}
-	flow.hold("2 / 3   Worklog #6001 is created under issue #412, with 120 actual minutes.", 2800)
+	flow.hold("2 / 3   Worklog #6001 is created under issue #412, with 120 reported minutes.", 2800)
 	flow.hold("Review the reference change. These local commits use a plain push; your uncommitted edits stay intact.", 3300)
 	flow.glide(flow.shot(), centreOf(add), 400)
 	flow.stay(flow.shot(), 160, true)

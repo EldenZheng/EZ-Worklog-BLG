@@ -58,7 +58,7 @@ func TestDailyReviewCombinesDescriptionRemarksAndIncomingWithoutCountingRetriesT
 	writes := 0
 	backend.PushEntry = func(_ backend.Config, ref, date, owner string, mins int, rem, desc, mode, resume, title string, progress ...func(backend.FetchProgress)) (backend.PushResult, error) {
 		writes++
-		if mins != 60 || rem != reviewFirst+"\n"+reviewSecond || desc != rem || mode != "issue" {
+		if mins != 60 || rem != reviewFirst+"\n"+reviewSecond || backend.WorklogRemarks(desc) != rem || !strings.HasPrefix(desc, "Logged for "+date+"\n\n") || mode != "issue" {
 			t.Fatalf("combined push = %dm, remarks %q, description %q, mode %q", mins, rem, desc, mode)
 		}
 		// The first attempt writes the description but fails on the board.
@@ -176,7 +176,7 @@ func TestDailyReviewCombineChoicePushesBothListsAndKeepsLocalBatch(t *testing.T)
 		if args[0] == "api" {
 			return reviewSnapshot(reviewFirst, reviewFirst, 30), nil
 		}
-		if args[0] != "issue" || args[1] != "edit" || args[4] != reviewFirst+"\n"+reviewSecond {
+		if args[0] != "issue" || args[1] != "edit" || backend.WorklogRemarks(args[4]) != reviewFirst+"\n"+reviewSecond {
 			t.Fatalf("description must contain both review batches: %v", args)
 		}
 		writes++
@@ -184,7 +184,7 @@ func TestDailyReviewCombineChoicePushesBothListsAndKeepsLocalBatch(t *testing.T)
 	}
 	backend.PushEntry = func(_ backend.Config, ref, date, owner string, mins int, rem, desc, mode, resume, title string, progress ...func(backend.FetchProgress)) (backend.PushResult, error) {
 		pushes++
-		if mins != 60 || rem != reviewFirst+"\n"+reviewSecond || desc != rem {
+		if mins != 60 || rem != reviewFirst+"\n"+reviewSecond || backend.WorklogRemarks(desc) != rem {
 			t.Fatalf("combined board payload = %dm, %q, %q", mins, rem, desc)
 		}
 		return backend.PushResult{URL: "https://github.com/exampleorg/tasks/issues/1", ItemID: "item"}, nil
@@ -242,20 +242,20 @@ func TestDailyReviewRepushOfSameListDoesNotAskToCombine(t *testing.T) {
 	}
 }
 
-// A new SOP Worklog off its day is refused before the description is
+// A future SOP Worklog is refused before the description is
 // rewritten, so the issue is not left half updated.
-func TestDailyReviewOffDayWritesNothing(t *testing.T) {
+func TestDailyReviewFutureDateWritesNothing(t *testing.T) {
 	oldGh, oldPush := backend.Gh, backend.PushEntry
 	t.Cleanup(func() { backend.Gh, backend.PushEntry = oldGh, oldPush })
 	backend.Gh = func(args []string, headers ...string) (string, error) {
 		if args[0] != "api" {
-			t.Fatalf("nothing may be written off the entry's day: %v", args)
+			t.Fatalf("nothing may be written before the entry's day: %v", args)
 		}
 		bodyJSON, _ := json.Marshal(reviewFirst)
 		return fmt.Sprintf(`{"data":{"repository":{"issue":{"url":"https://github.com/exampleorg/tasks/issues/1","body":%s,"projectItems":{"nodes":[]}}}}}`, bodyJSON), nil
 	}
 	backend.PushEntry = func(backend.Config, string, string, string, int, string, string, string, string, string, ...func(backend.FetchProgress)) (backend.PushResult, error) {
-		t.Fatal("PushEntry must not run off the entry's day")
+		t.Fatal("PushEntry must not run before the entry's day")
 		return backend.PushResult{}, nil
 	}
 	row := reviewBatch()
@@ -264,7 +264,7 @@ func TestDailyReviewOffDayWritesNothing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := backend.PushDailyReview(backend.Config{}, plan); err == nil || !strings.Contains(err.Error(), "own day") {
+	if _, err := backend.PushDailyReview(backend.Config{}, plan); err == nil || !strings.Contains(err.Error(), "future") {
 		t.Fatalf("expected the SOP day refusal, got %v", err)
 	}
 }

@@ -14,12 +14,15 @@ import (
 	"worklog/internal/shared/shell"
 )
 
-func TestSOPPushOnlyOnTheEntrysDay(t *testing.T) {
+func TestSOPPushAllowsPastAndTodayButNotFuture(t *testing.T) {
 	today := "2026-12-01"
 	if !backend.RowPushable(backend.Row{"date": today}, today) {
 		t.Fatal("an entry should push on its own day")
 	}
-	for _, day := range []string{"2026-11-30", "2026-12-02"} {
+	if !backend.RowPushable(backend.Row{"date": "2026-11-30"}, today) {
+		t.Fatal("a past entry should be pushable")
+	}
+	for _, day := range []string{"2026-12-02", "", "not-a-date"} {
 		if backend.RowPushable(backend.Row{"date": day}, today) {
 			t.Fatalf("an unpushed entry for %s must not push on %s", day, today)
 		}
@@ -41,8 +44,11 @@ func TestSOPPushOnlyOnTheEntrysDay(t *testing.T) {
 	if !tile(backend.Row{"date": today}) {
 		t.Fatal("today's entry should show Push")
 	}
-	if tile(backend.Row{"date": "2026-12-02"}) || tile(backend.Row{"date": "2026-11-30"}) {
-		t.Fatal("an entry for another day should not show Push")
+	if !tile(backend.Row{"date": "2026-11-30"}) {
+		t.Fatal("a past entry should show Push")
+	}
+	if tile(backend.Row{"date": "2026-12-02"}) {
+		t.Fatal("a future entry should not show Push")
 	}
 	pushed := backend.Row{"date": "2026-11-30", "pushed_at": "2026-11-30T10:00:00", "minutes": "60", "issue": "exampleorg/app#1"}
 	if buttonNamed(logwork.RowTile(ui, pushed, func() {}), "Re-push") == nil {
@@ -50,7 +56,7 @@ func TestSOPPushOnlyOnTheEntrysDay(t *testing.T) {
 	}
 }
 
-func TestSOPPushRefusesAnotherDayBeforeTouchingGitHub(t *testing.T) {
+func TestSOPPushRefusesFutureBeforeTouchingGitHub(t *testing.T) {
 	old := backend.Gh
 	t.Cleanup(func() { backend.Gh = old })
 	backend.Gh = func(args []string, _ ...string) (string, error) {
@@ -62,7 +68,7 @@ func TestSOPPushRefusesAnotherDayBeforeTouchingGitHub(t *testing.T) {
 		t.Skip("the SOP has not started")
 	}
 	_, err := backend.PushEntry(backend.Config{}, "o/r#1", tomorrow, "test", 60, "", "", "subissue", "", "")
-	if err == nil || !strings.Contains(err.Error(), "own day") {
+	if err == nil || !strings.Contains(err.Error(), "future") {
 		t.Fatalf("a push for another day should be refused, got %v", err)
 	}
 }
@@ -140,7 +146,7 @@ func TestSOPWorklogsReadByCreationDayAndMinutesField(t *testing.T) {
 			t.Fatalf("only the search should run for SOP days: %v", args)
 		}
 		return `{"data":{"search":{"issueCount":2,"nodes":[
-{"id":"I1","title":"Worklog: 2026-11-24","url":"https://github.com/o/r/issues/7","body":"did things\n\n<!-- worklog-app -->\n<!-- worklog-entry:x -->","createdAt":"2026-11-23T16:00:00Z","state":"CLOSED","parent":{"title":"Parent","url":"https://github.com/o/r/issues/1"},"assignees":{"nodes":[{"login":"me"}]},"issueFieldValues":{"nodes":[{"value":90,"field":{"name":"Actual Worklog (mins)"}}]}},
+{"id":"I1","title":"Worklog: 2026-11-24","url":"https://github.com/o/r/issues/7","body":"did things\n\n<!-- worklog-app -->\n<!-- worklog-entry:x -->","createdAt":"2026-11-23T16:00:00Z","state":"CLOSED","parent":{"title":"Parent","url":"https://github.com/o/r/issues/1"},"assignees":{"nodes":[{"login":"me"}]},"issueFieldValues":{"nodes":[{"value":90,"field":{"name":"Worklog Reported(mins)"}},{"value":45,"field":{"name":"Worklog Approved(mins)"}}]}},
 {"id":"I2","title":"Worklog: far","url":"https://github.com/o/r/issues/8","body":"","createdAt":"2026-12-30T04:00:00Z","state":"OPEN","issueFieldValues":{"nodes":[]}}
 ],"pageInfo":{"hasNextPage":false}}}}`, nil
 	}
@@ -148,13 +154,37 @@ func TestSOPWorklogsReadByCreationDayAndMinutesField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 1 || items[0].Minutes != 90 || items[0].Date != "2026-11-24" ||
+	if len(items) != 1 || items[0].Minutes != 90 || items[0].ApprovedMinutes != 45 || items[0].Date != "2026-11-24" ||
 		items[0].Owner != "team-alex" || items[0].Remarks != "did things" || items[0].ParentURL != "https://github.com/o/r/issues/1" {
 		t.Fatalf("items = %+v", items)
 	}
 	if len(queries) != 1 || !strings.Contains(queries[0], "type:Worklog") || !strings.Contains(queries[0], "assignee:@me") ||
 		!strings.Contains(queries[0], "created:2026-11-22..2026-11-26") {
 		t.Fatalf("query = %v", queries)
+	}
+}
+
+func TestSOPReportedMinutesWinRegardlessOfFieldOrder(t *testing.T) {
+	oldGh := backend.Gh
+	t.Cleanup(func() { backend.Gh = oldGh })
+	for _, values := range []string{
+		`{"value":90,"field":{"name":"Worklog Reported(mins)"}},{"value":999,"field":{"name":"Actual Worklog (mins)"}}`,
+		`{"value":999,"field":{"name":"Actual Worklog (mins)"}},{"value":90,"field":{"name":"Worklog Reported(mins)"}}`,
+		`{"value":90,"field":{"name":"Actual Worklog (mins)"}}`,
+		`{"value":90,"field":{"name":"Worklog Reported(mins)"}},{"value":999,"field":{"name":"Worklog Estimated(mins)"}}`,
+		`{"value":0,"field":{"name":"Worklog Reported(mins)"}},{"value":999,"field":{"name":"Actual Worklog (mins)"}}`,
+	} {
+		backend.Gh = func(args []string, _ ...string) (string, error) {
+			return fmt.Sprintf(`{"data":{"search":{"issueCount":1,"nodes":[{"id":"I1","url":"https://github.com/o/r/issues/7","createdAt":"2026-11-24T04:00:00Z","issueFieldValues":{"nodes":[%s]}}],"pageInfo":{"hasNextPage":false}}}}`, values), nil
+		}
+		items, err := backend.FetchProjectWorklogs(backend.Config{}, "team-alex", "2026-11-24", "2026-11-24")
+		want := 90
+		if strings.Contains(values, `"value":0`) {
+			want = 0
+		}
+		if err != nil || len(items) != 1 || items[0].Minutes != want {
+			t.Fatalf("minutes from %s = %+v, %v; want %d", values, items, err, want)
+		}
 	}
 }
 

@@ -46,7 +46,17 @@ func BuildStatusTab(ui *shell.UI) fyne.CanvasObject {
 		ui.LoadStatus(true)
 	})
 	ui.CalLegend = container.NewVBox()
-	head := container.NewBorder(nil, nil, container.NewHBox(prev, ui.CalTitle, next), refresh, ui.CalLegend)
+	ui.CalCount = shell.NewWorklogCount(ui.StatusApproved, func(approved bool) {
+		ui.StatusApproved = approved
+		ui.ReplayArrival("status")
+		ui.ReplayArrival("statusday")
+		DrawCalendar(ui)
+	})
+	actions := container.NewHBox(widget.NewLabel("Worklog"), ui.CalCount, refresh)
+	navigation := container.NewBorder(nil, nil, container.NewHBox(prev, ui.CalTitle, next), nil, ui.CalLegend)
+	sides := widgets.NewSidesLayout(navigation, actions, 0)
+	sides.EndAligned = true
+	head := container.New(sides, navigation, actions)
 
 	// Stack, not VBox: a VBox gives the grid its minimum height and parks the
 	// rest of the tab empty. The grid has to take everything going, since a
@@ -117,15 +127,16 @@ func DrawCalendar(ui *shell.UI) {
 			continue
 		}
 		org := shell.ItemOrg(it)
-		monthByOrg[org] += it.Minutes
+		minutes := shell.CountedWorklogMinutes(it, ui.StatusApproved)
+		monthByOrg[org] += minutes
 		if !ui.OrgShown(org) {
 			continue
 		}
 		if byDayOrg[it.Date] == nil {
 			byDayOrg[it.Date] = map[string]int{}
 		}
-		byDayOrg[it.Date][org] += it.Minutes
-		monthTotal += it.Minutes
+		byDayOrg[it.Date][org] += minutes
+		monthTotal += minutes
 	}
 	t, _ := time.Parse("2006-01", ui.CalMonth)
 	year, mon := t.Year(), int(t.Month())
@@ -302,6 +313,7 @@ func DrawDayPanel(ui *shell.UI) {
 		// A day opened from a filtered calendar shows the same work the cell was
 		// drawn from; the panel is that cell spelled out, not a second opinion.
 		if it.Date == ui.SelDay && ui.OrgShown(shell.ItemOrg(it)) {
+			it.Minutes = shell.CountedWorklogMinutes(it, ui.StatusApproved)
 			dayItems = append(dayItems, it)
 		}
 	}

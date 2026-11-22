@@ -75,7 +75,7 @@ func ensureNamedMeetingIssue(cfg Config, r Row) (string, error) {
 			}
 		}
 	}
-	_, ref, err := createTypedIssue(cfg.MeetingRepo, title, body, meetingIssueType)
+	_, ref, err := createTypedIssue(cfg.MeetingRepo, title, loggedForBody(body, r["date"]), meetingIssueType)
 	if ref != "" {
 		return ref, nil
 	}
@@ -85,10 +85,14 @@ func ensureNamedMeetingIssue(cfg Config, r Row) (string, error) {
 // Meetings own their issue. The recording belongs in the issue body and does
 // not consume the remarks' separate 1024-character allowance.
 func PushMeetingEntry(cfg Config, r Row, progress ...func(FetchProgress)) (PushResult, error) {
+	if err := worklogPushDateError(r["date"], r["issue_url"]); err != nil {
+		return PushResult{}, err
+	}
 	body, err := MeetingEntryBody(r)
 	if err != nil {
 		return PushResult{}, err
 	}
+	body = loggedForBody(body, r["date"])
 	owner, repo, number, err := SplitIssue(r["issue"])
 	if err != nil {
 		return PushResult{}, err

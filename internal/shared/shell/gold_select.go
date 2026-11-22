@@ -14,22 +14,28 @@ import (
 	"worklog/internal/shared/widgets"
 )
 
-// Keep the native Select renderer and selection API, with explicit gold rows
-// in its popup so selected and current options remain distinguishable.
+// Every option dropdown shares this gold control and popup. The embedded
+// Select retains its selection, binding, disabled and keyboard APIs.
 type GoldSelect struct {
 	widget.Select
-	unfold      *Reveal
-	Popup       *widget.PopUp
-	Rows        *fyne.Container
-	choiceHover *filterHover
-	active      int
-	Flash       *widgets.ChoiceFeedback
-	Scroll      *container.Scroll
+	unfold       *Reveal
+	Popup        *widget.PopUp
+	Rows         *fyne.Container
+	choiceHover  *filterHover
+	active       int
+	Flash        *widgets.ChoiceFeedback
+	choices      map[int]*dropdownChoice
+	fieldHover   *widgets.HoverPill
+	fieldFocused bool
+	Scroll       *container.Scroll
 	// Searchable tops the popup with a search field that narrows its rows, for
 	// a list too long to scroll through.
 	Searchable bool
-	Find       *choiceSearch // the open popup's search field
-	shown      []int         // the Options the popup lists; active indexes this
+	// StayOpen lets a display mode be compared repeatedly without reopening
+	// its menu. Outside click, Escape and clicking the field still close it.
+	StayOpen bool
+	Find     *choiceSearch // the open popup's search field
+	shown    []int         // the Options the popup lists; active indexes this
 	// Current is the option written in gold in the popup, such as the sprint
 	// running today.
 	Current string
@@ -37,6 +43,10 @@ type GoldSelect struct {
 	// Kanban colours it): its row in the popup is washed with it and led by
 	// a dot of it. nil leaves a row plain.
 	Hue func(option string) color.Color
+	// PlainField keeps Fyne's own field look, which follows the surrounding
+	// theme (the Projects issue list tints its Status cells this way). The
+	// popup stays gold.
+	PlainField bool
 }
 
 func NewGoldSelect(options []string, changed func(string)) *GoldSelect {
@@ -104,6 +114,10 @@ func (s *GoldSelect) searchChanged() {
 
 func (s *GoldSelect) Tapped(*fyne.PointEvent) {
 	if !s.Disabled() {
+		if s.StayOpen && s.Popup != nil && s.Popup.Visible() {
+			s.CloseChoices()
+			return
+		}
 		s.showChoices()
 	}
 }
@@ -145,7 +159,22 @@ func (s *GoldSelect) Choose(index int) {
 		return
 	}
 	value := s.Options[index]
-	s.CloseChoices()
+	for i, choice := range s.choices {
+		target := boolShare(i == index)
+		if choice.look.share != target || choice.look.anim != nil {
+			choice.look.to(target, choice.centre)
+		}
+	}
+	if !s.StayOpen {
+		s.CloseChoices()
+	} else {
+		for position, option := range s.shown {
+			if option == index {
+				s.active = position
+				break
+			}
+		}
+	}
 	s.SetSelected(value)
 }
 
@@ -211,10 +240,11 @@ func (s *GoldSelect) showChoices() {
 	s.Flash = &widgets.ChoiceFeedback{Content: body, Pulse: canvas.NewRectangle(color.Transparent)}
 	s.Flash.Pulse.CornerRadius = 6
 	s.Flash.ExtendBaseWidget(s.Flash)
-	s.unfold = NewReveal(s.Flash)
+	s.unfold = NewReveal(DropdownFrame(s.Flash))
 	s.unfold.Fold = true
 	s.unfold.OnDismiss = s.CloseChoices
 	s.Popup = widget.NewPopUp(s.unfold, c)
+	height += 4 * theme.Padding()
 	width := fyne.Max(s.Size().Width, 200)
 	origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(s)
 	// The list drops below the field, or rises above it when the window has
@@ -249,6 +279,10 @@ func (s *GoldSelect) showChoices() {
 }
 
 func (s *GoldSelect) renderChoices() {
+	for _, choice := range s.choices {
+		choice.look.stop()
+	}
+	s.choices = make(map[int]*dropdownChoice)
 	s.Rows.Objects = nil
 	if len(s.shown) == 0 {
 		s.Rows.Objects = append(s.Rows.Objects, widget.NewLabel("No matches"))
@@ -262,10 +296,7 @@ func (s *GoldSelect) renderChoices() {
 		if current {
 			ink = widgets.LogoGold
 		}
-		if selected {
-			fill = widgets.LogoGold
-			ink = color.NRGBA{R: 24, G: 24, B: 24, A: 255}
-		} else if position == s.active {
+		if !selected && position == s.active {
 			fill = BlendColor(fill, widgets.LogoGold, 0.14)
 		}
 		label := widget.NewLabel(option)
@@ -280,9 +311,7 @@ func (s *GoldSelect) renderChoices() {
 				fill = BlendColor(fill, hue, 0.2)
 			}
 		}
-		bg := canvas.NewRectangle(fill)
-		bg.CornerRadius = 5
-		var text fyne.CanvasObject = container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink})
+		var text fyne.CanvasObject = label
 		if hue != nil {
 			dot := canvas.NewCircle(hue)
 			dot.StrokeColor = theme.Color(theme.ColorNameForeground)
@@ -291,8 +320,15 @@ func (s *GoldSelect) renderChoices() {
 			holder.SetMinSize(fyne.NewSquareSize(10))
 			text = container.NewBorder(nil, nil, container.NewCenter(container.NewStack(holder, dot)), nil, text)
 		}
-		row := container.NewStack(bg, container.NewPadded(text))
-		s.Rows.Objects = append(s.Rows.Objects, NewCardTappable(row, func() { s.Choose(i) }))
+		choice := newDropdownChoice(text, fill, ink, selected, func() {
+			// A closing menu remains visible for its confirmation, but cannot
+			// submit a second choice while that picture is folding away.
+			if s.Popup != nil && !s.Disabled() {
+				s.Choose(i)
+			}
+		})
+		s.choices[i] = choice
+		s.Rows.Objects = append(s.Rows.Objects, choice.row)
 	}
 	if s.choiceHover != nil {
 		s.Rows.Objects = append(s.Rows.Objects, s.choiceHover)

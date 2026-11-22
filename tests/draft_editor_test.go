@@ -91,8 +91,11 @@ func TestDraftOwnIssueCreationUsesFullSplitBody(t *testing.T) {
 					"type": kind, "date": "2026-11-06", "parent_repo": "exampleorg/repo", "parent_title": "Task",
 					"issue_body": tc.body, "remarks": tc.remarks, "description": tc.description,
 				})
-				if !errors.Is(err, stopped) || createdBody != strings.TrimSpace(tc.want) {
+				if !errors.Is(err, stopped) || backend.WorklogRemarks(createdBody) != strings.TrimSpace(tc.want) {
 					t.Fatalf("issue creation body = %q, err = %v", createdBody, err)
+				}
+				if kind != backend.KindIndependent && !strings.HasPrefix(createdBody, "Logged for 2026-11-06\n\n") {
+					t.Fatal("the past Worklog issue must start with its logged-for date")
 				}
 			})
 		}

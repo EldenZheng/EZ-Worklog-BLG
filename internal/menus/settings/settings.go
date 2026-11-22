@@ -361,6 +361,8 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	bubbleBox := container.NewVBox()
 	redrawBubbles = func() {
 		bubbleBox.Objects = nil
+		var chips []fyne.CanvasObject
+		var menus []*shell.Tappable
 		var entries []string
 		for _, x := range strings.FieldsFunc(repos.Text, func(r rune) bool {
 			return r == '\n' || r == '\r' || r == ','
@@ -380,16 +382,20 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		orgs := shell.OrgOrder(tmp)
 		if len(orgs) == 0 {
-			bubbleBox.Add(widget.NewLabelWithStyle(
+			chips = append(chips, widget.NewLabelWithStyle(
 				"Add a repo or org above; each one will show a colour chip here.",
 				fyne.TextAlignLeading, fyne.TextStyle{Italic: true}))
 		}
 		for _, org := range orgs {
 			org := org
-			bubbleBox.Add(settingsOrgChip(org, shell.OrgColor(tmp, org), func() {
+			chip, menu := settingsOrgChip(org, shell.OrgColor(tmp, org), func() {
 				OrgColorPicker(ui, org, shell.OrgColor(tmp, org), func() { redrawBubbles(); toast.show("Color saved") })
-			}))
+			})
+			chips = append(chips, chip)
+			menus = append(menus, menu)
 		}
+		bubbleBox.Objects = []fyne.CanvasObject{shell.HoverRowsWithPill(container.NewVBox(chips...), menus,
+			widgets.NewHoverPillWithOpacity(0.42, 0.95))}
 		bubbleBox.Refresh()
 	}
 	repos.OnChanged = func(string) { redrawBubbles() }
@@ -538,15 +544,27 @@ func (t chunkySettingsTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeV
 }
 
 // settingsOrgChip uses an explicit menu control to open the color picker.
-func settingsOrgChip(name string, fill color.NRGBA, onPick func()) fyne.CanvasObject {
+func settingsOrgChip(name string, fill color.NRGBA, onPick func()) (fyne.CanvasObject, *shell.Tappable) {
 	bg := canvas.NewRectangle(fill)
 	bg.CornerRadius = 12
 	label := canvas.NewText(name, color.White)
 	label.TextSize = theme.TextSize()
 	label.TextStyle = fyne.TextStyle{Bold: true}
 	more := widget.NewButton("...", onPick)
-	more.Importance = widget.LowImportance
-	return container.NewStack(bg, container.NewPadded(container.NewBorder(nil, nil, nil, more, container.NewCenter(label))))
+	// HoverRows owns one gold pill across every org's menu control. Keep the
+	// button's own hover clear so it cannot leave a second wash behind.
+	menu := shell.NewTappable(container.NewThemeOverride(shell.QuietButton(more), orgMenuTheme{Theme: theme.Current()}), onPick)
+	return container.NewStack(bg, container.NewPadded(container.NewBorder(nil, nil, nil, menu, container.NewCenter(label)))), menu
+}
+
+type orgMenuTheme struct{ fyne.Theme }
+
+func (t orgMenuTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	switch name {
+	case theme.ColorNameButton, theme.ColorNameHover, theme.ColorNameFocus:
+		return color.Transparent
+	}
+	return t.Theme.Color(name, variant)
 }
 
 // nextOrgPaletteColor advances the current colour to the next slot in the

@@ -244,8 +244,8 @@ func settleFrame(o fyne.CanvasObject) {
 // animation drew the whole page again from scratch sixty times a second: the
 // card juddered as it grew while the Status day panel, which refreshes only
 // the piece arriving, stayed smooth. Between frames of a move only positions
-// and sizes change, and none of that needs anything redrawn. Refresh in full
-// on the last frame.
+// and sizes change, and none of that needs anything redrawn, including the
+// last frame. Refresh when the content itself changes.
 func Repaint(o fyne.CanvasObject) {
 	app := fyne.CurrentApp()
 	if app == nil || app.Driver() == nil {
@@ -389,11 +389,9 @@ func (m *Morph) Change(dir int, relayout func(final bool)) {
 			m.oldShift = float32(math.Round(float64(-start * done)))
 		}
 		m.layoutContent(m.Size())
-		if final {
-			canvas.Refresh(m)
-		} else {
-			Repaint(m)
-		}
+		// The final frame drops the outgoing view and releases the held height;
+		// it changes geometry only, just like every frame before it.
+		Repaint(m)
 		if relayout != nil {
 			relayout(final)
 		}

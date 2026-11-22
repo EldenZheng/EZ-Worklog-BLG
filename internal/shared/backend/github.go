@@ -332,18 +332,19 @@ func FetchIssueInfos(refs []string, progress ...func(FetchProgress)) (map[string
 // Status and Assignees are carried for the week export, which is meant to read
 // like the board's own TSV download; nothing else on the tabs uses them.
 type WorklogItem struct {
-	ID          string `json:",omitempty"`
-	Body        string `json:",omitempty"`
-	Date        string
-	Minutes     int
-	Owner       string
-	Remarks     string
-	Title       string
-	URL         string
-	ParentTitle string
-	ParentURL   string
-	Status      string
-	Assignees   []string
+	ID              string `json:",omitempty"`
+	Body            string `json:",omitempty"`
+	Date            string
+	Minutes         int
+	ApprovedMinutes int `json:",omitempty"`
+	Owner           string
+	Remarks         string
+	Title           string
+	URL             string
+	ParentTitle     string
+	ParentURL       string
+	Status          string
+	Assignees       []string
 }
 
 // Repo is the owner/repo the worklog sits in, read off its own issue URL. The
@@ -603,8 +604,8 @@ func FetchProjectWorklogs(cfg Config, ownerFilter, fromDate, toDate string, prog
 		return nil, GhErr("Invalid end date %q.", toDate)
 	}
 	// Worklogs before the SOP are read off the board by their Worklog Date and
-	// Owner fields; from SOPStart they are found by when they were created,
-	// which is the day under the SOP, whatever the board fields say.
+	// Owner fields; from SOPStart the issue's Logged for date (or Malaysia
+	// creation day when absent) is used, whatever the board fields say.
 	var items []WorklogItem
 	if fromDate < SOPStart {
 		urls := ProjectURLs(cfg)
@@ -1655,7 +1656,7 @@ func WeekendSupportBonus(carriedIn, qualifying int, setPay float64) (sets int, b
 const issueQuery = `
 query($owner:String!,$repo:String!,$num:Int!){
  repository(owner:$owner,name:$repo){
-  issue(number:$num){ id number title url
+  issue(number:$num){ id number title url body
    subIssues(first:100){ nodes{ id number title url state body } }
    projectItems(first:20){ nodes{ id
      project{ id number title
@@ -1740,6 +1741,7 @@ type IssueNode struct {
 	Number    int    `json:"number"`
 	Title     string `json:"title"`
 	URL       string `json:"url"`
+	Body      string `json:"body"`
 	SubIssues struct {
 		Nodes []SubIssue `json:"nodes"`
 	} `json:"subIssues"`
@@ -2220,11 +2222,8 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 			}
 		}
 	}
-	// Under the worklog SOP a Worklog's day is the day it is created, so a new
-	// one is made on its own day only. Resuming one an earlier attempt made
-	// creates nothing and may happen any day.
-	if SOPApplies(wdate) && strings.TrimSpace(resume) == "" && wdate != WorkDate(time.Now()) {
-		return PushResult{}, GhErr("Under the worklog SOP a Worklog is created on its own day. Push this entry on %s.", wdate)
+	if err := worklogPushDateError(wdate, resume); err != nil {
+		return PushResult{}, err
 	}
 	emit(5, "Reading issue")
 	o, r, _, issue, err := GetIssueContext(ref)
@@ -2250,6 +2249,7 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 	}
 
 	if mode == "subissue" {
+		body = loggedForBody(body, wdate)
 		var createdURL string
 
 		// Creating the sub-issue is the one step that cannot be undone, so a
@@ -2290,13 +2290,19 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 			}
 			existing, problems = adoptWorklog(issue, found, problems)
 		}
-		// A retry may run on any day only because it reuses the Worklog the
-		// first attempt made. When that Worklog cannot be found, a new one
-		// would carry today's date, not the entry's, so it waits for its day.
-		if existing == nil && SOPApplies(wdate) && wdate != WorkDate(time.Now()) {
-			return PushResult{}, GhErr("This entry's earlier Worklog was not found under %s, and a new one would be dated today rather than %s. Check the earlier Worklog on GitHub, or push again on %s.", ref, wdate, wdate)
+		// A missing retry target can be recreated once its day has arrived.
+		if existing == nil && SOPApplies(wdate) && wdate > WorkDate(time.Now()) {
+			return PushResult{}, GhErr("This entry's earlier Worklog was not found under %s. A new one cannot be created before %s.", ref, wdate)
 		}
 		if existing != nil {
+			if SOPApplies(wdate) {
+				updated := loggedForBody(existing.Body, wdate)
+				if updated != existing.Body {
+					if _, e := Gh([]string{"issue", "edit", existing.URL, "--body", updated}); e != nil {
+						problems = append(problems, "Could not add the logged-for date: "+e.Error())
+					}
+				}
+			}
 			notes = append(notes, fmt.Sprintf(
 				"Reused sub-issue #%d from an earlier attempt on this entry.", existing.Number))
 			emit(25, "Reusing sub-issue")
@@ -2377,7 +2383,16 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 	}
 
 	// Standalone meetings/review batches and legacy direct rows carry the
-	// Worklog type and actual minutes themselves, just like a new sub-issue.
+	// Worklog type and reported minutes themselves, just like a new sub-issue.
+	// Dedicated writers already send an annotated description. For a direct
+	// target without that writer, prepend the date to its existing body.
+	if date, _ := splitLoggedForHeader(issueBody); date != wdate {
+		if updated := loggedForBody(issue.Body, wdate); updated != issue.Body {
+			if _, e := Gh([]string{"issue", "edit", issue.URL, "--body", updated}); e != nil {
+				problems = append(problems, "Could not add the logged-for date: "+e.Error())
+			}
+		}
+	}
 	emit(30, "Setting fields")
 	done, issueFailed := setWorklogIssueFields(o, issue.ID, proj.Fields.Nodes, mins)
 	problems = append(problems, issueFailed...)
