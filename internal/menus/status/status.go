@@ -377,6 +377,19 @@ func DrawDayPanel(ui *shell.UI) {
 		body = append(body, none)
 	}
 
+	// Each worklog bubble folds below its heading line. The scroll and the
+	// boxes holding the bubbles are laid out again on every frame of a slide,
+	// so the bubbles under it follow it up and down.
+	inner := container.NewVBox()
+	var scroll *shell.PlannerFastScroll
+	relayout := func(final bool) {
+		if scroll == nil {
+			return
+		}
+		shell.Reflow(final, &scroll.Scroll, scroll.Content, ui.DayPanel, inner)
+		shell.Repaint(scroll)
+	}
+
 	backdatedShown := false
 	for _, it := range dayItems {
 		it := it
@@ -394,27 +407,40 @@ func DrawDayPanel(ui *shell.UI) {
 		case *widget.Label:
 			t.Wrapping = fyne.TextWrapWord
 		}
-		head := container.NewBorder(nil, nil,
-			container.NewHBox(shell.OrgDot(ui.Cfg, org),
-				widget.NewLabelWithStyle(fmt.Sprintf("%d min", it.Minutes),
-					fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true})),
-			nil, title)
-		card := []fyne.CanvasObject{head}
+		// No org dot: the bubble's own tint and stripe already carry the org.
+		head := fyne.CanvasObject(container.NewBorder(nil, nil,
+			widget.NewLabelWithStyle(fmt.Sprintf("%d min", it.Minutes),
+				fyne.TextAlignLeading, fyne.TextStyle{Bold: true, Monospace: true}),
+			nil, title))
 		// The parent issue, the name the work is filed under, as the same gold
-		// tag Kanban cards carry: a click opens it on GitHub.
+		// tag Kanban cards carry: a click opens it on GitHub. It stays in view
+		// with the heading rather than folding away.
 		if it.ParentTitle != "" || it.ParentURL != "" {
-			card = append(card, shell.ParentTag(backend.OrDefault(it.ParentTitle, "Parent issue"), it.ParentURL))
+			head = container.NewVBox(head,
+				shell.ParentTag(backend.OrDefault(it.ParentTitle, "Parent issue"), it.ParentURL))
 		}
+		var card []fyne.CanvasObject
 		if it.Backdated() {
 			pushed := widget.NewLabelWithStyle("Pushed "+it.Created, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
 			card = append(card, pushed)
 		}
-		rem := widget.NewLabel(it.Remarks)
-		rem.Wrapping = fyne.TextWrapWord
-		card = append(card, rem)
+		if strings.TrimSpace(it.Remarks) != "" {
+			rem := widget.NewLabel(it.Remarks)
+			rem.Wrapping = fyne.TextWrapWord
+			card = append(card, rem)
+		}
 
-		// The same org-tinted bubble a worklog wears on Log Work.
-		body = append(body, shell.OrgBubble(shell.OrgColor(ui.Cfg, org), container.NewVBox(card...)))
+		// The same org-tinted bubble a worklog wears on Log Work. The heading
+		// and parent stay; the rest folds away under the gold arrow at its right,
+		// shut until opened, and stays as left while the panel is redrawn.
+		bubble := fyne.CanvasObject(head)
+		if len(card) > 0 {
+			key := bubbleKey(it)
+			line, area := shell.CollapseLine(head, nil, container.NewVBox(card...), openBubbles[key], 0,
+				func(open bool) { openBubbles[key] = open }, relayout)
+			bubble = container.NewVBox(line, area)
+		}
+		body = append(body, shell.OrgBubble(shell.OrgColor(ui.Cfg, org), bubble))
 	}
 
 	// A day opened, or the tab opened on one, arrives from the top down, piece
@@ -426,14 +452,28 @@ func DrawDayPanel(ui *shell.UI) {
 			}
 		})
 	}
-	ui.DayPanel.Objects = []fyne.CanvasObject{container.NewVBox(body...)}
+	inner.Objects = body
+	ui.DayPanel.Objects = []fyne.CanvasObject{inner}
 	ui.DayPanel.Refresh()
 	// A day's detail can run past the panel, so it gets the scroll the prompt
 	// does not want, at three times the wheel's usual step: a busy day is
 	// long and the default crawled through it.
-	ui.DaySwap.Objects = []fyne.CanvasObject{
-		shell.NoScrollShadow(shell.FastPanelScroll(ui.DayPanel, false, statusPanelScrollBoost))}
+	scroll = shell.FastPanelScroll(ui.DayPanel, false, statusPanelScrollBoost)
+	ui.DaySwap.Objects = []fyne.CanvasObject{shell.NoScrollShadow(scroll)}
 	ui.DaySwap.Refresh()
+}
+
+// openBubbles remembers which day panel bubbles were left open, by worklog,
+// so a redraw of the panel keeps them as they were.
+var openBubbles = map[string]bool{}
+
+// bubbleKey names a worklog's bubble: its GitHub link, or its day and title
+// when it has none.
+func bubbleKey(it backend.WorklogItem) string {
+	if it.URL != "" {
+		return it.URL
+	}
+	return it.Date + "|" + it.Title
 }
 
 // statusPanelScrollBoost is how much faster the wheel moves the day panel.

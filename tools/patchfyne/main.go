@@ -146,6 +146,12 @@ func run(stage string) error {
 	if err := patchAnimationClock(module.Dir, dependency); err != nil {
 		return err
 	}
+	if err := patchFontScope(module.Dir, dependency); err != nil {
+		return err
+	}
+	if err := patchOverridePrune(module.Dir, dependency); err != nil {
+		return err
+	}
 	if err := copyPatchFiles("_fynepatch", dependency); err != nil {
 		return err
 	}
@@ -219,6 +225,60 @@ func patchAnimationClock(source, dependency string) error {
 		}},
 		{"internal/animation/runner.go", []replacement{
 			{"\tduration := a.a.Duration\n\tnow := time.Now()\n", "\tduration := a.a.Duration\n\tnow := time.Now()\n\ta.worklogSteady(now)\n", "the animation tick"},
+		}},
+	} {
+		code, err := readSource(source, f.file)
+		if err != nil {
+			return err
+		}
+		for _, change := range f.changes {
+			if strings.Count(code, change.original) != 1 {
+				return fmt.Errorf("review %s for this Fyne version", change.review)
+			}
+			code = strings.Replace(code, change.original, change.replaced, 1)
+		}
+		if err := writePatched(dependency, f.file, code); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// patchFontScope keys the font cache by the font in use rather than by the
+// theme override around the text (see
+// _fynepatch/internal/painter/worklog_font_scope.go).
+func patchFontScope(source, dependency string) error {
+	const file = "internal/painter/font.go"
+	code, err := readSource(source, file)
+	if err != nil {
+		return err
+	}
+	const original = "\tscope := \"\"\n\tif o != nil { // for overridden themes get the cache key right\n\t\tscope = cache.WidgetScopeID(o)\n\t}\n"
+	if strings.Count(code, original) != 1 {
+		return fmt.Errorf("review the font cache patch for this Fyne version")
+	}
+	code = strings.Replace(code, original, "\tscope := worklogFontScope(style, o)\n", 1)
+	return writePatched(dependency, file, code)
+}
+
+// patchOverridePrune lets the cache forget the theme records of overrides no
+// longer drawn, and has an override apply its theme again, refreshing what
+// it holds, when it is drawn anew (see
+// _fynepatch/internal/cache/worklog_override_prune.go).
+func patchOverridePrune(source, dependency string) error {
+	for _, f := range []struct {
+		file    string
+		changes []replacement
+	}{
+		{"internal/cache/base.go", []replacement{
+			{"\t\tdestroyExpiredCanvases(now)\n\t}", "\t\tdestroyExpiredCanvases(now)\n\t\tworklogPruneOverrides()\n\t}", "the cache clean"},
+		}},
+		{"container/theme.go", []replacement{
+			{"\tholder *fyne.Container\n\n\tmobile bool\n}", "\tholder *fyne.Container\n\n\tmobile bool\n\n\tworklogPruned bool\n}", "the theme override's fields"},
+			{"\treturn &overrideRenderer{parent: t, objs: []fyne.CanvasObject{t.holder}}",
+				"\tfresh := t.worklogPruned\n\tt.worklogPruned = false\n\treturn &overrideRenderer{parent: t, objs: []fyne.CanvasObject{t.holder}, worklogFresh: fresh}", "the theme override's renderer"},
+			{"\tobjs []fyne.CanvasObject\n}", "\tobjs []fyne.CanvasObject\n\n\tworklogFresh bool\n}", "the theme override renderer's fields"},
+			{"func (r *overrideRenderer) Objects() []fyne.CanvasObject {\n", "func (r *overrideRenderer) Objects() []fyne.CanvasObject {\n\tr.worklogRestyle()\n", "the theme override renderer's objects"},
 		}},
 	} {
 		code, err := readSource(source, f.file)
