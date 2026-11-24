@@ -196,12 +196,12 @@ func TestCurrencyDropdownSearches(t *testing.T) {
 	}
 	press(fyne.KeyDown)
 	press(fyne.KeyReturn)
-	if f.disp.Selected != "RSD" || f.disp.Popup != nil {
+	// The menu stays open after a pick, so the pick's motion is seen.
+	if f.disp.Selected != "RSD" || f.disp.Popup == nil {
 		t.Fatalf("selected %q, popup open %v", f.disp.Selected, f.disp.Popup != nil)
 	}
 
 	// Nothing to pick: Enter does nothing, and Escape leaves the choice alone.
-	f.disp.Tapped(nil)
 	f.disp.Find.SetText("zzz")
 	if got := choiceTexts(f.disp); !slices.Equal(got, []string{"No matches"}) {
 		t.Fatalf("empty search lists %v", got)
@@ -222,6 +222,7 @@ func TestCurrencyDropdownSearches(t *testing.T) {
 	if f.disp.Selected != "EUR" {
 		t.Fatalf("tapped row picked %q", f.disp.Selected)
 	}
+	f.disp.CloseChoices()
 
 	// Reopening starts over with the whole list.
 	f.disp.Tapped(nil)

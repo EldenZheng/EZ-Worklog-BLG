@@ -771,6 +771,9 @@ func dayRowCard(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) *sh
 		actionItems[0] = shell.CompactGitHubHoverButton(push)
 	}
 	actionItems = append(actionItems, rowTags(ui, r, duplicate, true)...)
+	if tag := titleTag(ui, r, refresh); tag != nil {
+		actionItems = append(actionItems, tag)
+	}
 	// The Delete icon's own hover fades as gently as the icon itself.
 	del := shell.NewFadeIconButton(theme.DeleteIcon(), func() { ConfirmDelete(ui, r, refresh) })
 	fade := shell.NewFader(del)

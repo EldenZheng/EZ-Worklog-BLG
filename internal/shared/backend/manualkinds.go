@@ -157,14 +157,54 @@ func DailyCodeReviewTitle(cfg Config, date string) string {
 	return fmt.Sprintf("%s Code Review: %s", DisplayName(cfg), date)
 }
 
-// SubTitleBaseFor is what PushEntry should title a row's sub-issue with. Empty
-// means "use the default 'Worklog: <date>'" — the vast majority; only a code-
-// review row overrides it so its sub-issue is named as such on the board.
-func SubTitleBaseFor(r Row) string {
-	if r["type"] == KindCodeReview {
-		return CodeReviewTitle(r["date"])
+// BulkCodeReviewTitle is the day's bulk code-review issue as GitHub shows it:
+// "Alex - Bulk (6) Code Reviews: 2026-09-15". The count follows the PR list.
+func BulkCodeReviewTitle(cfg Config, date string, count int) string {
+	return fmt.Sprintf("%s - Bulk (%d) Code Reviews: %s", DisplayName(cfg), count, date)
+}
+
+// BulkReviewName is the day's bulk review as the app names it before its PRs
+// are counted: "Alex - Bulk Code Reviews: 2026-09-15".
+func BulkReviewName(cfg Config, date string) string {
+	return fmt.Sprintf("%s - Bulk Code Reviews: %s", DisplayName(cfg), date)
+}
+
+// BulkReviewLabel names a saved bulk review the way GitHub will title it,
+// with its PR count, or BulkReviewName when its PR list cannot be read.
+func BulkReviewLabel(cfg Config, r Row) string {
+	if items, err := ParseCodeReviewItems(WorklogRemarks(OrDefault(r["issue_body"], r["remarks"]))); err == nil {
+		return BulkCodeReviewTitle(cfg, r["date"], len(items))
 	}
-	return ""
+	return BulkReviewName(cfg, r["date"])
+}
+
+// isDailyReviewTitle accepts the day's bulk review issue under its current
+// title, with any count, or under the older "Alex Code Review: <date>".
+func isDailyReviewTitle(cfg Config, date, title string) bool {
+	title = strings.TrimSpace(title)
+	if strings.EqualFold(title, DailyCodeReviewTitle(cfg, date)) {
+		return true
+	}
+	re := regexp.MustCompile(`(?i)^` + regexp.QuoteMeta(DisplayName(cfg)) +
+		` - Bulk \(\d+\) Code Reviews?: ` + regexp.QuoteMeta(date) + `$`)
+	return re.MatchString(title)
+}
+
+// SingleCodeReviewTitle is a single review's Worklog title: someone else's
+// issue, so it says whose review it is: "Alex - Code Review: <what>". what is
+// the entry's Worklog title, or the date when it has none.
+func SingleCodeReviewTitle(cfg Config, what, date string) string {
+	return fmt.Sprintf("%s - Code Review: %s", DisplayName(cfg), OrDefault(strings.TrimSpace(what), date))
+}
+
+// SubTitleBaseFor is what PushEntry should title a row's sub-issue with. Empty
+// means "use the default 'Worklog: <date>'", for a row with no Worklog title.
+// A code review always names whose review it is.
+func SubTitleBaseFor(cfg Config, r Row) string {
+	if r["type"] == KindCodeReview {
+		return SingleCodeReviewTitle(cfg, r["worklog_title"], r["date"])
+	}
+	return strings.TrimSpace(r["worklog_title"])
 }
 
 // findIssueByTitle looks for an exact title in a repo, open or closed.
@@ -191,6 +231,32 @@ func findIssueByTitle(repo, title string) (string, error) {
 	}
 	for _, f := range found {
 		if strings.EqualFold(strings.TrimSpace(f.Title), title) {
+			return fmt.Sprintf("%s#%d", repo, f.Number), nil
+		}
+	}
+	return "", nil
+}
+
+// findDailyReviewIssue finds the day's bulk review issue under either of its
+// titles, open or closed.
+func findDailyReviewIssue(cfg Config, repo, date string) (string, error) {
+	out, err := Gh([]string{
+		"issue", "list", "--repo", repo, "--state", "all", "--limit", "30",
+		"--search", fmt.Sprintf("%q in:title", date),
+		"--json", "number,title",
+	})
+	if err != nil {
+		return "", err
+	}
+	var found []struct {
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal([]byte(out), &found); err != nil {
+		return "", GhErr("could not read the issue search: %v", err)
+	}
+	for _, f := range found {
+		if isDailyReviewTitle(cfg, date, f.Title) {
 			return fmt.Sprintf("%s#%d", repo, f.Number), nil
 		}
 	}
@@ -294,12 +360,16 @@ func EnsureCodeReviewIssue(cfg Config, date, body string) (string, error) {
 	if DisplayName(cfg) == "" {
 		return "", GhErr("Set your worklog owner (or a display name) in Settings before logging code review.")
 	}
-	title := DailyCodeReviewTitle(cfg, date)
-	if ref, err := findIssueByTitle(repo, title); err != nil {
+	if ref, err := findDailyReviewIssue(cfg, repo, date); err != nil {
 		return "", err
 	} else if ref != "" {
 		return ref, nil
 	}
+	count := 0
+	if items, err := ParseCodeReviewItems(WorklogRemarks(body)); err == nil {
+		count = len(items)
+	}
+	title := BulkCodeReviewTitle(cfg, date, count)
 	_, ref, err := createTypedIssue(repo, title, loggedForBody(body, date), codeReviewIssueType)
 	if ref == "" {
 		return "", err

@@ -26,7 +26,13 @@ type ChoiceFeedback struct {
 // AnimatedTickChoice gives a single native check the Kanban filter's hover,
 // ripple and drawn tick while preserving its keyboard and SetChecked behavior.
 func AnimatedTickChoice(check *widget.Check) fyne.CanvasObject {
-	f := &ChoiceFeedback{Content: check, tick: NewTickMotion(LogoGold), pill: NewHoverPill()}
+	return AnimatedTickChoiceInk(check, LogoGold)
+}
+
+// AnimatedTickChoiceInk is AnimatedTickChoice with the tick drawn in ink, for
+// a check that wears its own colour (weekday support's turquoise).
+func AnimatedTickChoiceInk(check *widget.Check, ink color.Color) fyne.CanvasObject {
+	f := &ChoiceFeedback{Content: check, tick: NewTickMotion(ink), pill: NewHoverPill()}
 	f.ExtendBaseWidget(f)
 	changed := check.OnChanged
 	check.OnChanged = func(on bool) {

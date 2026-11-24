@@ -57,7 +57,7 @@ func TestUnpushedLoggedCommitGetsItsRefAndAPlainPush(t *testing.T) {
 	if tip != done.Commits[0].New || gitT(t, f.remote, "rev-parse", tip+"^") != oldRemote {
 		t.Fatal("GitHub should gain C on top of its own B, with nothing rewritten")
 	}
-	if msg := gitT(t, f.remote, "log", "-1", "--format=%B", tip); !strings.Contains(msg, "Refs rw-org/app#6001") {
+	if msg := gitT(t, f.remote, "log", "-1", "--format=%B", tip); !strings.HasPrefix(msg, "Refs rw-org/app/issues/6001:\n") {
 		t.Fatalf("C should reference its Worklog:\n%s", msg)
 	}
 	if gitT(t, f.clone, "rev-parse", "refs/heads/feat") != tip {
@@ -124,7 +124,8 @@ func TestPushedAndUnpushedCommitsOnOneBranchGoUpTogether(t *testing.T) {
 		t.Fatal(err)
 	}
 	tip := gitT(t, f.remote, "rev-parse", "refs/heads/feat")
-	if tip != done.NewRemote || gitT(t, f.remote, "log", "-1", "--format=%s", tip) != "Commit C, not pushed" {
+	// The Worklog's reference leads the message; the original follows it.
+	if tip != done.NewRemote || !strings.HasSuffix(gitT(t, f.remote, "log", "-1", "--format=%B", tip), "\nCommit C, not pushed") {
 		t.Fatal("GitHub should end on C's twin")
 	}
 }

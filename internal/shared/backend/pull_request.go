@@ -108,7 +108,7 @@ func PlanPullRequest(dir, repo, branch, issue string, logged func(sha, message s
 
 // A line that only names issues ("Refs owner/repo#6001"), or the prefix of
 // one that goes on ("Refs owner/repo#5185: fix the totals").
-var issueRefsPrefix = regexp.MustCompile(`(?i)^(?:(?:refs?|closes|fixes|resolves)\s+)?(?:[\w.-]+/[\w.-]+)?#\d+(?:\s*,\s*(?:[\w.-]+/[\w.-]+)?#\d+)*\s*:?\s*`)
+var issueRefsPrefix = regexp.MustCompile(`(?i)^(?:(?:refs?|closes|fixes|resolves)\s+)?(?:[\w.-]+/[\w.-]+(?:#|/issues/)|#)\d+(?:\s*,\s*(?:[\w.-]+/[\w.-]+(?:#|/issues/)|#)\d+)*\s*:?\s*`)
 
 // PullRequestBody is "Refs issue:" and then each line of the commits'
 // messages as a point, without the references they carry. A line that is

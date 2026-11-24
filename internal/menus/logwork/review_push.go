@@ -17,11 +17,16 @@ var errReviewPushCancelled = errors.New("code review was not combined; the entry
 
 // All manual push entry points use this gate, including saved rows and retries.
 // The confirmation is on the UI thread; GitHub reads and writes stay off it.
-func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.PushResult, error)) {
-	progress, stop := ui.PushSpinner("Checking GitHub before pushing...")
+//
+// done gets the pull requests the push made ready, so the push's own result
+// can offer them rather than a second popup turning up after it.
+func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.PushResult, []backend.PullRequestPlan, error)) {
+	progress, stop := ui.PushSpinner("Pushing to GitHub...")
 	var res backend.PushResult
 	var plan *backend.DailyReviewPush
 	var pushErr error
+	// The Worklog and its commits' references share this one progress bar.
+	var plans []backend.PullRequestPlan
 	ui.Async(func() error {
 		r, pushErr = resolveForPush(ui, r)
 		if pushErr != nil {
@@ -40,12 +45,18 @@ func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.
 		}
 		res, pushErr = backend.PushEntry(ui.Cfg, r["issue"], r["date"], r["owner"],
 			r.Minutes(), body, backend.WorklogIssueBody(r, body), backend.RowPushMode(r), r["issue_url"],
-			backend.SubTitleBaseFor(r), progress)
+			backend.SubTitleBaseFor(ui.Cfg, r), scaledProgress(progress, pushShare(r)))
+		if pushErr == nil {
+			plans = planPullRequests(ui, refsAfterPush(ui, r, &res, progress))
+		}
 		return nil
 	}, func() {
 		stop()
 		if pushErr != nil || plan == nil {
-			done(r, res, pushErr)
+			if pushErr == nil {
+				ui.RefreshLoggedShas()
+			}
+			done(r, res, plans, pushErr)
 			return
 		}
 		push := func() {
@@ -55,7 +66,7 @@ func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.
 				return nil
 			}, func() {
 				finish()
-				done(r, res, pushErr)
+				done(r, res, nil, pushErr)
 			})
 		}
 		if !plan.NeedsCombine {
@@ -65,7 +76,7 @@ func pushSavedEntry(ui *shell.UI, r backend.Row, done func(backend.Row, backend.
 		var popup *widget.PopUp
 		cancel := widget.NewButton("Cancel", func() {
 			shell.ClosePopUp(popup)
-			done(r, backend.PushResult{}, errReviewPushCancelled)
+			done(r, backend.PushResult{}, nil, errReviewPushCancelled)
 		})
 		combine := widget.NewButton("Combine & push", func() {
 			shell.ClosePopUp(popup)

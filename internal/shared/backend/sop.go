@@ -139,13 +139,27 @@ func WorklogIssueBody(r Row, remarks string) string {
 	}
 	base := strings.TrimSpace(OrDefault(r["issue_body"], remarks))
 	lines := []string{worklogAppSection}
-	// One "Ref <commit link>" line per commit. A legacy entry's commits cannot
-	// be changed, so these lines are their link to this Worklog; any other
-	// entry's commits are given this Worklog's reference after the push (see
-	// commit_rewrite.go), and the lines stand in until they are.
-	for _, c := range ParseCommitRefs(r["refs"]) {
+	// "Ref <commit link>" lines only for commits that can never carry this
+	// Worklog's reference: every commit of a legacy entry, and merged commits
+	// of any other. The rest are given "Refs <Worklog>:" in their own message
+	// after the push (commit_rewrite.go), so listing them here too would only
+	// duplicate that link.
+	commits := ParseCommitRefs(r["refs"])
+	if !RowIsLegacy(r) {
+		merged := mergedSet(r)
+		var kept []CommitRef
+		for _, c := range commits {
+			if merged[commitKey(c)] {
+				kept = append(kept, c)
+			}
+		}
+		commits = kept
+	}
+	for _, c := range commits {
 		lines = append(lines, "Ref "+commitLink(c))
 	}
+	// The section and this marker are HTML comments, hidden on GitHub's page.
+	// The marker is how a retry finds this Worklog instead of creating another.
 	lines = append(lines, entryMarker(r["id"]))
 	if base == "" {
 		return loggedForBody(strings.Join(lines, "\n"), r["date"])
@@ -342,6 +356,7 @@ func searchSOPWorklogs(owner, from, to string, lateOnly bool) ([]WorklogItem, er
 			it := WorklogItem{
 				ID: n.ID, Body: n.Body, Title: n.Title, URL: n.URL, Owner: owner,
 				Date:    worklogDay(n.Body, created),
+				Created: WorkDate(created),
 				Remarks: WorklogRemarks(n.Body),
 			}
 			if n.Parent != nil {
@@ -398,8 +413,12 @@ func MergePushedRows(items []WorklogItem, rows []Row, owner, from, to string) []
 			continue
 		}
 		seen[strings.ToLower(u)] = true
+		created := ""
+		if at := strings.TrimSpace(r["pushed_at"]); len(at) >= 10 {
+			created = at[:10]
+		}
 		items = append(items, WorklogItem{
-			Date: date, Minutes: r.Minutes(), Owner: owner, Remarks: r["remarks"],
+			Date: date, Created: created, Minutes: r.Minutes(), Owner: owner, Remarks: r["remarks"],
 			Title: OrDefault(r["display_title"], r["description"]), URL: u, ParentURL: issueURLOf(r["issue"]),
 		})
 	}
@@ -458,8 +477,8 @@ func ResolveWorklogRefs(commits []Commit) {
 		for _, ref := range commitIssueRefs(c) {
 			if wp := worklogRefCache[strings.ToLower(ref)]; wp.worklog {
 				commits[i].Worklog = ref
-				if wp.parent != "" && (c.Issue == "" || strings.EqualFold(c.Issue, ref)) {
-					commits[i].Issue = wp.parent
+				if wp.parent != "" && (c.Issue == "" || c.IssueGuessed || strings.EqualFold(c.Issue, ref)) {
+					commits[i].Issue, commits[i].IssueGuessed = wp.parent, false
 				}
 				break
 			}
@@ -677,4 +696,10 @@ func FindSubIssueByMarker(node IssueNode, body string) *SubIssue {
 		}
 	}
 	return nil
+}
+
+// Backdated reports whether it was created after the day it counts for: a
+// late Worklog carrying a Logged for date.
+func (it WorklogItem) Backdated() bool {
+	return it.Created != "" && it.Date != "" && it.Created > it.Date
 }

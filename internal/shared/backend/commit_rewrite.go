@@ -195,6 +195,10 @@ type RewriteCommit struct {
 	New     string   `json:"new,omitempty"`
 	Subject string   `json:"subject"`
 	Refs    []string `json:"refs,omitempty"` // Worklogs this commit gains, as owner/repo#N
+	// Replaces is the issues the Worklogs are filed under. A Refs line at the
+	// top of the message naming one of them gives way to the Worklog's, so a
+	// commit keeps one Refs line instead of stacking a second.
+	Replaces []string `json:"replaces,omitempty"`
 }
 
 // RewriteBatch is every commit to rewrite on one branch, and the journal entry
@@ -232,6 +236,7 @@ func Short(sha string) string {
 
 type refTarget struct {
 	repo, sha, worklog, rowID string
+	parent                    string // the issue the Worklog is filed under
 }
 
 // PlanWorklogRefs works out, branch by branch, what adding the references of
@@ -252,7 +257,7 @@ func PlanWorklogRefs(cfg Config, rows []Row) []RewriteBatch {
 			if byRepo[key] == nil {
 				repos = append(repos, key)
 			}
-			byRepo[key] = append(byRepo[key], refTarget{repo: repo, sha: c.Sha, worklog: worklog, rowID: r["id"]})
+			byRepo[key] = append(byRepo[key], refTarget{repo: repo, sha: c.Sha, worklog: worklog, rowID: r["id"], parent: r["issue"]})
 		}
 	}
 	sort.Strings(repos)
@@ -346,8 +351,12 @@ func planRepo(dir, repo string, targets []refTarget) []RewriteBatch {
 	for _, branch := range branches {
 		var ts []refTarget
 		refs := map[string][]string{}
+		parents := map[string][]string{}
 		for _, f := range byBranch[branch] {
 			ts = append(ts, f.t)
+			if f.t.parent != "" && !containsFold(parents[f.full], f.t.parent) {
+				parents[f.full] = append(parents[f.full], f.t.parent)
+			}
 			if !containsFold(refs[f.full], f.t.worklog) {
 				refs[f.full] = append(refs[f.full], f.t.worklog)
 			}
@@ -382,6 +391,11 @@ func planRepo(dir, repo string, targets []refTarget) []RewriteBatch {
 		if why != "" {
 			batches = append(batches, stop(ts, branch, why))
 			continue
+		}
+		for i := range b.Commits {
+			if len(b.Commits[i].Refs) > 0 {
+				b.Commits[i].Replaces = parents[b.Commits[i].Old]
+			}
 		}
 		b.RowIDs = rowIDsOf(ts)
 		batches = append(batches, b)
@@ -608,7 +622,7 @@ func (s *Store) RunWorklogRefs(b RewriteBatch) (RewriteBatch, error) {
 	}
 	newOf := map[string]string{}
 	for i, c := range b.Commits {
-		made, err := recreateCommit(b.Dir, c.Old, parent, c.Refs, b.Sign)
+		made, err := recreateCommit(b.Dir, c.Old, parent, c.Refs, c.Replaces, b.Sign)
 		if err != nil {
 			return b, err
 		}
@@ -749,7 +763,7 @@ func (s *Store) syncLocal(b *RewriteBatch) error {
 		if len(f) != 2 || f[1] != prev {
 			return fmt.Errorf("Your local %s gained a merge commit; move it across with git pull --rebase.", b.Branch)
 		}
-		made, err := recreateCommit(b.Dir, f[0], parent, nil, b.Sign)
+		made, err := recreateCommit(b.Dir, f[0], parent, nil, nil, b.Sign)
 		if err != nil {
 			return err
 		}
@@ -767,8 +781,8 @@ func (s *Store) syncLocal(b *RewriteBatch) error {
 }
 
 // recreateCommit makes old's twin on parent: the same tree, author and
-// committer, with refs added to its message.
-func recreateCommit(dir, old, parent string, refs []string, sign bool) (string, error) {
+// committer, with refs added to its message (see AddWorklogRefs).
+func recreateCommit(dir, old, parent string, refs, replaces []string, sign bool) (string, error) {
 	raw, err := Git(dir, nil, "", "cat-file", "commit", old)
 	if err != nil {
 		return "", err
@@ -792,7 +806,7 @@ func recreateCommit(dir, old, parent string, refs []string, sign bool) (string, 
 	if sign {
 		args = append(args, "-S")
 	}
-	out, err := Git(dir, env, AddWorklogRefs(message, refs), args...)
+	out, err := Git(dir, env, AddWorklogRefs(message, refs, replaces...), args...)
 	if err != nil {
 		return "", err
 	}
@@ -810,31 +824,77 @@ func identityEnv(role, line string) []string {
 }
 
 // MessageNamesIssue reports whether message names the issue ref (owner/repo#N)
-// as a whole: owner/repo#60010 does not name owner/repo#6001.
+// as a whole, in either spelling (owner/repo#N or owner/repo/issues/N):
+// owner/repo#60010 does not name owner/repo#6001.
 func MessageNamesIssue(message, ref string) bool {
-	re, err := regexp.Compile(`(?i)(?:^|[^\w.-])` + regexp.QuoteMeta(ref) + `(?:\D|$)`)
+	pattern := regexp.QuoteMeta(ref)
+	if owner, repo, num, err := SplitIssue(ref); err == nil {
+		pattern = regexp.QuoteMeta(owner+"/"+repo) + fmt.Sprintf(`(?:#|/issues/)%d`, num)
+	}
+	re, err := regexp.Compile(`(?i)(?:^|[^\w.-])` + pattern + `(?:\D|$)`)
 	return err == nil && re.MatchString(message)
 }
 
-// AddWorklogRefs appends a "Refs owner/repo#N" line for each Worklog the
-// message does not name already, after a blank line, as git trailers sit.
-func AddWorklogRefs(message string, refs []string) string {
+// issuePath is owner/repo#N written as owner/repo/issues/N, the spelling the
+// team's commit messages use.
+func issuePath(ref string) string {
+	owner, repo, num, err := SplitIssue(ref)
+	if err != nil {
+		return ref
+	}
+	return fmt.Sprintf("%s/%s/issues/%d", owner, repo, num)
+}
+
+// refsHeaderRe is a "Refs owner/repo/issues/N, …:" line at the top of a
+// message, with the subject after it on the same line or on the next.
+var refsHeaderRe = regexp.MustCompile(`^Refs\s+([^:]+):\s*(.*)$`)
+
+// AddWorklogRefs puts "Refs owner/repo/issues/N:" as the first line of the
+// message, for each Worklog it does not name already, with the rest of the
+// message following unchanged. A Refs line already at the top is merged into
+// that one line, and the issues in replaces (the ones the Worklogs are filed
+// under) drop out of it: a commit ends with one Refs line, never two.
+func AddWorklogRefs(message string, refs []string, replaces ...string) string {
 	var add []string
 	for _, ref := range refs {
 		if !MessageNamesIssue(message, ref) {
-			add = append(add, "Refs "+ref)
+			add = append(add, issuePath(ref))
 		}
 	}
 	if len(add) == 0 {
 		return message
 	}
-	body := strings.TrimRight(message, "\n")
-	// Joined to a Refs block already closing the message, not a new paragraph.
-	sep := "\n\n"
-	if lines := strings.Split(body, "\n"); strings.HasPrefix(strings.TrimSpace(lines[len(lines)-1]), "Refs ") && len(lines) > 1 {
-		sep = "\n"
+	lines := strings.Split(strings.Trim(message, "\n"), "\n")
+	named := append([]string{}, add...)
+	for len(lines) > 0 {
+		m := refsHeaderRe.FindStringSubmatch(strings.TrimRight(lines[0], "\r"))
+		if m == nil {
+			break
+		}
+		var keep []string
+		parsed := true
+		for _, part := range strings.Split(m[1], ",") {
+			ref, err := IssueRefFromAny(strings.TrimSpace(part))
+			if err != nil {
+				parsed = false
+				break
+			}
+			if !containsFold(replaces, ref) && !containsFold(named, issuePath(ref)) {
+				keep = append(keep, issuePath(ref))
+			}
+		}
+		if !parsed {
+			break
+		}
+		named = append(named, keep...)
+		if m[2] != "" {
+			lines[0] = m[2]
+			break
+		}
+		lines = lines[1:]
 	}
-	return body + sep + strings.Join(add, "\n") + "\n"
+	body := strings.Join(lines, "\n")
+	return "Refs " + strings.Join(named, ", ") + ":\n" + body + "\n"
 }
 
 // ---- the app's records ----

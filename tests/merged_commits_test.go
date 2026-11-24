@@ -80,9 +80,13 @@ func TestRefreshMergedRefsMarksDraftsAndKeepsMergedCommitsOutOfTheRewrite(t *tes
 			"refs": "o/r@aaaaaaa,o/r@ccccccc", "minutes": "30"},
 		{"date": "2026-11-24", "type": backend.KindCommit, "issue": "o/r#5", "mode": "subissue",
 			"refs": "o/r@bbbbbbb", "minutes": "30"},
-		// Legacy and pre-SOP entries are never rewritten, so never checked.
+		// A legacy entry whose commits are all merged stays legacy; one with an
+		// unmerged commit loses the tag. Pre-SOP entries are never checked.
 		{"date": "2026-11-24", "type": backend.KindCommit, "issue": "o/r#5", "refs": "o/r@aaaaaaa", "legacy": "1"},
 		{"date": "2026-11-10", "type": backend.KindCommit, "issue": "o/r#5", "refs": "o/r@aaaaaaa"},
+		{"date": "2026-11-24", "type": backend.KindCommit, "issue": "o/r#5", "refs": "o/r@ccccccc", "legacy": "1"},
+		{"date": "2026-11-24", "type": backend.KindCommit, "issue": "o/r#5", "refs": "o/r@ccccccc", "legacy": "1",
+			"pushed_at": "2026-11-20T10:00:00", "issue_url": "https://github.com/o/r/issues/7"},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -117,8 +121,12 @@ func TestRefreshMergedRefsMarksDraftsAndKeepsMergedCommitsOutOfTheRewrite(t *tes
 	if rows[0]["merged_refs"] != "o/r@aaaaaaa" || rows[1]["merged_refs"] != "o/r@bbbbbbb" {
 		t.Fatalf("merged_refs not recorded: %q %q", rows[0]["merged_refs"], rows[1]["merged_refs"])
 	}
-	if rows[2]["merged_refs"] != "" || rows[3]["merged_refs"] != "" {
-		t.Fatal("legacy and pre-SOP entries must be left alone")
+	if rows[2]["merged_refs"] != "o/r@aaaaaaa" || rows[2]["legacy"] != "1" || rows[3]["merged_refs"] != "" {
+		t.Fatalf("all-merged legacy keeps its tag; pre-SOP is left alone: %v %v", rows[2], rows[3])
+	}
+	if rows[4]["legacy"] != "" || rows[5]["legacy"] != "1" {
+		t.Fatalf("an unpushed legacy entry with an unmerged commit loses the tag; a pushed one keeps it: %q %q",
+			rows[4]["legacy"], rows[5]["legacy"])
 	}
 	// Part merged: only the open commit still needs the reference.
 	if un := backend.UnmergedRefs(rows[0]); len(un) != 1 || un[0].Sha != "ccccccc" || backend.RefsLocked(rows[0]) {

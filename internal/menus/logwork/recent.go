@@ -150,9 +150,11 @@ func DrawRecent(ui *shell.UI) {
 		head = "Drafts hidden by the filter"
 	}
 
-	objs := []fyne.CanvasObject{
-		widget.NewLabelWithStyle(head, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+	var headRow fyne.CanvasObject = widget.NewLabelWithStyle(head, fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	if suggest := suggestTitlesButton(ui, rows); suggest != nil {
+		headRow = container.NewHBox(headRow, suggest)
 	}
+	objs := []fyne.CanvasObject{headRow}
 	// Nothing is drawn while GitHub is still fetching the week's worklogs or
 	// the pending commits and their issue titles, which name these entries:
 	// the list arrives once, when they have landed.
@@ -335,13 +337,13 @@ func RowTitle(ui *shell.UI, r backend.Row) string {
 	case backend.KindMeeting:
 		return backend.MeetingTitle(ui.Cfg, r["date"])
 	case backend.KindBulkReview:
-		return backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+		return backend.BulkReviewLabel(ui.Cfg, r)
 	case backend.KindCodeReview:
 		// Interim bulk drafts used kindCodeReview with no issue ref. Keep their
 		// daily title dynamic while preserving normal single-review rows.
 		if r["issue"] == "" {
 			if _, err := backend.ParseCodeReviewItems(r["remarks"]); err == nil {
-				return backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+				return backend.BulkReviewLabel(ui.Cfg, r)
 			}
 		}
 		if r["issue"] != "" {
@@ -394,7 +396,7 @@ func rowTile(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.C
 		case r["type"] == backend.KindMeeting:
 			fallback = "meeting — " + backend.MeetingTitle(ui.Cfg, r["date"])
 		case backend.RowIsBulkCodeReview(r):
-			fallback = "bulk review — " + backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+			fallback = "bulk review — " + backend.BulkReviewLabel(ui.Cfg, r)
 		case r["type"] == backend.KindCodeReview:
 			fallback = "code review — no issue ref"
 		case r["type"] == backend.KindIndependent && r["parent_repo"] != "":
@@ -433,6 +435,9 @@ func rowTile(ui *shell.UI, r backend.Row, refresh func(), duplicate bool) fyne.C
 		actionItems = append(actionItems, shell.CompactGitHubHoverButton(add))
 	}
 	actionItems = append(actionItems, rowTags(ui, r, duplicate, false)...)
+	if tag := titleTag(ui, r, refresh); tag != nil {
+		actionItems = append(actionItems, tag)
+	}
 	actionItems = append(actionItems, layout.NewSpacer())
 	if copyRef := copyRefButton(r); copyRef != nil {
 		actionItems = append(actionItems, widgets.WithPointerCursor(copyRef))
@@ -617,7 +622,7 @@ func ConfirmDelete(ui *shell.UI, r backend.Row, refresh func()) {
 
 // pushRow sends one saved row to GitHub and reports what landed.
 func pushRow(ui *shell.UI, r backend.Row, refresh func()) {
-	pushSavedEntry(ui, r, func(updated backend.Row, res backend.PushResult, perr error) {
+	pushSavedEntry(ui, r, func(updated backend.Row, res backend.PushResult, plans []backend.PullRequestPlan, perr error) {
 		r = updated
 		if perr == errReviewPushCancelled {
 			refresh()
@@ -634,17 +639,11 @@ func pushRow(ui *shell.UI, r backend.Row, refresh func()) {
 		_, complete := applyPushResult(ui, r["id"], res)
 		refresh()
 		ui.RefreshAfterPush(r["date"])
-		// Its commits get the Worklog's reference next; that popup says what
-		// happens, so it stands in for "Push complete".
-		if complete && rowNeedsRefRun(r) {
-			addWorklogRefs(ui, refresh)
-			return
-		}
 		title := "Push incomplete"
 		if complete {
 			title = "Push complete"
 		}
-		showPushResultDialog(ui, title, res, repush)
+		showPushResultDialog(ui, title, res, plans, repush)
 	})
 }
 
@@ -685,7 +684,9 @@ func showPushFailedDialog(ui *shell.UI, title string, content fyne.CanvasObject,
 // showPushResultDialog puts up a compact popup with "Pushed:" and a clickable
 // link to the worklog on GitHub. Incomplete pushes carry their problem lines
 // beneath the link so nothing is silently swallowed.
-func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult, repush func()) {
+// A complete push lists any pull request its branch already has, and offers
+// Push to PR for one it could have, in this same popup.
+func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult, plans []backend.PullRequestPlan, repush func()) {
 	rows := []fyne.CanvasObject{}
 	if res.URL != "" {
 		if u, err := url.Parse(res.URL); err == nil {
@@ -703,7 +704,26 @@ func showPushResultDialog(ui *shell.UI, title string, res backend.PushResult, re
 		showPushFailedDialog(ui, title, container.NewVBox(rows...), repush)
 		return
 	}
-	shell.ShowStockDialog(dialog.NewCustom(title, "OK", container.NewVBox(rows...), ui.Win), ui.Win, "OK")
+	for _, p := range plans {
+		if p.Existing != "" {
+			rows = append(rows, container.NewVBox(
+				widget.NewLabelWithStyle("Pull request on "+p.Branch+":", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+				linkWithCopy(p.Existing)))
+		}
+	}
+	fresh := newPullRequests(plans)
+	if len(fresh) == 0 {
+		shell.ShowStockDialog(dialog.NewCustom(title, "OK", container.NewVBox(rows...), ui.Win), ui.Win, "OK")
+		return
+	}
+	rows = append(rows, wrapped("Every commit of yours on "+fresh[0].Branch+" is logged, so it is ready for a pull request."))
+	var popup *widget.PopUp
+	ok := widget.NewButton("OK", func() { shell.ClosePopUp(popup) })
+	toPR := widget.NewButton("Push to PR", func() {
+		shell.ClosePopUp(popup)
+		offerPlans(ui, fresh)
+	})
+	popup = ui.ShowConfirmation(title, container.NewVBox(rows...), shell.DialogButtons(ok, toPR))
 }
 
 // rowWaitsForPush reports whether any of r's commits is only on this machine,

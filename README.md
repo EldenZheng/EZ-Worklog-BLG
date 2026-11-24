@@ -490,7 +490,7 @@ GitHub links.
 
 | Entry type | When to use it |
 | --- | --- |
-| **Commits** | Pushed commits grouped by date and referenced issue. Open a bubble, enter minutes and save or push. **Ignore** hides a group without claiming time; **Show ignored** lets you restore it. |
+| **Commits** | Pushed commits grouped by date and referenced issue. Open a bubble, enter minutes and save or push. **Ignore** hides a group without claiming time; **Show ignored** lets you restore it. Commits whose subject starts with `chore` (such as `chore(ng21): …`) start out ignored. |
 | **Worklog** | Manual work against an existing issue. Paste the issue, enter minutes and remarks; pushing creates a Worklog sub-issue. |
 | **Code Review** | One PR: the app resolves the issue named by its `Refs`. If several issues are referenced, choose one beside the link. A direct issue works too. The entry carries a purple Code review badge. |
 | **Bulk Review** | A growing two-column PR/minutes sheet. It totals the rows and creates one daily `<Name> Code Review: <date>` issue in the configured bulk-review repository on push. |
@@ -756,7 +756,7 @@ Git and do not belong in a commit:
 | --- | --- |
 | `config.json` | identity, source boards, display/report preferences and an optional history-backup location |
 | `worklog.csv` | local drafts and pushed entries, remarks, meeting titles/recording links and commit logged markers |
-| `ignored.json` | the commit shas you have deliberately kept off the pending list |
+| `ignored.json` | the commit shas you have deliberately kept off the pending list, and (as `!sha`) chore commits you brought back |
 | `ignored-dates.json` | when each of those commits was ignored, for Settings > Clean up after |
 | `sprint-planner.json` | local blocks, estimates, notes, calendar mode, filters and ordering |
 | `support-weeks.json` | the weeks selected for the weekday-support preview |
@@ -800,6 +800,8 @@ or hosted Worklog server. GitHub remains the source for pushed records.
 | Support payment per set | Payment in the salary currency per seven qualifying issues. Blank means unset; incomplete sets still carry across periods. |
 | Currency / Display in | Search dropdowns of the codes `open.er-api.com` has rates for. Display in is converted with a rate fetched from it, at most once a day; untick it to hide the conversion. |
 | Look back (days) | How far back the pending-commit scan goes. |
+| Push minutes to | Which issue field a push writes the entry's minutes to: **Worklog Reported(mins)** (default), **Worklog Approved(mins)**, or both. A retry or re-push uses the choice set at that time. |
+| AI for titles | The AI command-line assistant (Claude Code, Codex or Gemini CLI, whichever are installed) that **Suggest** asks for a Worklog title from the remarks. It runs on that CLI's own sign-in; Claude Code on a subscription uses your plan, not API credit. **None** hides Suggest. |
 | Repo folders | Folders containing your local clones. Clone discovery and local Git log scans share at most two workers, or one on machines with one or two logical CPUs, to reduce startup contention. |
 | Clean up after (days) | Forgets ignored commits and commit details on pushed entries after this many days (or the lookback, if longer). The worklog entries stay. Blank keeps everything. |
 | Finished report range (months) | Months per page in Projects' Finished report; clicking its month label opens all weeks. |

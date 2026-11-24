@@ -629,7 +629,8 @@ func TestDayCardManualTitleUsesCurrentDate(t *testing.T) {
 		"remarks":     "https://github.com/o/r/pull/1 (20m)",
 	}
 	got := labels(logwork.DayRowCard(ui, row, func() {}))
-	if !contains(got, "Alex Code Review: 2026-09-18") {
+	// Named as GitHub will title it, with its one PR counted.
+	if !contains(got, "Alex - Bulk (1) Code Reviews: 2026-09-18") {
 		t.Fatalf("day card kept the saved date instead of the current one: %v", got)
 	}
 	if contains(got, "Alex Code Review: 2026-09-15") {

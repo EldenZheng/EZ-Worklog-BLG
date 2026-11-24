@@ -116,8 +116,9 @@ func TestSettingsIdentityAndUpdatesStayFixedWhileStorageScrolls(t *testing.T) {
 	}
 	driver := fyne.CurrentApp().Driver()
 	wpos, ppos := driver.AbsolutePositionForObject(worklog), driver.AbsolutePositionForObject(projects)
-	if wpos.Y != ppos.Y || ppos.X <= wpos.X {
-		t.Fatalf("Worklog and Projects must sit side by side: %v %v", wpos, ppos)
+	// Worklog's fields pair up evenly, so Projects starts a row of its own.
+	if ppos.Y <= wpos.Y || ppos.X != wpos.X {
+		t.Fatalf("Projects must start a row under Worklog's fields: %v %v", wpos, ppos)
 	}
 	if !sameColor(updates.Color, widgets.LogoGold) {
 		t.Fatal("Updates heading must be gold")

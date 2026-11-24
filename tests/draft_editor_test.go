@@ -45,7 +45,7 @@ func TestDraftEditorDescriptionUsesIssueTitle(t *testing.T) {
 			var description *widget.Entry
 			walk(form, func(o fyne.CanvasObject) {
 				if box, ok := o.(*fyne.Container); ok && len(box.Objects) == 2 {
-					if label, ok := box.Objects[0].(*widget.Label); ok && label.Text == "Description (kept locally, not pushed)" {
+					if label, ok := box.Objects[0].(*widget.Label); ok && label.Text == "Parent issue (kept locally, not pushed)" {
 						description, _ = box.Objects[1].(*widget.Entry)
 					}
 				}

@@ -594,7 +594,7 @@ func TestManualRowTitlesFollowCurrentDateAndIssue(t *testing.T) {
 		{"meeting", backend.Row{"type": backend.KindMeeting, "date": "2026-09-18", "description": "old notes"},
 			"Alex Meeting & ad hocs: 2026-09-18"},
 		{"bulk review", backend.Row{"type": backend.KindBulkReview, "date": "2026-09-18", "description": "Alex Code Review: 2026-09-15"},
-			"Alex Code Review: 2026-09-18"},
+			"Alex - Bulk Code Reviews: 2026-09-18"},
 		{"single review issue title", backend.Row{"type": backend.KindCodeReview, "date": "2026-09-18", "issue": "exampleorg/repo#7", "description": "Code Review: 2026-09-15"},
 			"Fix invoice rounding"},
 		{"saved issue title", backend.Row{"type": backend.KindCodeReview, "date": "2026-09-18", "issue": "exampleorg/repo#8", "issue_title": "Persisted invoice title"},

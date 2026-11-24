@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/widget"
 
 	"worklog/internal/menus/logwork"
 	"worklog/internal/shared/backend"
@@ -134,6 +135,7 @@ func TestManualFormWithoutSplitStoresNoBody(t *testing.T) {
 	kinds.SetSelected("Bulk Review")
 	entryByPlaceholder(tab, logwork.PullRequestPlaceholder).SetText("https://github.com/exampleorg/repo/pull/1")
 	entryByPlaceholder(tab, "10").SetText("20")
+	entryByPlaceholder(tab, "- what you checked on this PR, a point per line").SetText("- checked the paging")
 	tapButton(t, tab, "Save draft")
 	rows, err = ui.Store.ReadRows()
 	if err != nil {
@@ -145,7 +147,49 @@ func TestManualFormWithoutSplitStoresNoBody(t *testing.T) {
 			bulk = row
 		}
 	}
-	if bulk == nil || bulk["issue_body"] != "" || strings.Contains(bulk["remarks"], "left over") {
+	// The PR's own remarks go in the issue body; the board keeps the bare list.
+	if bulk == nil || bulk["issue_body"] != "https://github.com/exampleorg/repo/pull/1 (20m)\n- checked the paging" ||
+		bulk["remarks"] != "https://github.com/exampleorg/repo/pull/1 (20m)" {
 		t.Fatalf("bulk row = %v", bulk)
+	}
+}
+
+// A saved bulk review opens on the same sheet as the Bulk Review form, and
+// saving it writes the PR list and the points back the same way.
+func TestSavedBulkReviewEditsOnTheSheet(t *testing.T) {
+	ui := editorUI(t)
+	defer fyne.CurrentApp().Quit()
+	made, err := ui.Store.AppendRows([]backend.Row{{
+		"date": shell.Today(), "minutes": "25", "type": backend.KindBulkReview, "mode": "issue",
+		"remarks":    "https://github.com/o/r/pull/1 (10m)\nhttps://github.com/o/r/pull/2 (15m)",
+		"issue_body": "https://github.com/o/r/pull/1 (10m)\n- Approved, no blocking issues\n\nhttps://github.com/o/r/pull/2 (15m)\n- Checked the paging",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := logwork.RowEditor(ui, made[0], func() {}, nil).All()
+	var prs, notes []*widget.Entry
+	walk(form, func(o fyne.CanvasObject) {
+		if e, ok := o.(*widget.Entry); ok {
+			switch e.PlaceHolder {
+			case logwork.PullRequestPlaceholder:
+				prs = append(prs, e)
+			case "- what you checked on this PR, a point per line":
+				notes = append(notes, e)
+			}
+		}
+	})
+	if len(prs) != 2 || prs[1].Text != "https://github.com/o/r/pull/2" || notes[1].Text != "- Checked the paging" {
+		t.Fatalf("sheet rows = %d, notes %v", len(prs), notes)
+	}
+	if !contains(labels(form), "Total: 25 min") {
+		t.Fatalf("total missing: %v", labels(form))
+	}
+	notes[1].SetText("- Checked the paging\n- Approved, no blocking issues")
+	tapButton(t, form, "Save")
+	rows, _ := ui.Store.ReadRows()
+	if rows[0]["remarks"] != "https://github.com/o/r/pull/1 (10m)\nhttps://github.com/o/r/pull/2 (15m)" ||
+		!strings.HasSuffix(rows[0]["issue_body"], "(15m)\n- Checked the paging\n- Approved, no blocking issues") || rows[0]["minutes"] != "25" {
+		t.Fatalf("saved = %q / %q / %q", rows[0]["remarks"], rows[0]["issue_body"], rows[0]["minutes"])
 	}
 }

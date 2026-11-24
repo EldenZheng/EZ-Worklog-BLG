@@ -53,27 +53,36 @@ func (s *GoldSelect) FocusLost()   { s.fieldFocused = false; s.Select.FocusLost(
 
 func (s *GoldSelect) CreateRenderer() fyne.WidgetRenderer {
 	if s.PlainField {
-		return s.Select.CreateRenderer()
+		// Fyne's own field, with its arrow swapped for the turning triangle.
+		base := s.Select.CreateRenderer()
+		r := &plainSelectRenderer{WidgetRenderer: base, s: s, arrow: NewSpinTriangle(plainSelectInk(s), s.Popup != nil)}
+		for _, o := range base.Objects() {
+			if icon, ok := o.(*widget.Icon); ok {
+				r.icon = icon
+			}
+		}
+		s.arrow = r.arrow
+		r.Refresh()
+		return r
 	}
 	s.fieldHover = widgets.NewHoverPill()
 	label := widget.NewLabel("")
 	label.Truncation = fyne.TextTruncateEllipsis
 	r := &goldSelectRenderer{s: s, hover: s.fieldHover, bg: canvas.NewRectangle(nil), label: label,
-		arrowLeft: canvas.NewLine(widgets.LogoGold), arrowRight: canvas.NewLine(widgets.LogoGold)}
-	r.arrow = container.NewWithoutLayout(r.arrowLeft, r.arrowRight)
+		arrow: NewSpinTriangle(widgets.LogoGold, s.Popup != nil)}
+	s.arrow = r.arrow
 	r.words = container.NewThemeOverride(label, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
 	r.Refresh()
 	return r
 }
 
 type goldSelectRenderer struct {
-	s                     *GoldSelect
-	hover                 *widgets.HoverPill
-	bg                    *canvas.Rectangle
-	label                 *widget.Label
-	words                 *container.ThemeOverride
-	arrow                 *fyne.Container
-	arrowLeft, arrowRight *canvas.Line
+	s     *GoldSelect
+	hover *widgets.HoverPill
+	bg    *canvas.Rectangle
+	label *widget.Label
+	words *container.ThemeOverride
+	arrow *SpinTriangle
 }
 
 func (r *goldSelectRenderer) MinSize() fyne.Size {
@@ -90,10 +99,6 @@ func (r *goldSelectRenderer) Layout(size fyne.Size) {
 	pad, icon := theme.InnerPadding(), theme.IconInlineSize()
 	r.arrow.Move(fyne.NewPos(max(0, size.Width-pad-icon), (size.Height-icon)/2))
 	r.arrow.Resize(fyne.NewSquareSize(icon))
-	r.arrowLeft.Position1, r.arrowLeft.Position2 = fyne.NewPos(icon*.2, icon*.35), fyne.NewPos(icon*.5, icon*.65)
-	r.arrowRight.Position1, r.arrowRight.Position2 = r.arrowLeft.Position2, fyne.NewPos(icon*.8, icon*.35)
-	r.arrowLeft.Refresh()
-	r.arrowRight.Refresh()
 	// A row taller than the field stretches it; keep the words centred with
 	// the arrow rather than riding at the top.
 	textH := min(size.Height, r.words.MinSize().Height)
@@ -130,15 +135,52 @@ func (r *goldSelectRenderer) Refresh() {
 	r.label.SetText(text)
 	r.words.Theme = widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: ink}
 	r.words.Refresh()
-	r.arrowLeft.StrokeColor, r.arrowRight.StrokeColor = ink, ink
-	r.arrowLeft.StrokeWidth, r.arrowRight.StrokeWidth = 2, 2
+	r.arrow.SetInk(ink)
 	r.bg.Refresh()
 	r.Layout(s.Size())
 }
 func (r *goldSelectRenderer) Objects() []fyne.CanvasObject {
 	return []fyne.CanvasObject{r.bg, r.hover.Rect, r.words, r.arrow}
 }
-func (r *goldSelectRenderer) Destroy() { r.hover.Stop() }
+func (r *goldSelectRenderer) Destroy() {
+	r.hover.Stop()
+	r.arrow.Stop()
+}
+
+// plainSelectRenderer is Fyne's field (PlainField) with the turning triangle
+// where Fyne puts its arrow, inked as Fyne inks its own.
+type plainSelectRenderer struct {
+	fyne.WidgetRenderer
+	s     *GoldSelect
+	icon  *widget.Icon
+	arrow *SpinTriangle
+}
+
+func plainSelectInk(s *GoldSelect) color.Color {
+	if s.Disabled() {
+		return theme.ColorForWidget(theme.ColorNameDisabled, s)
+	}
+	return theme.ColorForWidget(theme.ColorNameForeground, s)
+}
+
+func (r *plainSelectRenderer) place() {
+	if r.icon == nil {
+		return
+	}
+	r.icon.Hide()
+	r.arrow.Move(r.icon.Position())
+	r.arrow.Resize(r.icon.Size())
+}
+func (r *plainSelectRenderer) Layout(size fyne.Size) { r.WidgetRenderer.Layout(size); r.place() }
+func (r *plainSelectRenderer) Refresh() {
+	r.WidgetRenderer.Refresh()
+	r.arrow.SetInk(plainSelectInk(r.s))
+	r.place()
+}
+func (r *plainSelectRenderer) Objects() []fyne.CanvasObject {
+	return append(append([]fyne.CanvasObject{}, r.WidgetRenderer.Objects()...), r.arrow)
+}
+func (r *plainSelectRenderer) Destroy() { r.arrow.Stop(); r.WidgetRenderer.Destroy() }
 
 type dropdownChoice struct {
 	row    *Tappable

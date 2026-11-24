@@ -41,6 +41,7 @@ type tabPlates struct {
 	text           string
 	lx, ly, ax, ay int
 	menu           bool
+	arrowRes       string // the arrow as turned, so a turned arrow is drawn anew
 }
 
 func newTabPress(item *underlineTab) *tabPress {
@@ -135,7 +136,8 @@ func (p *tabPress) makePlates(w, h int, pixels float32) {
 	left, top := origin(p.abs.X+p.inset.X), origin(p.abs.Y+p.inset.Y)
 	want := tabPlates{
 		w: w, h: h, pixels: pixels, size: i.text.TextSize, text: i.text.Text, menu: i.hasMenu(),
-		lx: origin(p.abs.X+i.labelAt.X) - left, ly: origin(p.abs.Y+i.labelAt.Y) - top,
+		arrowRes: i.arrow.Resource.Name(),
+		lx:       origin(p.abs.X+i.labelAt.X) - left, ly: origin(p.abs.Y+i.labelAt.Y) - top,
 		ax: origin(p.abs.X+i.arrowAt.X) - left, ay: origin(p.abs.Y+i.arrowAt.Y) - top,
 	}
 	if want == p.made && p.label != nil {
@@ -149,7 +151,7 @@ func (p *tabPress) makePlates(w, h int, pixels float32) {
 	p.label = plate(w, h, want.lx, want.ly, coverage(label, label.MinSize().AddWidthHeight(2, 2), pixels))
 	p.arrow = nil
 	if want.menu {
-		arrow := canvas.NewImageFromResource(tabArrow)
+		arrow := canvas.NewImageFromResource(i.arrow.Resource)
 		arrow.FillMode = canvas.ImageFillContain
 		arrow.Resize(fyne.NewSquareSize(tabArrowSize))
 		p.arrow = plate(w, h, want.ax, want.ay, coverage(arrow, arrow.Size(), pixels))

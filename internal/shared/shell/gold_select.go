@@ -31,8 +31,9 @@ type GoldSelect struct {
 	// Searchable tops the popup with a search field that narrows its rows, for
 	// a list too long to scroll through.
 	Searchable bool
-	// StayOpen lets a display mode be compared repeatedly without reopening
-	// its menu. Outside click, Escape and clicking the field still close it.
+	// StayOpen keeps the menu open after a pick, so the pick's animation is
+	// seen and choices can be compared without reopening it. On by default;
+	// outside click, Escape and clicking the field still close it.
 	StayOpen bool
 	Find     *choiceSearch // the open popup's search field
 	shown    []int         // the Options the popup lists; active indexes this
@@ -47,10 +48,11 @@ type GoldSelect struct {
 	// theme (the Projects issue list tints its Status cells this way). The
 	// popup stays gold.
 	PlainField bool
+	arrow      *SpinTriangle // the field's ▼, turned up while the menu is open
 }
 
 func NewGoldSelect(options []string, changed func(string)) *GoldSelect {
-	s := &GoldSelect{}
+	s := &GoldSelect{StayOpen: true}
 	s.Options = options
 	s.OnChanged = changed
 	s.ExtendBaseWidget(s)
@@ -159,6 +161,12 @@ func (s *GoldSelect) Choose(index int) {
 		return
 	}
 	value := s.Options[index]
+	// A field redrawn away (its row rebuilt by an earlier pick) must not take
+	// another: its menu closes instead.
+	if s.StayOpen && !s.onCanvas() {
+		s.CloseChoices()
+		return
+	}
 	for i, choice := range s.choices {
 		target := boolShare(i == index)
 		if choice.look.share != target || choice.look.anim != nil {
@@ -176,6 +184,22 @@ func (s *GoldSelect) Choose(index int) {
 		}
 	}
 	s.SetSelected(value)
+	if s.StayOpen && !s.onCanvas() {
+		s.CloseChoices()
+	}
+}
+
+// onCanvas reports whether the field is still laid out in its window. A
+// field the window no longer holds has no position in it.
+func (s *GoldSelect) onCanvas() bool {
+	if !s.Visible() {
+		return false
+	}
+	c := fyne.CurrentApp().Driver().CanvasForObject(s)
+	if c == nil {
+		return false
+	}
+	return !fyne.CurrentApp().Driver().AbsolutePositionForObject(s).IsZero()
 }
 
 func (s *GoldSelect) CloseChoices() {
@@ -187,6 +211,8 @@ func (s *GoldSelect) CloseChoices() {
 		s.Flash.Animation.Stop()
 	}
 	if s.Popup != nil {
+		// The arrow's turn starts first: the menu's own motion is the newest.
+		s.spinArrow(false)
 		FoldPopUp(s.Popup, s.unfold)
 		s.Popup = nil
 	}
@@ -220,10 +246,12 @@ func (s *GoldSelect) showChoices() {
 	s.Rows = container.New(&filterGroupLayout{flow: layout.NewVBoxLayout(), hover: s.choiceHover, overlay: true}, s.choiceHover)
 	s.renderChoices()
 	height := fyne.Min(s.Rows.MinSize().Height+8, 320)
+	// The rows fill the popup edge to edge: the first sits at the top and the
+	// last at the bottom, and the picked one is centred as far as the list
+	// allows (centerActive). Only the Sprint list ("Sprint 4 | Oct 01 – …")
+	// gets blank ends, so even its first and last sprint sit in the middle.
 	var content fyne.CanvasObject = s.Rows
-	// The blank ends let the first and last rows reach the middle of the popup.
-	// A search leaves them out: they would float a short result mid-list.
-	if !s.Searchable && (s.Rows.MinSize().Height > height || strings.Contains(s.Options[0], " | ")) {
+	if !s.Searchable && strings.Contains(s.Options[0], " | ") {
 		top, bottom := canvas.NewRectangle(color.Transparent), canvas.NewRectangle(color.Transparent)
 		top.SetMinSize(fyne.NewSize(0, height/2))
 		bottom.SetMinSize(fyne.NewSize(0, height/2))
@@ -272,6 +300,7 @@ func (s *GoldSelect) showChoices() {
 	}
 	s.Popup.ShowAtPosition(at)
 	s.centerActive()
+	s.spinArrow(true)
 	UnfoldPopUp(s.Popup, s.unfold, s.Popup.Size())
 	if s.Find != nil {
 		c.Focus(s.Find) // type straight away, without clicking the field first
@@ -361,4 +390,12 @@ func (s *GoldSelect) centerActive() {
 	row := s.Rows.Objects[s.active]
 	y := s.Rows.Position().Y + row.Position().Y + row.Size().Height/2 - s.Scroll.Size().Height/2
 	s.Scroll.ScrollToOffset(fyne.NewPos(0, fyne.Max(0, y)))
+}
+
+// spinArrow turns the field's triangle up while the menu is open and back
+// down when it closes.
+func (s *GoldSelect) spinArrow(open bool) {
+	if s.arrow != nil {
+		s.arrow.Turn(open)
+	}
 }

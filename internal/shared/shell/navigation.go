@@ -138,6 +138,17 @@ func AlreadyMergedTag() fyne.CanvasObject {
 
 // OutlineTag is a compact caption with coloured ink and a rounded outline.
 func OutlineTag(text string, ink color.Color) fyne.CanvasObject {
+	tag, _ := OutlineTagText(text, ink)
+	return tag
+}
+
+// TitleNotSetTag marks an entry with no Worklog title yet.
+func TitleNotSetTag() fyne.CanvasObject {
+	return OutlineTag("Title not yet set", MissingMeetingRecordingMaroon)
+}
+
+// OutlineTagText is OutlineTag, with its text handed back for updating.
+func OutlineTagText(text string, ink color.Color) (fyne.CanvasObject, *canvas.Text) {
 	bg := canvas.NewRectangle(color.Transparent)
 	bg.CornerRadius = 12
 	bg.StrokeColor = ink
@@ -148,7 +159,7 @@ func OutlineTag(text string, ink color.Color) fyne.CanvasObject {
 	// Wider at the sides than above and below, so a short word such as
 	// "Legacy" does not sit tight against the rounded ends.
 	pad := layout.NewCustomPaddedLayout(theme.Padding(), theme.Padding(), theme.InnerPadding(), theme.InnerPadding())
-	return container.NewStack(bg, container.New(pad, container.NewCenter(lbl)))
+	return container.NewStack(bg, container.New(pad, container.NewCenter(lbl))), lbl
 }
 
 func AppLogo(size float32) fyne.CanvasObject {

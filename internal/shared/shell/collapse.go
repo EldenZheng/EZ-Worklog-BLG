@@ -163,19 +163,12 @@ func CollapseLine(label, end, body fyne.CanvasObject, open bool, slide time.Dura
 // collapseParts is a collapsible heading's label with its gold arrow, the
 // fold for body, and the toggle that slides it.
 func collapseParts(label, body fyne.CanvasObject, open bool, onToggle func(open bool), relayout func(final bool)) (fyne.CanvasObject, fyne.CanvasObject, *Fold, func()) {
-	arrow := widget.NewIcon(theme.MenuExpandIcon())
-	if open {
-		arrow.SetResource(theme.MenuDropDownIcon())
-	}
-	goldArrow := container.NewThemeOverride(arrow, widgets.StatusHeaderTheme{Theme: theme.Current(), Ink: widgets.LogoGold})
+	// The same ▼ as the dropdowns: down while shut, turning up as it opens.
+	goldArrow := NewSpinTriangle(widgets.LogoGold, open)
 	fold := NewFold(body, open)
 	toggle := func() {
 		open := !fold.Open()
-		if open {
-			arrow.SetResource(theme.MenuDropDownIcon())
-		} else {
-			arrow.SetResource(theme.MenuExpandIcon())
-		}
+		goldArrow.Turn(open)
 		fold.Slide(open, relayout)
 		if onToggle != nil {
 			onToggle(open)

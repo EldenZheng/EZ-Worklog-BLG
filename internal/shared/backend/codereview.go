@@ -8,14 +8,99 @@ import (
 	"strings"
 )
 
-// CodeReviewItem is one line in a daily code-review issue. The issue body uses
-// this same compact spelling, which makes a pasted list both the input and the
+// CodeReviewItem is one PR in a daily code-review issue. The issue body uses
+// this same spelling, which makes a pasted list both the input and the
 // finished GitHub description:
 //
 //	https://github.com/owner/repo/pull/123 (10m)
+//	Issue: [What the issue is called](https://github.com/owner/repo/issues/45)
+//	- what was reviewed on it
+//
+// The Issue line names the issue(s) the PR is for and is optional; the "- "
+// lines are the PR's notes. The issue description carries both; the board's
+// Worklog Remarks keep only the compact PR list, which fits its cap.
 type CodeReviewItem struct {
 	URL     string
 	Minutes int
+	Issues  []ReviewIssue
+	Notes   []string
+}
+
+// ReviewIssue is an issue a reviewed PR is for: owner/repo#N and its title.
+type ReviewIssue struct {
+	Ref, Title string
+}
+
+// reviewIssueLine is "Issue: [title](link)" for a PR's issues, or "" with none.
+func reviewIssueLine(issues []ReviewIssue) string {
+	var links []string
+	for _, issue := range issues {
+		owner, repo, num, err := SplitIssue(issue.Ref)
+		if err != nil {
+			continue
+		}
+		text := strings.TrimSpace(issue.Title)
+		if text == "" {
+			text = issue.Ref
+		}
+		text = strings.NewReplacer(`\`, `\\`, "[", `\[`, "]", `\]`).Replace(text)
+		links = append(links, fmt.Sprintf("[%s](https://github.com/%s/%s/issues/%d)", text, owner, repo, num))
+	}
+	switch len(links) {
+	case 0:
+		return ""
+	case 1:
+		return "Issue: " + links[0]
+	}
+	return "Issues: " + strings.Join(links, ", ")
+}
+
+var (
+	reviewIssueLineRe = regexp.MustCompile(`(?i)^issues?\s*:\s*(.*)$`)
+	markdownLinkRe    = regexp.MustCompile(`\[((?:\\.|[^\]\\])*)\]\(([^)\s]+)\)`)
+)
+
+// readReviewIssues reads an "Issue: [title](link), …" line. Links written
+// bare, or as owner/repo#N, are read too.
+func readReviewIssues(line string) ([]ReviewIssue, bool) {
+	m := reviewIssueLineRe.FindStringSubmatch(strings.TrimSpace(line))
+	if m == nil {
+		return nil, false
+	}
+	var issues []ReviewIssue
+	rest := m[1]
+	for _, link := range markdownLinkRe.FindAllStringSubmatch(rest, -1) {
+		if ref, err := IssueRefFromAny(link[2]); err == nil {
+			title := strings.NewReplacer(`\\`, `\`, `\[`, "[", `\]`, "]").Replace(link[1])
+			if strings.EqualFold(title, ref) {
+				title = ""
+			}
+			issues = append(issues, ReviewIssue{Ref: ref, Title: title})
+		}
+	}
+	for _, part := range strings.Split(markdownLinkRe.ReplaceAllString(rest, ""), ",") {
+		if ref, err := IssueRefFromAny(strings.TrimSpace(part)); err == nil {
+			issues = append(issues, ReviewIssue{Ref: ref})
+		}
+	}
+	return issues, true
+}
+
+// cutReviewIssues takes an older "[issue link, …]" off a PR line's link part
+// and reads the issues in it.
+func cutReviewIssues(link string) (string, []ReviewIssue) {
+	link = strings.TrimSpace(link)
+	open := strings.LastIndex(link, "[")
+	if open < 0 || !strings.HasSuffix(link, "]") {
+		return link, nil
+	}
+	var issues []ReviewIssue
+	for _, part := range strings.Split(link[open+1:len(link)-1], ",") {
+		if ref, err := IssueRefFromAny(strings.TrimSpace(part)); err == nil {
+			issues = append(issues, ReviewIssue{Ref: ref})
+		}
+	}
+	return strings.TrimSpace(link[:open]), issues
 }
 
 // Issue references occur in PR titles, bodies and branch names in both of the
@@ -58,11 +143,27 @@ func ParseCodeReviewItems(text string) ([]CodeReviewItem, error) {
 		if line == "" {
 			continue
 		}
+		if note, ok := reviewNoteLine(line); ok {
+			if len(items) == 0 {
+				return nil, fmt.Errorf("line %d is a note, but no PR link comes before it", i+1)
+			}
+			if note != "" {
+				items[len(items)-1].Notes = append(items[len(items)-1].Notes, note)
+			}
+			continue
+		}
+		if issues, ok := readReviewIssues(line); ok {
+			if len(items) == 0 {
+				return nil, fmt.Errorf("line %d names an issue, but no PR link comes before it", i+1)
+			}
+			items[len(items)-1].Issues = append(items[len(items)-1].Issues, issues...)
+			continue
+		}
 		open := strings.LastIndex(line, "(")
 		if open < 0 || !strings.HasSuffix(line, ")") {
 			return nil, fmt.Errorf("line %d needs minutes after the PR link, for example (10m)", i+1)
 		}
-		url := strings.TrimSpace(line[:open])
+		url, issues := cutReviewIssues(line[:open])
 		minuteText := strings.TrimSpace(line[open+1 : len(line)-1])
 		minuteText = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(minuteText), "minutes"))
 		minuteText = strings.TrimSpace(strings.TrimSuffix(minuteText, "minute"))
@@ -80,6 +181,7 @@ func ParseCodeReviewItems(text string) ([]CodeReviewItem, error) {
 		items = append(items, CodeReviewItem{
 			URL:     canonical,
 			Minutes: mins,
+			Issues:  issues,
 		})
 	}
 	if len(items) == 0 {
@@ -88,7 +190,43 @@ func ParseCodeReviewItems(text string) ([]CodeReviewItem, error) {
 	return items, nil
 }
 
+// reviewNoteLine reads a "- note" (or "* note", "• note") line under a PR.
+func reviewNoteLine(line string) (string, bool) {
+	for _, bullet := range []string{"-", "*", "•"} {
+		if rest, ok := strings.CutPrefix(line, bullet); ok {
+			return strings.TrimSpace(rest), true
+		}
+	}
+	return "", false
+}
+
+// CodeReviewBody is the full PR list, each PR followed by its notes. It is the
+// daily issue's description. With notes, a blank line parts one PR from the
+// next so each reads as its own block.
 func CodeReviewBody(items []CodeReviewItem) string {
+	noted := false
+	for _, item := range items {
+		noted = noted || len(item.Notes) > 0
+	}
+	lines := make([]string, 0, len(items))
+	for i, item := range items {
+		if noted && i > 0 {
+			lines = append(lines, "")
+		}
+		lines = append(lines, fmt.Sprintf("%s (%dm)", item.URL, item.Minutes))
+		if issue := reviewIssueLine(item.Issues); issue != "" {
+			lines = append(lines, issue)
+		}
+		for _, note := range item.Notes {
+			lines = append(lines, "- "+note)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// CodeReviewList is the PR list without notes, for the board's Worklog
+// Remarks, which are capped at RemarkCap.
+func CodeReviewList(items []CodeReviewItem) string {
 	lines := make([]string, 0, len(items))
 	for _, item := range items {
 		lines = append(lines, fmt.Sprintf("%s (%dm)", item.URL, item.Minutes))
@@ -174,7 +312,13 @@ func fetchCodeReviewLookup(prURL string) (CodeReviewLookup, error) {
 			add(ref)
 		}
 	}
+	// The linked issues and the branch name say what the PR is for. The title,
+	// then the body, are read only when those say nothing: they also mention
+	// related PRs and earlier issues, which are not what was reviewed.
 	for _, text := range []string{got.Head, got.Title, got.Body} {
+		if len(lookup.IssueRefs) > 0 {
+			break
+		}
 		for _, ref := range IssueRefsInText(text) {
 			add(ref)
 		}
@@ -232,4 +376,63 @@ func CodeReviewTargets(raw string) (CodeReviewLookup, error) {
 		return CodeReviewLookup{}, err
 	}
 	return CodeReviewLookup{IssueRefs: []string{ref}}, nil
+}
+
+// pastedPRRe finds a PR link in pasted text, with the "[issue link]" and the
+// "(10m)" after it when there are.
+var pastedPRRe = regexp.MustCompile(`(?i)(?:https?://)?(?:www\.)?github\.com/[\w.-]+/[\w.-]+/pulls?/\d+[^\s()\[]*(?:\s*\[([^\]]*)\])?(?:\s*\(\s*(\d+)\s*m[a-z]*\s*\))?`)
+
+// pastedIssueRe finds the "Issue: [title](link), …" line under a pasted PR.
+var pastedIssueRe = regexp.MustCompile(`(?i)issues?\s*:\s*\[(?:\\.|[^\]\\])*\]\([^)\s]+\)(?:\s*,\s*\[(?:\\.|[^\]\\])*\]\([^)\s]+\))*`)
+
+// pastedBulletRe parts a PR's points, on their own lines or run together on
+// one: a one-line field joins pasted lines with spaces.
+var pastedBulletRe = regexp.MustCompile(`(?:^|\s)[-*•]\s+`)
+
+// ParsePastedReviews reads the PRs out of text pasted into a bulk review: each
+// link, its "(10m)" and the "- " points after it. A link without minutes takes
+// ten. Nil when there is no PR link at all.
+func ParsePastedReviews(text string) []CodeReviewItem {
+	locs := pastedPRRe.FindAllStringSubmatchIndex(text, -1)
+	var items []CodeReviewItem
+	for i, m := range locs {
+		raw := text[m[0]:m[1]]
+		if open := strings.IndexAny(raw, "(["); open >= 0 {
+			raw = raw[:open]
+		}
+		url, ok := PullRequestURLFromAny(strings.TrimSpace(raw))
+		if !ok {
+			continue
+		}
+		var issues []ReviewIssue
+		if m[2] >= 0 {
+			_, issues = cutReviewIssues("[" + text[m[2]:m[3]] + "]")
+		}
+		mins := 10
+		if m[4] >= 0 {
+			if n, err := strconv.Atoi(text[m[4]:m[5]]); err == nil && n > 0 {
+				mins = n
+			}
+		}
+		end := len(text)
+		if i+1 < len(locs) {
+			end = locs[i+1][0]
+		}
+		// The Issue line comes out first, so a title with " - " in it is
+		// not taken for a point.
+		rest := text[m[1]:end]
+		if at := pastedIssueRe.FindStringIndex(rest); at != nil {
+			found, _ := readReviewIssues(rest[at[0]:at[1]])
+			issues = append(issues, found...)
+			rest = rest[:at[0]] + " " + rest[at[1]:]
+		}
+		var notes []string
+		for j, part := range pastedBulletRe.Split(strings.ReplaceAll(rest, "\n", " "), -1) {
+			if part = strings.TrimSpace(part); part != "" && (j > 0 || len(notes) > 0) {
+				notes = append(notes, part)
+			}
+		}
+		items = append(items, CodeReviewItem{URL: url, Minutes: mins, Issues: issues, Notes: notes})
+	}
+	return items
 }

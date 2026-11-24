@@ -108,5 +108,5 @@ func PushMeetingEntry(cfg Config, r Row, progress ...func(FetchProgress)) (PushR
 	if _, err := Gh(args); err != nil {
 		return PushResult{}, err
 	}
-	return PushEntry(cfg, r["issue"], r["date"], r["owner"], r.Minutes(), r["remarks"], body, "issue", r["issue_url"], SubTitleBaseFor(r), progress...)
+	return PushEntry(cfg, r["issue"], r["date"], r["owner"], r.Minutes(), r["remarks"], body, "issue", r["issue_url"], SubTitleBaseFor(cfg, r), progress...)
 }

@@ -323,10 +323,11 @@ func TestStorageBreakdownCollapsesWithLogWorkMotionAndStaysCollapsedOnRefresh(t 
 	}
 	driver := collectMotion(t)
 	heading.Tapped(nil)
-	if len(driver.anims) != 1 || !fold.Open() {
+	// The heading's triangle turns first; the fold's slide is the last.
+	if len(driver.anims) != 2 || !fold.Open() {
 		t.Fatal("collapsed storage details must animate open")
 	}
-	open := driver.anims[0]
+	open := driver.anims[1]
 	open.Tick(.5)
 	if height := fold.MinSize().Height; height <= 0 || height >= fold.Content.MinSize().Height {
 		t.Fatal("storage opening must have an intermediate height")
@@ -335,10 +336,11 @@ func TestStorageBreakdownCollapsesWithLogWorkMotionAndStaysCollapsedOnRefresh(t 
 	driver.anims = nil
 	height := fold.MinSize().Height
 	heading.Tapped(nil)
-	if len(driver.anims) != 1 || driver.anims[0].Duration != widgets.HoverDuration || fold.Open() {
+	last := len(driver.anims) - 1
+	if last < 0 || driver.anims[last].Duration != widgets.HoverDuration || fold.Open() {
 		t.Fatal("storage collapse must use the shared fold motion")
 	}
-	slide := driver.anims[0]
+	slide := driver.anims[last]
 	slide.Tick(.5)
 	if got := fold.MinSize().Height; got <= 0 || got >= height || !fold.Visible() {
 		t.Fatalf("fold snapped instead of sliding: %v of %v", got, height)
@@ -397,14 +399,14 @@ func TestStorageBreakdownHeadingIsGoldUnderlinedWithArrowAtRightEdge(t *testing.
 	_, view := storageSettingsFixture(t)
 	head, fold := storageDetailsFold(t, view)
 	var title *canvas.Text
-	var arrow *widget.Icon
+	var arrow *shell.SpinTriangle
 	var divider *widget.Separator
 	walkRendered(head.Content, func(o fyne.CanvasObject) {
 		if text, ok := o.(*canvas.Text); ok && text.Text == "Data + Backups" {
 			title = text
 		}
-		if icon, ok := o.(*widget.Icon); ok && icon.Resource == theme.MenuExpandIcon() {
-			arrow = icon
+		if spin, ok := o.(*shell.SpinTriangle); ok && !spin.Up() {
+			arrow = spin
 		}
 	})
 	walk(view, func(o fyne.CanvasObject) {

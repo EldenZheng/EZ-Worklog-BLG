@@ -74,6 +74,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// Separate worklog remarks tick. Here the boxes grow with what is typed, a
 	// row at a time, instead of scrolling inside a box of four.
 	mText := CommitTextEditor("", "")
+	mText.Summarize = aiRemarks(ui)
 	mText.desc.SetPlaceHolder("- one bullet per thing done; this becomes the worklog remarks")
 	mText.growWithText(4, func() { shell.Relayout(ui.LogBody) })
 	recordingRow := meetingRecordingField(mRecording)
@@ -107,135 +108,18 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	singleReviewRow := review.View
 	singleReviewRow.Hide()
 
-	// "Bulk Review" is a two-column growing sheet. Completing the current
-	// PR + Minutes pair appends the next blank row automatically. The resulting
-	// items still feed the same issue body and Worklog remarks as before.
-	type bulkReviewInput struct {
-		pr, mins      *widget.Entry
-		issue         *widget.Label
-		lookupVersion int
-	}
-	var bulkInputs []*bulkReviewInput
-	bulkRows := container.NewVBox()
-	bulkTotal := widget.NewLabelWithStyle("Total: 0 min", fyne.TextAlignTrailing, fyne.TextStyle{Bold: true})
-	bulkHeader := container.New(widgets.NewRatioRow(0.82, 0.18),
-		widget.NewLabelWithStyle("PR link", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabelWithStyle("Minutes", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-	)
-	codeReviewRow := container.NewVBox(bulkHeader, bulkRows, bulkTotal)
-	codeReviewRow.Hide()
-
-	bulkReviewItems := func() ([]backend.CodeReviewItem, error) {
-		var items []backend.CodeReviewItem
-		for i, input := range bulkInputs {
-			pr := strings.TrimSpace(input.pr.Text)
-			minuteText := strings.TrimSpace(input.mins.Text)
-			if pr == "" && minuteText == "" {
-				continue
-			}
-			if pr == "" || minuteText == "" {
-				return nil, fmt.Errorf("row %d needs both a PR link and minutes", i+1)
-			}
-			url, ok := backend.PullRequestURLFromAny(pr)
-			if !ok {
-				return nil, fmt.Errorf("row %d is not a pull request (owner/repo#123 or its link)", i+1)
-			}
-			mins, err := strconv.Atoi(minuteText)
-			if err != nil || mins <= 0 {
-				return nil, fmt.Errorf("row %d needs minutes greater than zero", i+1)
-			}
-			items = append(items, backend.CodeReviewItem{URL: url, Minutes: mins})
-		}
-		if len(items) == 0 {
-			return nil, fmt.Errorf("enter at least one PR link and its minutes")
-		}
-		return items, nil
-	}
-
-	var addBulkReviewRow func()
-	updateBulkReviewTotal := func() {
-		total := 0
-		for _, input := range bulkInputs {
-			if _, ok := backend.PullRequestURLFromAny(input.pr.Text); !ok {
-				continue
-			}
-			if mins, err := strconv.Atoi(strings.TrimSpace(input.mins.Text)); err == nil && mins > 0 {
-				total += mins
-			}
-		}
+	// "Bulk Review" is a sheet with a row per PR: its link, minutes and
+	// worklog remarks. Its items feed the issue body and Worklog remarks.
+	bulk := newBulkSheet(ui, func() { shell.Relayout(ui.LogBody) }, func(m string) { mMsg.SetText(m) })
+	bulk.OnTotal = func(total int) {
 		if total == 0 {
 			mMin.SetText("")
 		} else {
 			mMin.SetText(strconv.Itoa(total))
 		}
-		bulkTotal.SetText(fmt.Sprintf("Total: %d min", total))
-		if len(bulkInputs) == 0 {
-			return
-		}
-		last := bulkInputs[len(bulkInputs)-1]
-		if _, ok := backend.PullRequestURLFromAny(last.pr.Text); !ok {
-			return
-		}
-		mins, err := strconv.Atoi(strings.TrimSpace(last.mins.Text))
-		if err == nil && mins > 0 {
-			addBulkReviewRow()
-		}
 	}
-
-	addBulkReviewRow = func() {
-		input := &bulkReviewInput{
-			pr: widget.NewEntry(), mins: widget.NewEntry(), issue: widget.NewLabel(""),
-		}
-		input.pr.SetPlaceHolder(PullRequestPlaceholder)
-		input.mins.SetPlaceHolder("10")
-		input.issue.Wrapping = fyne.TextWrapWord
-		input.pr.OnChanged = func(source string) {
-			input.lookupVersion++
-			version := input.lookupVersion
-			input.issue.SetText("")
-			if prURL, ok := backend.PullRequestURLFromAny(source); ok {
-				input.issue.SetText("Finding referenced issue…")
-				shell.AfterTyping(func() {
-					if version != input.lookupVersion || input.pr.Text != source {
-						return
-					}
-					var lookup backend.CodeReviewLookup
-					var lookupErr error
-					ui.Async(func() error {
-						lookup, lookupErr = backend.FetchCodeReviewLookup(prURL)
-						return nil
-					}, func() {
-						if version != input.lookupVersion || input.pr.Text != source {
-							return
-						}
-						switch {
-						case lookupErr != nil:
-							input.issue.SetText(lookupErr.Error())
-						case len(lookup.IssueRefs) == 0:
-							input.issue.SetText("No referenced issue found")
-						default:
-							input.issue.SetText("Issue: " + strings.Join(lookup.IssueRefs, ", "))
-						}
-					})
-				})
-			}
-			updateBulkReviewTotal()
-		}
-		input.mins.OnChanged = func(string) { updateBulkReviewTotal() }
-		bulkInputs = append(bulkInputs, input)
-		bulkRows.Add(container.New(widgets.NewRatioRow(0.82, 0.18),
-			container.NewVBox(input.pr, input.issue),
-			container.NewVBox(input.mins, layout.NewSpacer())))
-		shell.Relayout(ui.LogBody)
-	}
-	resetBulkReviewRows := func() {
-		bulkInputs = nil
-		bulkRows.Objects = nil
-		bulkTotal.SetText("Total: 0 min")
-		addBulkReviewRow()
-		bulkRows.Refresh()
-	}
-	addBulkReviewRow()
+	codeReviewRow := bulk.View
+	codeReviewRow.Hide()
 
 	// "Independent": an issue that does not exist yet.
 	repoPick := ui.NewRepoPicker()
@@ -251,6 +135,29 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	)
 	indepRow.Hide()
 
+	// The Worklog's own title, for the kinds that file a Worklog sub-issue.
+	mWorklogTitle := newWorklogTitleField(ui, "",
+		func() string { return kind },
+		func() string {
+			switch kind {
+			case backend.KindIndependent:
+				return strings.TrimSpace(mTitle.Text)
+			case backend.KindCodeReview:
+				if ref, ok := review.chosen(); ok {
+					return review.titles[ref]
+				}
+			case backend.KindOther:
+				if ref, err := issueFieldRef(mIssue.Text); err == nil {
+					return ui.IssueInfo[ref].Title
+				}
+			}
+			return ""
+		},
+		func() string { return textForTitle(mText) },
+		func(m string) { mMsg.SetText(m) })
+	worklogTitleRow := mWorklogTitle.View
+	worklogTitleRow.Hide()
+
 	// Description sits on its own row so a textarea has room to breathe. Hidden
 	// for the two kinds that title themselves ("Worklog: <date>") since the
 	// field would only ever repeat the date they already picked.
@@ -261,7 +168,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// names its daily issue; Worklog and Independent keep the normal worklog title.
 	autoDescFor := func(k, iso string) string {
 		if k == backend.KindBulkReview {
-			return backend.DailyCodeReviewTitle(ui.Cfg, iso)
+			return backend.BulkReviewName(ui.Cfg, iso)
 		}
 		if k == backend.KindCodeReview {
 			return backend.CodeReviewTitle(iso)
@@ -273,7 +180,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			return "Set the bulk review repository in Settings before pushing."
 		}
 		return fmt.Sprintf("Creates/reuses its own issue in %s: %s.",
-			ui.Cfg.BulkCodeReviewRepo, backend.DailyCodeReviewTitle(ui.Cfg, iso))
+			ui.Cfg.BulkCodeReviewRepo, backend.BulkReviewName(ui.Cfg, iso))
 	}
 
 	// Both buttons share this closure. push=false saves a draft (like the popup
@@ -286,7 +193,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		mins, _ := strconv.Atoi(strings.TrimSpace(mMin.Text))
 		if kind == backend.KindBulkReview {
 			var err error
-			reviewItems, err = bulkReviewItems()
+			reviewItems, err = bulk.Items()
 			if err != nil {
 				mMsg.SetText(err.Error())
 				return
@@ -311,8 +218,10 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		var remarksText, issueBody string
 		if kind == backend.KindBulkReview {
-			// Written from the sheet, with no remarks box to split.
-			remarksText = backend.CodeReviewBody(reviewItems)
+			// Written from the sheet: the board gets the PR list, the issue
+			// the list with each PR's remarks under it.
+			remarksText = backend.CodeReviewList(reviewItems)
+			issueBody = backend.CodeReviewBody(reviewItems)
 			if len(remarksText) > backend.RemarkCap {
 				mMsg.SetText(fmt.Sprintf("Remarks are %d chars — trim to %d first.", len(remarksText), backend.RemarkCap))
 				return
@@ -333,6 +242,9 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			// The Settings value is the same one the row editor seeds its own
 			// Owner input from.
 			"owner": strings.TrimSpace(ui.Cfg.WorklogOwner),
+		}
+		if kind == backend.KindOther || kind == backend.KindCodeReview || kind == backend.KindIndependent {
+			row["worklog_title"] = mWorklogTitle.Text()
 		}
 		switch kind {
 		case backend.KindMeeting:
@@ -388,9 +300,10 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			mMin.SetText("")
 			mText.clear()
 			mTitle.SetText("")
+			mWorklogTitle.entry.SetText("")
 			mIssue.SetText("")
 			review.Reset()
-			resetBulkReviewRows()
+			bulk.Reset()
 			DrawRecent(ui)
 			DrawWeekStrip(ui)
 		}
@@ -413,7 +326,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		}
 
 		mMsg.SetText("Pushing…")
-		pushSavedEntry(ui, saved, func(updated backend.Row, res backend.PushResult, perr error) {
+		pushSavedEntry(ui, saved, func(updated backend.Row, res backend.PushResult, plans []backend.PullRequestPlan, perr error) {
 			saved = updated
 			if perr == errReviewPushCancelled {
 				mMsg.SetText("Saved as draft — code reviews were not combined.")
@@ -430,6 +343,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 			ui.RefreshAfterPush(saved["date"])
 			mMsg.SetText(strings.ReplaceAll(summary, "\n\n", "  |  "))
 			resetForm()
+			offerPlans(ui, newPullRequests(plans))
 		})
 	}
 
@@ -515,6 +429,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		dayReadout,
 		descRow,
 		otherRow, singleReviewRow, codeReviewRow, indepRow,
+		worklogTitleRow,
 		remarksRow,
 		recordingRow,
 		actionRow, mMsg,
@@ -578,14 +493,12 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		shell.ShowIf(singleReviewRow, kind == backend.KindCodeReview)
 		shell.ShowIf(codeReviewRow, kind == backend.KindBulkReview)
 		shell.ShowIf(indepRow, kind == backend.KindIndependent)
+		shell.ShowIf(worklogTitleRow, kind == backend.KindOther || kind == backend.KindCodeReview || kind == backend.KindIndependent)
+		mWorklogTitle.setKind(kind)
 		shell.ShowIf(remarksRow, kind != backend.KindBulkReview)
 		if kind == backend.KindBulkReview {
 			mMin.Disable()
-			if items, err := bulkReviewItems(); err == nil {
-				mMin.SetText(strconv.Itoa(backend.CodeReviewMinutes(items)))
-			} else {
-				mMin.SetText("")
-			}
+			bulk.updateTotal()
 		} else {
 			mMin.Enable()
 			if wasBulkReview {
@@ -638,8 +551,14 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// cards standing in them, so putting it first pushed the list itself off the
 	// screen on a busy week.
 	ui.WeekBox = container.NewVBox()
+	// The list eases to its new height when the tick adds or drops the pushed
+	// entries, as folding Saved locally does.
+	recentMorph := shell.NewMorph(ui.RecentBox)
+	var savedReflow func(bool)
 	ui.ShowPushed = widget.NewCheck("Also show entries already pushed this month", func(bool) {
+		recentMorph.Snapshot()
 		DrawRecent(ui)
+		recentMorph.Change(0, savedReflow)
 	})
 	if ui.DraftSort == "" {
 		ui.DraftSort = DraftSortDuration
@@ -650,7 +569,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 		ui.DraftSort = selected
 		DrawRecent(ui)
 	}
-	draftSortControl := container.NewBorder(nil, nil, shell.GoldChoice(ui.ShowPushed),
+	draftSortControl := container.NewBorder(nil, nil, shell.GoldTickChoice(ui.ShowPushed),
 		container.NewHBox(widget.NewLabel("Sort bubbles"),
 			container.New(layout.NewGridWrapLayout(fyne.NewSize(190, draftSortPick.MinSize().Height)), draftSortPick)))
 	// Tabs, not radio buttons: the picked kind is bright with a gold line under
@@ -666,7 +585,7 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	// Tapping the title folds away everything but the week: the list controls
 	// and the list of entries saved for other weeks. Folded to start with.
 	// Lines out here take the panels' colour; lines inside a panel stay dark.
-	savedList := container.NewVBox(draftSortControl, ui.RecentBox, shell.PanelDivider())
+	savedList := container.NewVBox(draftSortControl, recentMorph, shell.PanelDivider())
 	gap := theme.InnerPadding()
 	var logScroll *container.Scroll
 	var page *fyne.Container
@@ -684,8 +603,8 @@ func BuildLogTab(ui *shell.UI) fyne.CanvasObject {
 	}
 	formReflow = reflow(logCard)
 	pendingReflow = formReflow
-	savedHead, savedArea := shell.CollapsibleTitle("Saved locally", savedList, false, nil,
-		func(final bool) { reflow(recentCard)(final) })
+	savedReflow = func(final bool) { reflow(recentCard)(final) }
+	savedHead, savedArea := shell.CollapsibleTitle("Saved locally", savedList, false, nil, savedReflow)
 	// Room above and below the title, so it reads as a heading between the
 	// form's panel and its divider rather than squeezed between them.
 	savedHeadRoom := container.New(layout.NewCustomPaddedLayout(gap, gap, 0, 0), savedHead)
@@ -1074,6 +993,14 @@ func SetIgnored(ui *shell.UI, g backend.Group, ignored bool) {
 			ui.Errf(err)
 			return
 		}
+		// A chore commit is ignored on its own; bringing one back has to be
+		// remembered, or the next fetch would ignore it again.
+		if backend.IsChoreCommit(c) {
+			if err := ui.Store.SetKept(c.Sha, !ignored); err != nil {
+				ui.Errf(err)
+				return
+			}
+		}
 		touched[c.Sha] = true
 	}
 	for i := range ui.Pending.Groups {
@@ -1357,6 +1284,9 @@ type commitText struct {
 	Remarks  *widget.Entry
 	Separate *widget.Check
 	pane     fyne.CanvasObject
+	// Summarize, when set, writes the separate remarks from a description
+	// over the cap instead of copying it; done gets "" when it could not.
+	Summarize func(text string, done func(string))
 }
 
 // Split reports whether the remarks are their own text.
@@ -1466,9 +1396,19 @@ func CommitTextEditor(remarks, body string) *commitText {
 		host.setSplit(t.Split(), !initializing)
 	}
 	t.Separate.OnChanged = func(on bool) {
-		// Copy the original text into a new remarks box so the user can edit it.
+		// Copy the original text into a new remarks box so the user can edit
+		// it, or, with an AI set, have it cut down to fit.
 		if on && strings.TrimSpace(remE.Text) == "" {
-			remE.SetText(descE.Text)
+			if t.Summarize != nil && len(descE.Text) > backend.RemarkCap {
+				t.Summarize(descE.Text, func(short string) {
+					if strings.TrimSpace(remE.Text) == "" {
+						remE.SetText(backend.OrDefault(short, descE.Text))
+					}
+					update()
+				})
+			} else {
+				remE.SetText(descE.Text)
+			}
 		}
 		update()
 	}
@@ -1642,6 +1582,31 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 	// from that original text, independently of the issue title shown above.
 	// Every kind can keep a full issue body separate from capped remarks.
 	text := CommitTextEditor(backend.OrDefault(r["remarks"], r["description"]), r["issue_body"])
+	// A bulk review is edited on the same sheet as the Bulk Review form: a
+	// row per PR with its minutes and points, which also sets the minutes.
+	var sheet *bulkSheet
+	var sheetScroll *container.Scroll
+	if backend.RowIsBulkCodeReview(r) {
+		if items, err := backend.MergeCodeReviewItems(r["issue_body"], r["remarks"]); err == nil && len(items) > 0 {
+			sheet = newBulkSheet(ui, func() {
+				if sheetScroll != nil {
+					sheetScroll.Refresh()
+				}
+			}, func(m string) { msg.SetText(m) })
+			sheet.SetItems(items)
+			sheet.OnTotal = func(total int) { minE.SetText(strconv.Itoa(total)) }
+			minE.Disable()
+		}
+	}
+	text.Summarize = aiRemarks(ui)
+	// Meetings and bulk reviews are titled by their day; the rest take a
+	// Worklog title of their own.
+	hasWorklogTitle := r["type"] != backend.KindMeeting && !backend.RowIsBulkCodeReview(r)
+	titleF := newWorklogTitleField(ui, r["worklog_title"],
+		func() string { return r["type"] },
+		func() string { return strings.TrimSpace(descE.Text) },
+		func() string { return textForTitle(text) },
+		func(m string) { msg.SetText(m) })
 
 	modeVal := func() string {
 		if createsOwnIssue && !isIndependent {
@@ -1660,11 +1625,23 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			msg.SetText("Pick a worklog date.")
 			return
 		}
-		if why := text.Check(); why != "" {
-			msg.SetText(why)
-			return
+		var remarks, issueBody string
+		if sheet != nil {
+			items, err := sheet.Items()
+			if err != nil {
+				msg.SetText(err.Error())
+				return
+			}
+			// The board gets the PR list; the issue, each PR with its points.
+			remarks, issueBody = backend.CodeReviewList(items), backend.CodeReviewBody(items)
+			minE.SetText(strconv.Itoa(backend.CodeReviewMinutes(items)))
+		} else {
+			if why := text.Check(); why != "" {
+				msg.SetText(why)
+				return
+			}
+			remarks, issueBody = text.Values()
 		}
-		remarks, issueBody := text.Values()
 		mins, _ := strconv.Atoi(strings.TrimSpace(minE.Text))
 		if push && mins <= 0 {
 			msg.SetText("Enter the minutes before pushing.")
@@ -1682,6 +1659,9 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			"issue":       issue,
 			"owner":       strings.TrimSpace(ownE.Text),
 			"remarks":     remarks, "issue_body": issueBody, "mode": modeVal(),
+		}
+		if hasWorklogTitle {
+			patch["worklog_title"] = titleF.Text()
 		}
 		if commitDate != "" {
 			patch["commit_date"] = commitDate
@@ -1744,7 +1724,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			return
 		}
 		msg.SetText("Pushing…")
-		pushSavedEntry(ui, r, func(updated backend.Row, res backend.PushResult, perr error) {
+		pushSavedEntry(ui, r, func(updated backend.Row, res backend.PushResult, plans []backend.PullRequestPlan, perr error) {
 			r = updated
 			if perr == errReviewPushCancelled {
 				msg.SetText("Saved — code reviews were not combined.")
@@ -1763,9 +1743,7 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			if complete && onFinished != nil {
 				onFinished()
 			}
-			if complete && rowNeedsRefRun(r) {
-				addWorklogRefs(ui, refresh)
-			}
+			offerPlans(ui, newPullRequests(plans))
 		})
 	}
 
@@ -1853,8 +1831,15 @@ func RowEditor(ui *shell.UI, r backend.Row, refresh func(), onFinished func()) e
 			shell.Labeled("Issue", issE))
 	}
 	fields := container.NewVBox(fieldRow, dayFillReadout(ui, dateE, minE, r["id"]))
-	descriptionField := shell.Labeled("Description (kept locally, not pushed)", descE)
+	descriptionField := shell.Labeled("Parent issue (kept locally, not pushed)", descE)
+	if hasWorklogTitle {
+		descriptionField = container.New(widgets.NewRatioRow(0.5, 0.5), descriptionField, titleF.View)
+	}
 	remPane := text.pane
+	if sheet != nil {
+		sheetScroll = container.NewVScroll(sheet.View)
+		remPane = sheetScroll
+	}
 	if r["type"] == backend.KindMeeting {
 		descE.SetPlaceHolder("Meeting title (e.g. Sprint planning)")
 		descriptionField = shell.Labeled("Meeting title", descE)
@@ -1908,7 +1893,18 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 
 	msg := newEditorStatus()
 	text := CommitTextEditor(g.Remarks, "")
+	text.Summarize = aiRemarks(ui)
 	remE := text.desc
+	titleF := newWorklogTitleField(ui, "",
+		func() string { return backend.KindCommit },
+		func() string {
+			if ref, err := issueFieldRef(issE.Text); err == nil {
+				return ui.IssueInfo[ref].Title
+			}
+			return ""
+		},
+		func() string { return textForTitle(text) },
+		func(m string) { msg.SetText(m) })
 
 	pickedCommits := func() []backend.Commit {
 		var picked []backend.Commit
@@ -1968,6 +1964,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 			"description": desc, "refs": strings.Join(shas, ","),
 			"issue": issue, "owner": ownE.Text,
 			"remarks": remarks, "issue_body": issueBody, "mode": modeVal(),
+			"worklog_title": titleF.Text(),
 		}})
 		if err != nil {
 			ui.Errf(err)
@@ -2000,11 +1997,16 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 		pushProgress, stop := ui.PushSpinner("Pushing to GitHub…")
 		var res backend.PushResult
 		var perr error
+		// The Worklog and its commits' references share this one progress bar.
+		var finished []backend.RewriteBatch
 		ui.Async(func() error {
 			row = ui.Store.CheckRowMerged(row)
 			res, perr = backend.PushEntry(ui.Cfg, row["issue"], row["date"], row["owner"], mins,
 				row["remarks"], backend.WorklogIssueBody(row, row["remarks"]), row["mode"], row["issue_url"],
-				backend.SubTitleBaseFor(row), pushProgress)
+				backend.SubTitleBaseFor(ui.Cfg, row), scaledProgress(pushProgress, pushShare(row)))
+			if perr == nil {
+				finished = refsAfterPush(ui, row, &res, pushProgress)
+			}
 			return nil // handle push error inline so the saved row is not lost
 		}, func() {
 			stop()
@@ -2037,9 +2039,8 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 			if res.Complete() && onFinished != nil {
 				onFinished()
 			}
-			if res.Complete() && rowNeedsRefRun(row) {
-				addWorklogRefs(ui, func() { DrawRecent(ui) })
-			}
+			ui.RefreshLoggedShas()
+			offerPullRequests(ui, finished)
 		})
 	}
 
@@ -2064,6 +2065,7 @@ func GroupEditor(ui *shell.UI, g backend.Group, onLogged func([]backend.Commit),
 			shell.Labeled("Issue", issE),
 		),
 		dayFillReadout(ui, dateE, minE, ""),
+		titleF.View,
 	)
 	pushView := shell.GitHubButton(pushBtn)
 	showPushWhenDue(pushView, dateE, false)

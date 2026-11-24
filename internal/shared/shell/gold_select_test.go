@@ -37,6 +37,7 @@ func TestDropdownReferenceLookAndMenuSelectionMotion(t *testing.T) {
 	defer func() { FinishDropdownClosings(); fyne.SetCurrentApp(base); base.Quit() }()
 	chosen := ""
 	s := NewGoldSelect([]string{"Reported", "Approved", "Another option"}, nil)
+	s.StayOpen = false // the closing path, with its retiring menu
 	s.SetSelected("Reported")
 	s.OnChanged = func(value string) { chosen = value }
 	w := base.NewWindow("dropdown reference")

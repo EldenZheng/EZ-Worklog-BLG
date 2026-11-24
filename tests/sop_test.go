@@ -86,11 +86,16 @@ func TestSOPWorklogBodyLinksLegacyCommitsAndMarksTheEntry(t *testing.T) {
 		t.Fatalf("remarks read back as %q", got)
 	}
 	current := backend.Row{"id": "def456", "date": "2026-11-24", "mode": "subissue", "refs": "exampleorg/app@1a2b3c4"}
-	// Its commits get the same Ref lines, until they carry the Worklog's
-	// reference themselves.
-	if body := backend.WorklogIssueBody(current, "x"); !strings.Contains(body, "\nRef https://github.com/exampleorg/app/commit/1a2b3c4\n") ||
-		strings.Contains(body, "Commits") || !strings.Contains(body, "worklog-entry:def456") {
-		t.Fatalf("a non-legacy entry lists its commits and is marked:\n%s", body)
+	// Its commits carry the Worklog's reference themselves, so the body does
+	// not list them; only a merged commit, which cannot be changed, is listed.
+	if body := backend.WorklogIssueBody(current, "x"); strings.Contains(body, "\nRef ") || !strings.Contains(body, "worklog-entry:def456") {
+		t.Fatalf("a non-legacy entry must not list its commits, but is marked:\n%s", body)
+	}
+	merged := backend.Row{"id": "m1", "date": "2026-11-24", "mode": "subissue",
+		"refs": "exampleorg/app@1a2b3c4,exampleorg/app@9f9f9f9", "merged_refs": "exampleorg/app@9f9f9f9"}
+	if body := backend.WorklogIssueBody(merged, "x"); !strings.Contains(body, "\nRef https://github.com/exampleorg/app/commit/9f9f9f9\n") ||
+		strings.Contains(body, "1a2b3c4") {
+		t.Fatalf("only the merged commit is listed:\n%s", body)
 	}
 	before := backend.Row{"id": "g", "date": "2026-11-20", "mode": "subissue", "issue_body": "kept", "legacy": "1", "refs": "a@b"}
 	if body := backend.WorklogIssueBody(before, "x"); body != "kept" {
@@ -191,7 +196,8 @@ func TestSOPReportedMinutesWinRegardlessOfFieldOrder(t *testing.T) {
 func TestSOPReadSplitsAtTheCutover(t *testing.T) {
 	old := backend.Gh
 	t.Cleanup(func() { backend.Gh = old })
-	var filter, query string
+	var filter string
+	var queries []string
 	backend.Gh = func(args []string, _ ...string) (string, error) {
 		joined := strings.Join(args, " ")
 		for _, a := range args {
@@ -199,7 +205,7 @@ func TestSOPReadSplitsAtTheCutover(t *testing.T) {
 				filter = a
 			}
 			if strings.HasPrefix(a, "q=") {
-				query = a
+				queries = append(queries, a)
 			}
 		}
 		switch {
@@ -218,8 +224,10 @@ func TestSOPReadSplitsAtTheCutover(t *testing.T) {
 	if !strings.Contains(filter, ">=2026-11-16") || !strings.Contains(filter, "<=2026-11-20") {
 		t.Fatalf("the board should be read up to the day before the SOP: %s", filter)
 	}
-	if !strings.Contains(query, "created:2026-11-20..2026-11-23") {
-		t.Fatalf("Worklogs from the SOP on should be searched: %s", query)
+	// Once today is past the window, a later search for backdated Worklogs
+	// follows; the window's own search is the one checked here.
+	if len(queries) == 0 || !strings.Contains(queries[0], "created:2026-11-20..2026-11-23") {
+		t.Fatalf("Worklogs from the SOP on should be searched: %v", queries)
 	}
 }
 
@@ -346,8 +354,11 @@ func TestSOPRefMustNameTheWholeIssueNumber(t *testing.T) {
 			t.Fatalf("%q names o/r#6001", msg)
 		}
 	}
-	if got := backend.AddWorklogRefs("Fix\n\nRefs o/r#60010\n", []string{"o/r#6001"}); !strings.HasSuffix(got, "Refs o/r#60010\nRefs o/r#6001\n") {
-		t.Fatalf("the missing ref should be added: %q", got)
+	if !backend.MessageNamesIssue("Refs o/r/issues/6001:\nFix", "o/r#6001") || backend.MessageNamesIssue("Refs o/r/issues/60010:", "o/r#6001") {
+		t.Fatal("the issues/N spelling names the same issue, as a whole number")
+	}
+	if got := backend.AddWorklogRefs("Fix\n\nRefs o/r#60010\n", []string{"o/r#6001"}); got != "Refs o/r/issues/6001:\nFix\n\nRefs o/r#60010\n" {
+		t.Fatalf("the missing ref should lead the message: %q", got)
 	}
 }
 
@@ -492,5 +503,27 @@ func TestSOPJustPushedWorklogsStayOnStatusUntilSearchSeesThem(t *testing.T) {
 	got := backend.MergePushedRows(items, rows, "team-alex", "2026-11-01", "2026-11-30")
 	if len(got) != 2 || got[1].URL != "https://github.com/o/r/issues/9" || got[1].Minutes != 45 || got[1].Owner != "team-alex" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// A Worklog pushed after its Logged for day is backdated; one pushed on its
+// own day, or with no known creation day (board items), is not.
+func TestBackdatedWorklogIsCreatedAfterItsDay(t *testing.T) {
+	for _, tc := range []struct {
+		it   backend.WorklogItem
+		want bool
+	}{
+		{backend.WorklogItem{Date: "2026-11-23", Created: "2026-11-24"}, true},
+		{backend.WorklogItem{Date: "2026-11-23", Created: "2026-11-23"}, false},
+		{backend.WorklogItem{Date: "2026-11-23"}, false},
+	} {
+		if got := tc.it.Backdated(); got != tc.want {
+			t.Errorf("%+v backdated = %v, want %v", tc.it, got, tc.want)
+		}
+	}
+	rows := []backend.Row{{"date": "2026-11-23", "pushed_at": "2026-11-24T00:30:00", "issue_url": "https://github.com/o/r/issues/9", "minutes": "60"}}
+	items := backend.MergePushedRows(nil, rows, "me", "2026-11-23", "2026-11-23")
+	if len(items) != 1 || !items[0].Backdated() {
+		t.Fatalf("a local row pushed the next day reads as backdated: %+v", items)
 	}
 }

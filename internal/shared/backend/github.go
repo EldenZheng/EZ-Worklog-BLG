@@ -86,20 +86,38 @@ var (
 	// commit under whatever #48 happened to be in the scraped repo.
 	refRe  = regexp.MustCompile(`(?i)refs?\s+([\w.-]+)/([\w.-]+)(?:/issues/|#)(\d+)`)
 	hashRe = regexp.MustCompile(`#(\d+)`)
-	issRe  = regexp.MustCompile(`^([\w.-]+)/([\w.-]+)#(\d+)$`)
+	// A bare number a keyword declares ("Refs #12", "Fixes #12") is the
+	// commit's own issue, not a passing mention.
+	keywordHashRe = regexp.MustCompile(`(?i)\b(?:refs?|close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)`)
+	issRe         = regexp.MustCompile(`^([\w.-]+)/([\w.-]+)#(\d+)$`)
 )
 
 func ParseIssue(message, fallbackRepo string) string {
+	ref, _ := ParseCommitIssue(message, fallbackRepo)
+	return ref
+}
+
+// ParseCommitIssue is ParseIssue that also says whether the issue is only a
+// guess: a bare #N mentioned in passing, such as "blg-grid #41" in a list of
+// the day's work, which may not even be in this repository. A guess yields to
+// the issue the commit's branch is for (ResolveCommitBranchIssues).
+func ParseCommitIssue(message, fallbackRepo string) (ref string, guessed bool) {
 	if m := refRe.FindStringSubmatch(message); m != nil {
-		return fmt.Sprintf("%s/%s#%s", m[1], m[2], m[3])
+		return fmt.Sprintf("%s/%s#%s", m[1], m[2], m[3]), false
 	}
 	if refs := IssueRefsInText(message); len(refs) > 0 {
-		return refs[0]
+		return refs[0], false
 	}
-	if m := hashRe.FindStringSubmatch(message); m != nil && fallbackRepo != "" {
-		return fmt.Sprintf("%s#%s", fallbackRepo, m[1])
+	if fallbackRepo == "" {
+		return "", false
 	}
-	return ""
+	if m := keywordHashRe.FindStringSubmatch(message); m != nil {
+		return fmt.Sprintf("%s#%s", fallbackRepo, m[1]), false
+	}
+	if m := hashRe.FindStringSubmatch(message); m != nil {
+		return fmt.Sprintf("%s#%s", fallbackRepo, m[1]), true
+	}
+	return "", false
 }
 
 // Commit is one scraped commit. Message is the first line (for display);
@@ -111,7 +129,10 @@ type Commit struct {
 	Message string `json:"message"`
 	Full    string `json:"full"`
 	Issue   string `json:"issue"`
-	Branch  string `json:"branch,omitempty"`
+	// IssueGuessed marks an Issue read from a bare #N the message only
+	// mentions. The branch's issue replaces it when the branch names one.
+	IssueGuessed bool   `json:"issue_guessed,omitempty"`
+	Branch       string `json:"branch,omitempty"`
 	// Worklog is the Worklog sub-issue the commit references, as the worklog
 	// SOP has commits do. Such a commit is logged already; Issue is then the
 	// Worklog's parent. See ResolveWorklogRefs.
@@ -225,9 +246,10 @@ func repoCommits(repo, ref, author, since, until string) ([]Commit, string) {
 		if i := strings.IndexByte(c.Message, 10); i >= 0 {
 			first = c.Message[:i]
 		}
+		issue, guessed := ParseCommitIssue(c.Message, repo)
 		got = append(got, Commit{
 			Sha: c.Sha, Repo: repo, Date: CommitWorkDate(c.Date),
-			Message: first, Full: c.Message, Issue: ParseIssue(c.Message, repo), Branch: ref,
+			Message: first, Full: c.Message, Issue: issue, IssueGuessed: guessed, Branch: ref,
 		})
 	}
 	return got, ""
@@ -332,9 +354,12 @@ func FetchIssueInfos(refs []string, progress ...func(FetchProgress)) (map[string
 // Status and Assignees are carried for the week export, which is meant to read
 // like the board's own TSV download; nothing else on the tabs uses them.
 type WorklogItem struct {
-	ID              string `json:",omitempty"`
-	Body            string `json:",omitempty"`
-	Date            string
+	ID   string `json:",omitempty"`
+	Body string `json:",omitempty"`
+	Date string
+	// Created is the Malaysia day an SOP Worklog was created, when it differs
+	// from Date only because it was pushed late (see Backdated).
+	Created         string `json:",omitempty"`
 	Minutes         int
 	ApprovedMinutes int `json:",omitempty"`
 	Owner           string
@@ -804,9 +829,10 @@ func searchCommits(org, author, sinceDate, untilDate string) ([]Commit, string) 
 		if i := strings.IndexByte(c.Message, 10); i >= 0 {
 			first = c.Message[:i]
 		}
+		issue, guessed := ParseCommitIssue(c.Message, c.Repo)
 		got = append(got, Commit{
 			Sha: c.Sha, Repo: c.Repo, Date: CommitWorkDate(c.Date),
-			Message: first, Full: c.Message, Issue: ParseIssue(c.Message, c.Repo),
+			Message: first, Full: c.Message, Issue: issue, IssueGuessed: guessed,
 		})
 	}
 	return got, ""
@@ -1485,6 +1511,7 @@ func GroupPending(commits []Commit, done, ignored map[string]bool) []Group {
 		}
 		pending = append(pending, c)
 	}
+	choreIgnored := func(c Commit) bool { return IsChoreCommit(c) && !ignored[KeptKey(c.Sha)] }
 	// Newest date first, then issue descending, then sha so repeated fetches
 	// present the same order.
 	sort.Slice(pending, func(i, j int) bool {
@@ -1503,7 +1530,8 @@ func GroupPending(commits []Commit, done, ignored map[string]bool) []Group {
 		groups = append(groups, Group{
 			Date: c.Date, Issue: c.Issue, Commits: cs,
 			Remarks: BuildRemarks(cs),
-			Ignored: ignored[c.Sha],
+			// A chore commit starts out ignored until it is brought back.
+			Ignored: ignored[c.Sha] || choreIgnored(c),
 		})
 	}
 	return groups
@@ -1588,6 +1616,36 @@ func BuildRemarks(commits []Commit) string {
 	// over-limit remarks before saving.
 	return strings.Join(lines, "\n")
 }
+
+// IsChoreCommit reports a commit whose subject (after any "Refs …:" line) is
+// a conventional "chore": "chore: …", "chore(ng21): …". Such commits are
+// upkeep, not work to log, so they start out ignored.
+func IsChoreCommit(c Commit) bool {
+	msg := c.Full
+	if strings.TrimSpace(msg) == "" {
+		msg = c.Message
+	}
+	for _, line := range strings.Split(msg, "\n") {
+		line = strings.TrimSpace(refsPrefixRe.ReplaceAllString(strings.TrimSpace(line), ""))
+		if line == "" {
+			continue
+		}
+		return choreSubjectRe.MatchString(line)
+	}
+	return false
+}
+
+var (
+	choreSubjectRe = regexp.MustCompile(`(?i)^chore(\(|!|:|\s|$)`)
+	// refsPrefixRe is a leading "Refs owner/repo/issues/N, …:" with the
+	// subject on the same line or none.
+	refsPrefixRe = regexp.MustCompile(`(?i)^refs?\s+(?:[\w.-]+/[\w.-]+/issues/\d+|[\w.-]+/[\w.-]+#\d+|#?\d+)(?:\s*,\s*(?:[\w.-]+/[\w.-]+/issues/\d+|[\w.-]+/[\w.-]+#\d+|#?\d+))*\s*:?`)
+)
+
+// KeptKey is how a chore commit brought back from the ignored list is
+// remembered in ignored.json: its sha behind a "!", which never matches a sha,
+// so older versions read the file as before.
+func KeptKey(sha string) string { return "!" + sha }
 
 func IsMergeCommit(c Commit) bool {
 	msg := strings.TrimSpace(c.Full)
@@ -2081,14 +2139,14 @@ func VerifyProjectStatusDone(raw string) error {
 // the board, so calling it again after a partial failure is safe.
 func pushToProject(org, issueURL, contentID string, items []projectItem,
 	wdate, owner string, mins int, remarks string, notes, problems []string,
-	emit func(int, string), from, to int) (PushResult, error) {
+	emit func(int, string), from, to int, minutesTo string) (PushResult, error) {
 
 	chosen := pickProject(items)
 	var fields []field
 	if chosen != nil {
 		fields = chosen.Project.Fields.Nodes
 	}
-	done, issueFailed := setWorklogIssueFields(org, contentID, fields, mins)
+	done, issueFailed := setWorklogIssueFields(org, contentID, fields, mins, minutesTo)
 	problems = append(problems, issueFailed...)
 	if chosen == nil {
 		return PushResult{
@@ -2303,10 +2361,17 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 					}
 				}
 			}
+			// A Worklog title set or edited since it was filed renames it.
+			if want := strings.TrimSpace(subTitleBase); want != "" && existing.Title != "" &&
+				WorklogPartOf(existing.Title, want) == 0 {
+				if _, e := Gh([]string{"issue", "edit", existing.URL, "--title", want}); e != nil {
+					problems = append(problems, "Could not rename the Worklog: "+e.Error())
+				}
+			}
 			notes = append(notes, fmt.Sprintf(
 				"Reused sub-issue #%d from an earlier attempt on this entry.", existing.Number))
 			emit(25, "Reusing sub-issue")
-			return pushToProject(o, existing.URL, existing.ID, items, wdate, owner, mins, remarks, notes, problems, emit, 25, 100)
+			return pushToProject(o, existing.URL, existing.ID, items, wdate, owner, mins, remarks, notes, problems, emit, 25, 100, cfg.PushMinutesTo)
 		}
 
 		// Numbered only if the day already has one on this issue, so a normal
@@ -2356,7 +2421,7 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 			problems = append(problems, "Could not link as sub-issue: "+e.Error())
 		}
 		emit(60, "Setting Worklog issue fields")
-		return pushToProject(o, createdURL, newID, items, wdate, owner, mins, remarks, notes, problems, emit, 70, 100)
+		return pushToProject(o, createdURL, newID, items, wdate, owner, mins, remarks, notes, problems, emit, 70, 100, cfg.PushMinutesTo)
 	} else {
 		chosen := pickProject(items)
 		if chosen == nil {
@@ -2394,7 +2459,7 @@ func pushEntry(cfg Config, ref, wdate, owner string, mins int, remarks, issueBod
 		}
 	}
 	emit(30, "Setting fields")
-	done, issueFailed := setWorklogIssueFields(o, issue.ID, proj.Fields.Nodes, mins)
+	done, issueFailed := setWorklogIssueFields(o, issue.ID, proj.Fields.Nodes, mins, cfg.PushMinutesTo)
 	problems = append(problems, issueFailed...)
 	projectDone, failed, gone := setFields(proj.ID, targetItem, proj.Fields.Nodes, wdate, owner, mins, remarks)
 	notes = append(notes, gone...)

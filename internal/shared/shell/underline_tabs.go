@@ -254,10 +254,13 @@ func (r *underlineTabsRenderer) Destroy() {
 // underlineTab is one label in the row.
 type underlineTab struct {
 	widget.BaseWidget
-	owner       *UnderlineTabs
-	option      string
-	text        *canvas.Text
-	arrow       *canvas.Image // the drop-down arrow, gold like the picked label
+	owner  *UnderlineTabs
+	option string
+	text   *canvas.Text
+	arrow  *canvas.Image // the drop-down arrow, gold like the picked label
+	// turn runs 0 (arrow down) to 1 (up) while the tab's menu opens.
+	turn        float32
+	spin        *fyne.Animation
 	hover, pick Glow
 	press       widgets.PressMotion
 	// shot stands in for the label and arrow while the tab is pressed; labelAt
@@ -277,9 +280,45 @@ const (
 )
 
 // tabArrow is the drop-down arrow beside a tab with a menu: the same filled
-// triangle a drop-down field shows, in the logo's gold.
-var tabArrow = fyne.NewStaticResource("tab-arrow.svg", []byte(
-	`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#cda236" d="M7 10l5 5 5-5z"/></svg>`))
+// triangle a drop-down field shows, in the logo's gold, turned by turn.
+func tabArrow(turn float32) fyne.Resource { return triangleResource(widgets.LogoGold, turn) }
+
+// MenuOpen turns the picked tab's arrow up while its menu is open and back
+// down when it closes, as a drop-down field's arrow does.
+func (t *UnderlineTabs) MenuOpen(open bool) {
+	for _, item := range t.items {
+		item.turnArrow(open && item.option == t.Selected && item.hasMenu())
+	}
+}
+
+func (i *underlineTab) turnArrow(up bool) {
+	goal := boolShare(up)
+	if i.spin != nil {
+		i.spin.Stop()
+		i.spin = nil
+	}
+	paint := func() {
+		if res := tabArrow(i.turn); i.arrow.Resource != res {
+			i.arrow.Resource = res
+			i.arrow.Refresh()
+		}
+	}
+	if i.turn == goal {
+		return
+	}
+	if !animationsOn() {
+		i.turn = goal
+		paint()
+		return
+	}
+	from := i.turn
+	i.spin = fyne.NewAnimation(MorphTime, func(p float32) {
+		i.turn = from + (goal-from)*EaseInOutCubic(p)
+		paint()
+	})
+	i.spin.Curve = fyne.AnimationLinear
+	i.spin.Start()
+}
 
 // ease fades one of the label's levels to target, or sets it at once with
 // animations off.
@@ -301,7 +340,7 @@ func newUnderlineTab(owner *UnderlineTabs, option string) *underlineTab {
 	text.TextSize = theme.TextSize() + tabTextGrowth
 	text.TextStyle = fyne.TextStyle{Bold: true}
 	item := &underlineTab{owner: owner, option: option, text: text}
-	item.arrow = canvas.NewImageFromResource(tabArrow)
+	item.arrow = canvas.NewImageFromResource(tabArrow(0))
 	item.arrow.FillMode = canvas.ImageFillContain
 	item.arrow.Translucency = 1
 	item.shot = newTabPress(item)

@@ -88,7 +88,7 @@ var FieldOrder = []string{
 	"id", "date", "minutes", "type", "description", "refs", "issue",
 	"owner", "remarks", "mode", "issue_url", "item_id", "pushed_at", "logged_at",
 	"parent_repo", "parent_title", "issue_body", "issue_title", "meeting_title", "meeting_recording", "display_title",
-	"legacy", "ref_state", "ref_note", "merged_refs", "commit_date",
+	"legacy", "ref_state", "ref_note", "merged_refs", "commit_date", "worklog_title",
 }
 
 // Config mirrors config.json so data carries over from the Python app.
@@ -138,6 +138,12 @@ type Config struct {
 	// RepoFolders hold the user's clones. Adding a Worklog's reference to its
 	// commits rewrites them there (see commit_rewrite.go).
 	RepoFolders []string `json:"repo_folders,omitempty"`
+	// PushMinutesTo is which issue minutes fields a push writes: blank or
+	// "reported", "approved", or "both" (see PushMinutesFields).
+	PushMinutesTo string `json:"push_minutes_to,omitempty"`
+	// TitleCLI is the AI command-line assistant Suggest asks for a Worklog
+	// title ("claude", "codex", "gemini"); blank turns Suggest off.
+	TitleCLI string `json:"title_cli,omitempty"`
 }
 
 // MaxReportMonths is the longest page Settings takes for the finished report.
@@ -496,6 +502,41 @@ func (s *Store) SetIgnored(sha string, ignored bool) error {
 		dates[sha] = time.Now().Format("2006-01-02")
 	} else {
 		delete(dates, sha)
+	}
+	return s.writeIgnoredDatesLocked(dates)
+}
+
+// SetKept remembers that a chore commit, which starts out ignored, was brought
+// back (kept true), or forgets it (false). It shares ignored.json and its
+// dates, so it is cleaned up with the ignored commits.
+func (s *Store) SetKept(sha string, kept bool) error {
+	sha = strings.TrimSpace(sha)
+	if sha == "" {
+		return nil
+	}
+	key := KeptKey(sha)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	set, err := s.readIgnoredLocked()
+	if err != nil {
+		return err
+	}
+	if set[key] == kept {
+		return nil
+	}
+	dates, err := s.readIgnoredDatesLocked()
+	if err != nil {
+		return err
+	}
+	if kept {
+		set[key] = true
+		dates[key] = time.Now().Format("2006-01-02")
+	} else {
+		delete(set, key)
+		delete(dates, key)
+	}
+	if err := s.writeIgnoredLocked(set); err != nil {
+		return err
 	}
 	return s.writeIgnoredDatesLocked(dates)
 }

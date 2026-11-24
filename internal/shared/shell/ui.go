@@ -13,7 +13,6 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -1291,12 +1290,37 @@ func (ui *UI) PushSpinner(label string) (func(backend.FetchProgress), func()) {
 	ind := NewLoadingIndicator()
 	ind.SetActive(true)
 	// A fixed narrow width keeps the modal compact — the bar is a signal that
-	// something is running, not a canvas to be filled. GridWrap enforces the
-	// min size on the strip while letting its height come from the indicator.
-	sized := container.New(layout.NewGridWrapLayout(fyne.NewSize(320, ind.View.MinSize().Height)), ind.View)
+	// something is running, not a canvas to be filled. A caption too long for
+	// it wraps onto a second line rather than widening the popup.
+	ind.Caption.Wrapping = fyne.TextWrapWord
+	sized := container.New(&fixedWidthLayout{width: 320}, ind.View)
 	d := dialog.NewCustomWithoutButtons(label,
 		container.NewPadded(sized), ui.Win)
 	ShowDialog(d, ui.Win)
+	// The popup keeps its height until a caption needs more, then eases
+	// taller, as the app's other panels do. It never shrinks mid-push.
+	shown := d.MinSize()
+	var grow *fyne.Animation
+	fit := func() {
+		want := d.MinSize()
+		if want.Height <= shown.Height+0.5 {
+			return
+		}
+		from := shown
+		shown = want
+		if grow != nil {
+			grow.Stop()
+		}
+		if !animationsOn() {
+			d.Resize(want)
+			return
+		}
+		grow = fyne.NewAnimation(MorphTime, func(p float32) {
+			d.Resize(fyne.NewSize(max(from.Width, want.Width), from.Height+(want.Height-from.Height)*p))
+		})
+		grow.Curve = EaseInOutCubic
+		grow.Start()
+	}
 
 	stopped := false
 	progress := func(p backend.FetchProgress) {
@@ -1305,6 +1329,7 @@ func (ui *UI) PushSpinner(label string) (func(backend.FetchProgress), func()) {
 				return
 			}
 			ind.ShowProgress(true, p)
+			fit()
 		})
 	}
 	stop := func() {
@@ -1312,6 +1337,9 @@ func (ui *UI) PushSpinner(label string) (func(backend.FetchProgress), func()) {
 			return
 		}
 		stopped = true
+		if grow != nil {
+			grow.Stop()
+		}
 		ind.SetActive(false)
 		CloseDialog(d, ui.Win)
 	}
@@ -1329,4 +1357,23 @@ func (ui *UI) recoverToDialog(where string) {
 	_ = os.WriteFile(filepath.Join(DataDir(), "crash.log"),
 		[]byte(time.Now().Format(time.RFC3339)+"\n"+msg+"\n"), 0o644)
 	fyne.Do(func() { ui.Errf(fmt.Errorf("Something went wrong (%s). Details saved to crash.log.", where)) })
+}
+
+// fixedWidthLayout holds its content at width, as tall as the content needs
+// there, so wrapped text adds lines instead of width.
+type fixedWidthLayout struct{ width float32 }
+
+func (l *fixedWidthLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	h := float32(0)
+	for _, o := range objects {
+		h = max(h, o.MinSize().Height)
+	}
+	return fyne.NewSize(l.width, h)
+}
+
+func (l *fixedWidthLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objects {
+		o.Move(fyne.Position{})
+		o.Resize(fyne.NewSize(size.Width, max(size.Height, o.MinSize().Height)))
+	}
 }

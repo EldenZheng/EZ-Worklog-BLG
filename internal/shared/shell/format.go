@@ -28,10 +28,10 @@ func Plural(n int) string {
 func (ui *UI) UnfiledLabel(r backend.Row) string {
 	switch r["type"] {
 	case backend.KindBulkReview:
-		return backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+		return backend.BulkReviewLabel(ui.Cfg, r)
 	case backend.KindCodeReview:
 		if _, err := backend.ParseCodeReviewItems(r["remarks"]); err == nil {
-			return backend.DailyCodeReviewTitle(ui.Cfg, r["date"])
+			return backend.BulkReviewLabel(ui.Cfg, r)
 		}
 		return backend.CodeReviewTitle(r["date"])
 	case backend.KindMeeting:

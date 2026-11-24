@@ -15,8 +15,9 @@ func TestPullRequestBodyListsCommitLinesAsPointsWithoutRefs(t *testing.T) {
 	got := backend.PullRequestBody("o/r#5185", []string{
 		"Refs o/r#5185: fix the totals\n\n- round per day\n* keep the cap\n\nRefs o/r#6001",
 		"Tidy the report\nRefs o/r#6002\n- round per day",
+		"Refs o/r/issues/6003:\n- add the export",
 	})
-	want := "Refs o/r#5185:\n- fix the totals\n- round per day\n- keep the cap\n- Tidy the report"
+	want := "Refs o/r#5185:\n- fix the totals\n- round per day\n- keep the cap\n- Tidy the report\n- add the export"
 	if got != want {
 		t.Fatalf("body:\n%s\nwant:\n%s", got, want)
 	}

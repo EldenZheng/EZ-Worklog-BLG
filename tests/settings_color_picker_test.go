@@ -179,10 +179,17 @@ func TestOrgColorPickerAdvancedResizesSmoothlyAndShrinksBack(t *testing.T) {
 	if popup.Size() != closed {
 		t.Fatal("opening must wait for its first animation frame")
 	}
-	if len(driver.anims) != 1 || driver.anims[0].Duration != widgets.HoverDuration {
-		t.Fatalf("Advanced must use the ignored-list fold: %d animations", len(driver.anims))
+	// The heading's triangle turns alongside; the fold is the other one.
+	var folds []*fyne.Animation
+	for _, anim := range driver.anims {
+		if anim.Duration == widgets.HoverDuration {
+			folds = append(folds, anim)
+		}
 	}
-	opening := driver.anims[0]
+	if len(folds) != 1 || len(driver.anims) != 2 {
+		t.Fatalf("Advanced must use the ignored-list fold and turn its arrow: %d animations", len(driver.anims))
+	}
+	opening := folds[0]
 	if opening.Curve(.25) != shell.EaseInOutCubic(.25) {
 		t.Fatal("Advanced must use the ignored-list easing")
 	}

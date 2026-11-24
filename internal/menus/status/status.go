@@ -321,7 +321,12 @@ func DrawDayPanel(ui *shell.UI) {
 	// that took the most of them is the answer; fetch order buried it wherever
 	// the project happened to return it. Stable, so equal items keep that order
 	// rather than shuffling between redraws.
+	// Backdated Worklogs, pushed on a later day, go last under their own
+	// heading, so the day's own work reads first.
 	sort.SliceStable(dayItems, func(i, j int) bool {
+		if a, b := dayItems[i].Backdated(), dayItems[j].Backdated(); a != b {
+			return b
+		}
 		return dayItems[i].Minutes > dayItems[j].Minutes
 	})
 
@@ -372,8 +377,13 @@ func DrawDayPanel(ui *shell.UI) {
 		body = append(body, none)
 	}
 
+	backdatedShown := false
 	for _, it := range dayItems {
 		it := it
+		if it.Backdated() && !backdatedShown {
+			backdatedShown = true
+			body = append(body, shell.VGap(theme.Padding()), shell.SectionTitle("Backdated"))
+		}
 		org := shell.ItemOrg(it)
 		// The title is the link to the worklog on GitHub; there is no separate
 		// "Worklog" link at the foot any more.
@@ -394,6 +404,10 @@ func DrawDayPanel(ui *shell.UI) {
 		// tag Kanban cards carry: a click opens it on GitHub.
 		if it.ParentTitle != "" || it.ParentURL != "" {
 			card = append(card, shell.ParentTag(backend.OrDefault(it.ParentTitle, "Parent issue"), it.ParentURL))
+		}
+		if it.Backdated() {
+			pushed := widget.NewLabelWithStyle("Pushed "+it.Created, fyne.TextAlignLeading, fyne.TextStyle{Italic: true})
+			card = append(card, pushed)
 		}
 		rem := widget.NewLabel(it.Remarks)
 		rem.Wrapping = fyne.TextWrapWord

@@ -60,6 +60,8 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	if !showDisp.Checked {
 		disp.Disable()
 	}
+	pushMinutes := pushMinutesPicker(ui.Cfg.PushMinutesTo)
+	titleCLI := titleCLIPicker(ui.Cfg.TitleCLI)
 	back := widget.NewEntry()
 	cleanup := widget.NewEntry()
 	cleanup.SetPlaceHolder("Blank keeps everything")
@@ -255,6 +257,8 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		}
 		newCfg.LookbackDays = backN
 		newCfg.CleanupDays = cleanupN
+		newCfg.PushMinutesTo = pushMinutesValue(pushMinutes.Selected)
+		newCfg.TitleCLI = titleCLIValue(titleCLI.Selected)
 		newCfg.DefaultMode = "subissue"
 		// One month is the default, saved as nothing.
 		newCfg.ReportMonths = 0
@@ -440,25 +444,24 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 		),
 		shell.LabeledHint("Support payment per set", "Paid per seven qualifying support issues, in the salary currency. Blank means unset.", supportPay),
 	)
-	worklogSection := container.NewVBox(
-		settingsTitle("Worklog"),
+	worklogFields := []fyne.CanvasObject{
 		shell.LabeledHint("Look back", "Days back the commit sweep scans for unlogged work.", back),
+		shell.LabeledHint("Push minutes to", "Which Worklog field a push fills with its minutes: Worklog Reported(mins), Worklog Approved(mins), or both.", pushMinutes),
+		shell.LabeledHint("AI for titles", "The AI CLI that Suggest asks for a Worklog title, from the ones installed here. It runs on that CLI's own sign-in: Claude Code on a subscription uses your plan, not API credit.", titleCLI),
 		shell.LabeledHint("Clean up after (days)", "Forgets ignored commits, and the commit list on pushed entries, after this many days, or the look back if longer. The entries themselves stay. Blank keeps everything.", cleanup),
-	)
-
+	}
 	projectsSection := container.NewVBox(
 		settingsTitle("Projects"),
 		shell.LabeledHint("Finished report range (months)", "How many months the finished report shows at a time. Its month opens every week since the start.", reportRange),
 	)
+	worklogSection := container.NewVBox(append([]fyne.CanvasObject{settingsTitle("Worklog")},
+		pairRows(worklogFields, projectsSection)...)...)
 
 	mainInner := container.NewVBox(
 		sourcesSection,
 		layout.NewSpacer(),
 		salarySection,
-		container.NewGridWithColumns(2,
-			container.New(layout.NewCustomPaddedLayout(0, 0, 0, theme.Padding()*3), worklogSection),
-			container.New(layout.NewCustomPaddedLayout(0, 0, theme.Padding()*3, 0), projectsSection),
-		),
+		worklogSection,
 		msg,
 	)
 	// Chunky theme bumps input padding so entries and the dropdown read as
@@ -493,6 +496,25 @@ func BuildSettingsTab(ui *shell.UI) fyne.CanvasObject {
 	return container.NewStack(container.NewBorder(top, nil, nil, nil, body), toast.layer)
 }
 
+// pairRows lays fields two to a row, each row as tall as its taller field.
+// last follows them: beside the odd field out, or at the start of a row of
+// its own when the fields pair up evenly.
+func pairRows(fields []fyne.CanvasObject, last fyne.CanvasObject) []fyne.CanvasObject {
+	cells := append(append([]fyne.CanvasObject(nil), fields...), last)
+	var rows []fyne.CanvasObject
+	for i := 0; i < len(cells); i += 2 {
+		right := fyne.CanvasObject(layout.NewSpacer())
+		if i+1 < len(cells) {
+			right = cells[i+1]
+		}
+		gap := theme.Padding() * 3 // the same room the two old columns had between them
+		rows = append(rows, container.New(widgets.NewFluidRow(0.5, 0.5),
+			container.New(layout.NewCustomPaddedLayout(0, 0, 0, gap), cells[i]),
+			container.New(layout.NewCustomPaddedLayout(0, 0, gap, 0), right)))
+	}
+	return rows
+}
+
 // settingsTitle is a section's heading with room above it, so each section
 // reads as starting fresh rather than running on from the last one's fields.
 func settingsTitle(title string) fyne.CanvasObject {
@@ -505,6 +527,73 @@ func sidebarField(label string, field fyne.CanvasObject) fyne.CanvasObject {
 	caption := widget.NewLabel(label)
 	caption.Wrapping = fyne.TextWrapWord
 	return container.NewVBox(caption, field)
+}
+
+// Push minutes to: the labels Settings shows, by the value saved in config.
+// Reported is the default and is saved as blank.
+var pushMinutesLabels = []struct{ value, label string }{
+	{"", "Reported"},
+	{backend.PushMinutesApproved, "Approved"},
+	{backend.PushMinutesBoth, "Reported and Approved"},
+}
+
+func pushMinutesPicker(saved string) *shell.GoldSelect {
+	var options []string
+	for _, o := range pushMinutesLabels {
+		options = append(options, o.label)
+	}
+	picker := shell.NewGoldSelect(options, nil)
+	picker.SetSelected(options[0])
+	reported, approved := backend.PushMinutesFields(saved)
+	switch {
+	case reported && approved:
+		picker.SetSelected(options[2])
+	case approved:
+		picker.SetSelected(options[1])
+	}
+	return picker
+}
+
+func pushMinutesValue(label string) string {
+	for _, o := range pushMinutesLabels {
+		if o.label == label {
+			return o.value
+		}
+	}
+	return ""
+}
+
+// titleCLINone is the AI picker's "off" choice.
+const titleCLINone = "None"
+
+// titleCLIPicker lists the AI CLIs found on this machine. A saved one that is
+// no longer installed stays listed, marked, so saving does not silently drop it.
+func titleCLIPicker(saved string) *shell.GoldSelect {
+	options := []string{titleCLINone}
+	selected := titleCLINone
+	for _, c := range backend.AvailableTitleCLIs() {
+		options = append(options, c.Label)
+		if strings.EqualFold(c.Command, saved) {
+			selected = c.Label
+		}
+	}
+	if c, ok := backend.TitleCLIByCommand(saved); ok && selected == titleCLINone {
+		selected = c.Label + " (not found)"
+		options = append(options, selected)
+	}
+	picker := shell.NewGoldSelect(options, nil)
+	picker.SetSelected(selected)
+	return picker
+}
+
+func titleCLIValue(label string) string {
+	label = strings.TrimSuffix(label, " (not found)")
+	for _, c := range backend.TitleCLIs {
+		if c.Label == label {
+			return c.Command
+		}
+	}
+	return ""
 }
 
 func outlined(control fyne.CanvasObject) fyne.CanvasObject {

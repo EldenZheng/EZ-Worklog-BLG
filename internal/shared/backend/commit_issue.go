@@ -27,19 +27,24 @@ func ParseBranchIssue(branch, repo string) string {
 	return ""
 }
 
-// ResolveCommitBranchIssues fills only missing issue declarations. Scans can
-// encounter the same commit on several branches, so resolve before deduping and
-// leave conflicting branch candidates unfiled rather than depending on which
-// concurrent scan finished first.
+// ResolveCommitBranchIssues fills missing issue declarations, and replaces a
+// guessed one (a bare #N the message only mentions) with the branch's issue.
+// Scans can encounter the same commit on several branches, so resolve before
+// deduping and leave conflicting branch candidates on their guess, or unfiled,
+// rather than depending on which concurrent scan finished first.
 func ResolveCommitBranchIssues(commits []Commit) {
 	type identity struct{ repo, sha string }
 	candidates := map[identity]map[string]string{}
 	explicit := map[identity]string{}
+	guessed := map[identity]string{}
 	branches := map[PushRef]string{}
 	for _, c := range commits {
 		key := identity{c.Repo, c.Sha}
-		if c.Issue != "" {
+		switch {
+		case c.Issue != "" && !c.IssueGuessed:
 			explicit[key] = c.Issue
+		case c.Issue != "" && guessed[key] == "":
+			guessed[key] = c.Issue
 		}
 	}
 	for _, c := range commits {
@@ -66,11 +71,13 @@ func ResolveCommitBranchIssues(commits []Commit) {
 	for i, c := range commits {
 		key := identity{c.Repo, c.Sha}
 		if ref := explicit[key]; ref != "" {
-			commits[i].Issue = ref
+			commits[i].Issue, commits[i].IssueGuessed = ref, false
 		} else if len(candidates[key]) == 1 {
 			for _, ref := range candidates[key] {
-				commits[i].Issue = ref
+				commits[i].Issue, commits[i].IssueGuessed = ref, false
 			}
+		} else if ref := guessed[key]; ref != "" {
+			commits[i].Issue, commits[i].IssueGuessed = ref, true
 		}
 	}
 }

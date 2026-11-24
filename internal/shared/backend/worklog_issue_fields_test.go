@@ -153,7 +153,7 @@ func TestMissingWorklogTypeOrReportedFieldIDRemainsRetryable(t *testing.T) {
 	if err := json.Unmarshal([]byte(`[{"id":"column","name":"Worklog Reported(mins)","isIssueField":true}]`), &fields); err != nil {
 		t.Fatal(err)
 	}
-	done, problems := setWorklogIssueFields("missing-type-and-id-tests", "issue", fields, 45)
+	done, problems := setWorklogIssueFields("missing-type-and-id-tests", "issue", fields, 45, "")
 	if len(done) != 0 || len(problems) != 2 {
 		t.Fatalf("must expose both incomplete writes: %v %v", done, problems)
 	}
@@ -190,7 +190,7 @@ func TestReportedWorklogIsSetEvenWhenNotDisplayedOnTheProject(t *testing.T) {
 			return "", nil
 		}
 	}
-	done, problems := setWorklogIssueFields("actual-without-column-tests", "entry", []field{{Name: "ZZZ (DEPRECATED) Worklog (mins)"}}, 0)
+	done, problems := setWorklogIssueFields("actual-without-column-tests", "entry", []field{{Name: "ZZZ (DEPRECATED) Worklog (mins)"}}, 0, "")
 	if len(problems) != 0 || len(done) != 2 || pages != 2 || writes != 1 {
 		t.Fatalf("issue field was lost when not displayed: %v %v pages=%d writes=%d", done, problems, pages, writes)
 	}
@@ -267,5 +267,46 @@ func TestManualIssueKindsAreCreatedAsWorklog(t *testing.T) {
 				t.Fatalf("manual issue type was not Worklog: %v %v", patch, err)
 			}
 		})
+	}
+}
+
+func TestPushMinutesToChoosesReportedApprovedOrBoth(t *testing.T) {
+	previous := Gh
+	t.Cleanup(func() { Gh = previous })
+	var fields []field
+	if err := json.Unmarshal([]byte(`[
+		{"id":"c1","name":"Worklog Reported(mins)","isIssueField":true,"issueField":{"id":"reported-field","name":"Worklog Reported(mins)"}},
+		{"id":"c2","name":"Worklog Approved(mins)","isIssueField":true,"issueField":{"id":"approved-field","name":"Worklog Approved(mins)"}}
+	]`), &fields); err != nil {
+		t.Fatal(err)
+	}
+	for target, want := range map[string][]string{
+		"":         {"reported-field"},
+		"reported": {"reported-field"},
+		"approved": {"approved-field"},
+		"both":     {"reported-field", "approved-field"},
+	} {
+		var wrote []string
+		Gh = func(args []string, _ ...string) (string, error) {
+			query := strings.Join(args, " ")
+			switch {
+			case strings.Contains(query, "issueTypes(first:"):
+				return `{"data":{"organization":{"issueTypes":{"nodes":[{"id":"worklog-type","name":"Worklog"}]}}}}`, nil
+			case strings.Contains(query, "updateIssueIssueType"):
+				return `{}`, nil
+			case strings.Contains(query, "setIssueFieldValue"):
+				if pushFieldArg(args, "minutes") != "90" {
+					t.Fatalf("%q: wrong minutes %v", target, args)
+				}
+				wrote = append(wrote, pushFieldArg(args, "field"))
+				return `{}`, nil
+			}
+			t.Fatalf("%q: unexpected call %v", target, args)
+			return "", nil
+		}
+		_, problems := setWorklogIssueFields("push-minutes-to-"+target, "entry", fields, 90, target)
+		if len(problems) != 0 || strings.Join(wrote, ",") != strings.Join(want, ",") {
+			t.Errorf("%q wrote %v, want %v (problems %v)", target, wrote, want, problems)
+		}
 	}
 }

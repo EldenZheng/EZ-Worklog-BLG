@@ -104,7 +104,8 @@ func TestWorklogRefsRewriteTheBranchKeepingFilesAndUnpushedWork(t *testing.T) {
 	if len(batches) != 1 || batches[0].Problem != "" || batches[0].Branch != "feat" || len(batches[0].Commits) != 3 {
 		t.Fatalf("plan = %+v", batches)
 	}
-	if got := batches[0].Commits[0]; got.Old != f.a || len(got.Refs) != 1 || got.Refs[0] != "rw-org/app#6001" {
+	if got := batches[0].Commits[0]; got.Old != f.a || len(got.Refs) != 1 || got.Refs[0] != "rw-org/app#6001" ||
+		len(got.Replaces) != 1 || got.Replaces[0] != "rw-org/app#5185" {
 		t.Fatalf("A should gain the Worklog ref: %+v", got)
 	}
 	done, err := store.RunWorklogRefs(batches[0])
@@ -115,7 +116,7 @@ func TestWorklogRefsRewriteTheBranchKeepingFilesAndUnpushedWork(t *testing.T) {
 	if remoteTip != done.NewRemote || gitT(t, f.remote, "log", "-1", "--format=%s", remoteTip) != "Commit B" {
 		t.Fatalf("GitHub should get the rewritten B and nothing past it, got %s", gitT(t, f.remote, "log", "--format=%s", "feat"))
 	}
-	if msg := gitT(t, f.remote, "log", "-1", "--format=%B", remoteTip+"^"); !strings.Contains(msg, "Refs rw-org/app#6001") {
+	if msg := gitT(t, f.remote, "log", "-1", "--format=%B", remoteTip+"^"); !strings.HasPrefix(msg, "Refs rw-org/app/issues/6001:\n") {
 		t.Fatalf("A on GitHub should reference its Worklog:\n%s", msg)
 	}
 	local := gitT(t, f.clone, "rev-parse", "refs/heads/feat")
@@ -224,4 +225,29 @@ func TestWorklogRefsStopWhereARewriteIsNotSafe(t *testing.T) {
 		t.Fatal("a message naming its Worklog already is left as it is")
 	}
 	_ = store
+}
+
+// The Worklog's Refs line takes the place of the parent issue's at the top of
+// the message: one Refs line, never two stacked.
+func TestWorklogRefsReplaceTheParentRefsLine(t *testing.T) {
+	const worklog, parent = "o/intranet#7147", "o/intranet#5011"
+	for _, tc := range []struct{ in, want string }{
+		{"Refs o/intranet/issues/5011:\n- Ran the runner\n- Fixed bugs\n",
+			"Refs o/intranet/issues/7147:\n- Ran the runner\n- Fixed bugs\n"},
+		{"Refs o/intranet/issues/5011: fix paging\n\nbody\n",
+			"Refs o/intranet/issues/7147:\nfix paging\n\nbody\n"},
+		// Another issue on the same line stays, on the one line.
+		{"Refs o/intranet/issues/5011, o/other/issues/9:\nfix\n",
+			"Refs o/intranet/issues/7147, o/other/issues/9:\nfix\n"},
+		// No Refs line yet: the Worklog's goes on top.
+		{"fix paging\n", "Refs o/intranet/issues/7147:\nfix paging\n"},
+	} {
+		if got := backend.AddWorklogRefs(tc.in, []string{worklog}, parent); got != tc.want {
+			t.Errorf("AddWorklogRefs(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	// Without knowing the parent, the old Refs line still joins the one line.
+	if got := backend.AddWorklogRefs("Refs o/intranet/issues/5011:\nfix\n", []string{worklog}); got != "Refs o/intranet/issues/7147, o/intranet/issues/5011:\nfix\n" {
+		t.Errorf("no parent = %q", got)
+	}
 }

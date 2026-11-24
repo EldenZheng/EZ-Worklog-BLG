@@ -48,7 +48,10 @@ func TestDailyReviewCombinesDescriptionRemarksAndIncomingWithoutCountingRetriesT
 		if args[0] == "api" {
 			return reviewSnapshot(body, remarks, minutes), nil
 		}
-		if len(args) == 5 && args[0] == "issue" && args[1] == "edit" && args[3] == "--body" {
+		if len(args) == 7 && args[0] == "issue" && args[1] == "edit" && args[3] == "--body" && args[5] == "--title" {
+			if !strings.Contains(args[6], "Bulk (") {
+				t.Fatalf("title = %q", args[6])
+			}
 			body = args[4]
 			return "", nil
 		}

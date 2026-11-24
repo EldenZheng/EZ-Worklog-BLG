@@ -161,8 +161,16 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 	if len(prs) != 1 || len(mins) != 1 {
 		t.Fatalf("bulk sheet should start with one row, got %d PR and %d minute cells", len(prs), len(mins))
 	}
+	if mins[0].Text != "10" {
+		t.Fatalf("a PR row should start at 10 minutes, got %q", mins[0].Text)
+	}
 	prs[0].SetText("https://github.com/exampleorg/app/pull/12")
+	if !contains(labels(tab), "Total: 10 min") {
+		t.Fatalf("a PR at its default 10 minutes should count: %v", labels(tab))
+	}
 	mins[0].SetText("15")
+	// A complete row no longer adds the next by itself; Add PR does.
+	tapButton(t, tab, "Add PR")
 	prs, mins = nil, nil
 	walk(tab, func(o fyne.CanvasObject) {
 		if e, ok := o.(*widget.Entry); ok {
@@ -175,8 +183,18 @@ func TestCodeReviewInputsResolveWithoutFetchButtonsAndBulkGrows(t *testing.T) {
 		}
 	})
 	if len(prs) != 2 || len(mins) != 2 {
-		t.Fatalf("completing row one should add row two, got %d PR and %d minute cells", len(prs), len(mins))
+		t.Fatalf("Add PR should add row two, got %d PR and %d minute cells", len(prs), len(mins))
 	}
+	prs[1].SetText("exampleorg/app#13")
+	if !contains(labels(tab), "Total: 25 min") {
+		t.Fatalf("an added PR row should count its default 10 minutes: %v", labels(tab))
+	}
+	// A line copied from a bulk review fills the row: link, minutes, points.
+	prs[1].SetText("https://github.com/exampleorg/app/pull/14 (20m) - Approved, no blocking issues")
+	if prs[1].Text != "https://github.com/exampleorg/app/pull/14" || mins[1].Text != "20" || !contains(labels(tab), "Total: 35 min") {
+		t.Fatalf("pasted line left %q / %q, labels %v", prs[1].Text, mins[1].Text, labels(tab))
+	}
+	prs[1].SetText("")
 	got := labels(tab)
 	for _, want := range []string{
 		"Total: 15 min",

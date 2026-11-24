@@ -73,6 +73,34 @@ func needsMergedCheck(r Row) bool {
 		r["ref_state"] != RefComplete && len(UnmergedRefs(r)) > 0
 }
 
+// legacyMayClear reports whether r is a legacy entry that may lose the tag:
+// under the SOP, not pushed yet, with commits. Every entry waiting at the SOP's
+// start was tagged legacy once, merged or not; one with commits still unmerged
+// can be given its Worklog's reference like any other, so the merged check
+// clears its tag (RefreshMergedRefs, CheckRowMerged).
+func legacyMayClear(r Row) bool {
+	return RowIsLegacy(r) && SOPApplies(r["date"]) && strings.TrimSpace(r["refs"]) != "" &&
+		strings.TrimSpace(r["pushed_at"]) == "" && strings.TrimSpace(r["issue_url"]) == ""
+}
+
+// mergeCheckWanted is every entry whose commits' merged state matters.
+func mergeCheckWanted(r Row) bool { return needsMergedCheck(r) || legacyMayClear(r) }
+
+// applyMerged records merged on r and, when the check was complete, clears a
+// legacy tag whose entry still has an unmerged commit. It reports a change.
+func applyMerged(r Row, merged map[string]bool, complete bool) bool {
+	changed := false
+	if list, ok := withMerged(r, merged); ok {
+		r["merged_refs"] = list
+		changed = true
+	}
+	if complete && legacyMayClear(r) && len(UnmergedRefs(r)) > 0 {
+		r["legacy"] = ""
+		changed = true
+	}
+	return changed
+}
+
 // MergedCommits reports which of refs are merged: on their repo's default
 // branch, or part of a merged pull request (which also catches squash and
 // rebase merges, whose original commits never reach the default branch). One
@@ -218,16 +246,20 @@ func (s *Store) RefreshMergedRefs() (bool, error) {
 		return false, err
 	}
 	var refs []CommitRef
+	legacy := false
 	for _, r := range rows {
-		if needsMergedCheck(r) {
+		if mergeCheckWanted(r) {
 			refs = append(refs, UnmergedRefs(r)...)
+			legacy = legacy || legacyMayClear(r)
 		}
 	}
 	if len(refs) == 0 {
 		return false, nil
 	}
 	merged, checkErr := MergedCommits(refs)
-	if len(merged) == 0 {
+	// A legacy tag clears on what is not merged, so only a complete check
+	// may clear one; an unreadable repo would look all unmerged.
+	if len(merged) == 0 && (!legacy || checkErr != nil) {
 		return false, checkErr
 	}
 	s.mu.Lock()
@@ -238,11 +270,7 @@ func (s *Store) RefreshMergedRefs() (bool, error) {
 	}
 	changed := false
 	for _, r := range rows {
-		if !needsMergedCheck(r) {
-			continue
-		}
-		if list, ok := withMerged(r, merged); ok {
-			r["merged_refs"] = list
+		if mergeCheckWanted(r) && applyMerged(r, merged, checkErr == nil) {
 			changed = true
 		}
 	}
@@ -256,21 +284,19 @@ func (s *Store) RefreshMergedRefs() (bool, error) {
 // its merged_refs brought up to date (and saved). On an error r comes back as
 // it was: the rewrite after the push still refuses a merged commit.
 func (s *Store) CheckRowMerged(r Row) Row {
-	if !needsMergedCheck(r) {
+	if !mergeCheckWanted(r) {
 		return r
 	}
-	merged, _ := MergedCommits(UnmergedRefs(r))
-	list, ok := withMerged(r, merged)
-	if !ok {
-		return r
-	}
-	if s.UpdateRow(r["id"], Row{"merged_refs": list}) != nil {
-		return r
-	}
+	merged, err := MergedCommits(UnmergedRefs(r))
 	next := Row{}
 	for k, v := range r {
 		next[k] = v
 	}
-	next["merged_refs"] = list
+	if !applyMerged(next, merged, err == nil) {
+		return r
+	}
+	if s.UpdateRow(r["id"], Row{"merged_refs": next["merged_refs"], "legacy": next["legacy"]}) != nil {
+		return r
+	}
 	return next
 }

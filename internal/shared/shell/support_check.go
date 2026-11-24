@@ -35,7 +35,9 @@ type SupportView struct {
 func SupportChoice(check *widget.Check, rota bool) *SupportView {
 	label := widget.NewLabelWithStyle(SupportCheckText(true), fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	v := &SupportView{
-		check: container.NewThemeOverride(check, supportTextTheme{Theme: theme.Current()}),
+		// The Kanban filter's hover, ripple and drawn tick, in support's colour.
+		check: container.NewThemeOverride(widgets.AnimatedTickChoiceInk(check, WeekdaySupportColor()),
+			supportTextTheme{Theme: theme.Current()}),
 		label: container.NewThemeOverride(label, supportTextTheme{Theme: theme.Current()}),
 	}
 	v.View = container.NewStack(v.check, v.label)

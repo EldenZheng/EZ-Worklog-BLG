@@ -77,9 +77,10 @@ func unpushedCommits(dir, repo, since, until string) []Commit {
 		if i := strings.IndexByte(full, '\n'); i >= 0 {
 			first = full[:i]
 		}
+		issue, guessed := ParseCommitIssue(full, repo)
 		got = append(got, Commit{
 			Sha: Short(f[0]), Repo: repo, Date: CommitWorkDate(f[2]),
-			Message: first, Full: full, Issue: ParseIssue(full, repo),
+			Message: first, Full: full, Issue: issue, IssueGuessed: guessed,
 			Branch: strings.TrimPrefix(f[1], "refs/heads/"), Local: true,
 		})
 	}

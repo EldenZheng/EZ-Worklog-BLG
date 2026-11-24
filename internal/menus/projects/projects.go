@@ -41,6 +41,7 @@ type page struct {
 	loadErr error
 
 	tabRow *fyne.Container
+	tabs   *shell.UnderlineTabs // the project tabs, whose open tab's arrow turns with its menu
 	body   *fyne.Container
 	root   *fyne.Container
 	// note says when the open project was fetched, at the end of the tabs.
@@ -199,6 +200,7 @@ func (p *page) buildTabs() {
 	tabs.OnAction = func() { p.openEditor(nil) }
 	// The open project's tab carries an arrow; clicking it drops the menu.
 	tabs.OnMenu = func(_ string, anchor fyne.CanvasObject) { p.openMenu(anchor) }
+	p.tabs = tabs
 	// Dragging a tab along the row reorders the projects, and the order is
 	// kept in projects.json.
 	tabs.OnReorder = func(order []string) {
@@ -373,6 +375,9 @@ func (p *page) closeMenu() {
 	if p.menu != nil {
 		menu := p.menu
 		p.menu = nil
+		if p.tabs != nil {
+			p.tabs.MenuOpen(false)
+		}
 		if r, ok := menu.Content.(*shell.Reveal); ok {
 			shell.FoldPopUp(menu, r)
 		}
@@ -432,6 +437,9 @@ func (p *page) openMenu(anchor fyne.CanvasObject) {
 	p.menu.Resize(size)
 	origin := fyne.CurrentApp().Driver().AbsolutePositionForObject(anchor)
 	p.menu.ShowAtPosition(origin.Add(fyne.NewPos(0, anchor.Size().Height+2)))
+	if p.tabs != nil {
+		p.tabs.MenuOpen(true)
+	}
 	shell.UnfoldPopUp(p.menu, unfold, size)
 }
 

@@ -125,7 +125,7 @@ func TestMeetingUpdateSummaryShowsSingleReviewBadges(t *testing.T) {
 	assertSummaryReview(t, ui.MeetingRowsHolder, "Single review", true)
 	assertSummaryReview(t, ui.MeetingRowsHolder, "Older review", true)
 	assertSummaryReview(t, ui.MeetingRowsHolder, "Ordinary work", false)
-	assertSummaryReview(t, ui.MeetingRowsHolder, backend.DailyCodeReviewTitle(ui.Cfg, "2026-08-25"), false)
+	assertSummaryReview(t, ui.MeetingRowsHolder, backend.BulkReviewName(ui.Cfg, "2026-08-25"), false)
 }
 
 // On a Log Work day card the tag follows the minutes, as Legacy does.

@@ -9,8 +9,11 @@ import (
 // DailyReviewPush is a proposed update of the day's shared review issue. The
 // saved row remains one batch; only the GitHub payload contains the day total.
 type DailyReviewPush struct {
-	URL             string
-	Body            string
+	URL  string
+	Body string
+	// Remarks is the compact PR list for the board; Count is how many PRs.
+	Remarks         string
+	Count           int
 	Minutes         int
 	ExistingMinutes int
 	// OtherCount and OtherMinutes are the PRs GitHub already lists for the day
@@ -96,6 +99,7 @@ func readDailyReview(ref string) (dailyReviewState, error) {
 // MergeCodeReviewItems keeps each PR once, making a retry safe even if only
 // the description was written before a failed board update. Conflicting time
 // for the same PR needs an explicit edit, rather than guessing which to keep.
+// Notes come from the last list that has any, so an edit to them wins.
 func MergeCodeReviewItems(lists ...string) ([]CodeReviewItem, error) {
 	var merged []CodeReviewItem
 	seen := map[string]int{}
@@ -109,13 +113,19 @@ func MergeCodeReviewItems(lists ...string) ([]CodeReviewItem, error) {
 		}
 		for _, item := range items {
 			key := strings.ToLower(item.URL)
-			if minutes, exists := seen[key]; exists {
-				if minutes != item.Minutes {
-					return nil, GhErr("%s already has %d minutes, but this list says %d. Edit that PR's existing review time before pushing.", item.URL, minutes, item.Minutes)
+			if at, exists := seen[key]; exists {
+				if merged[at].Minutes != item.Minutes {
+					return nil, GhErr("%s already has %d minutes, but this list says %d. Edit that PR's existing review time before pushing.", item.URL, merged[at].Minutes, item.Minutes)
+				}
+				if len(item.Notes) > 0 {
+					merged[at].Notes = item.Notes
+				}
+				if len(item.Issues) > 0 {
+					merged[at].Issues = item.Issues
 				}
 				continue
 			}
-			seen[key] = item.Minutes
+			seen[key] = len(merged)
 			merged = append(merged, item)
 		}
 	}
@@ -150,8 +160,11 @@ func PrepareDailyReviewPush(row Row) (*DailyReviewPush, error) {
 		return nil, GhErr("There are no PR reviews to push.")
 	}
 	body := CodeReviewBody(items)
-	if len(body) > RemarkCap {
-		return nil, GhErr("The combined PR list is %d characters; worklog remarks allow %d. Nothing was overwritten.", len(body), RemarkCap)
+	if list := CodeReviewList(items); len(list) > RemarkCap {
+		return nil, GhErr("The combined PR list is %d characters; worklog remarks allow %d. Nothing was overwritten.", len(list), RemarkCap)
+	}
+	if len(body) > BodyCap {
+		return nil, GhErr("The combined PR notes are %d characters; the description allows %d. Nothing was overwritten.", len(body), BodyCap)
 	}
 	// Only PRs on GitHub that this entry does not list need the user's say.
 	// A retry, or a push of the same list again, rewrites what is there.
@@ -169,7 +182,8 @@ func PrepareDailyReviewPush(row Row) (*DailyReviewPush, error) {
 			others = append(others, item)
 		}
 	}
-	return &DailyReviewPush{URL: state.URL, Body: body, Minutes: CodeReviewMinutes(items),
+	return &DailyReviewPush{URL: state.URL, Body: body, Remarks: CodeReviewList(items), Count: len(items),
+		Minutes:         CodeReviewMinutes(items),
 		ExistingMinutes: CodeReviewMinutes(existing),
 		OtherCount:      len(others), OtherMinutes: CodeReviewMinutes(others),
 		NeedsCombine: len(others) > 0,
@@ -195,9 +209,11 @@ func PushDailyReview(cfg Config, plan *DailyReviewPush, progress ...func(FetchPr
 		return PushResult{}, err
 	}
 	body := loggedForBody(plan.Body, r["date"])
-	if _, err := Gh([]string{"issue", "edit", plan.URL, "--body", body}); err != nil {
+	// The title carries the day's PR count, so it follows the combined list.
+	if _, err := Gh([]string{"issue", "edit", plan.URL, "--body", body,
+		"--title", BulkCodeReviewTitle(cfg, r["date"], plan.Count)}); err != nil {
 		return PushResult{}, err
 	}
 	return PushEntry(cfg, r["issue"], r["date"], r["owner"], plan.Minutes,
-		plan.Body, body, "issue", r["issue_url"], "", progress...)
+		plan.Remarks, body, "issue", r["issue_url"], "", progress...)
 }

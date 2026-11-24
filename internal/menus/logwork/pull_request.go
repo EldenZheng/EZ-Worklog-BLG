@@ -19,47 +19,59 @@ import (
 // branch whose commits now name their Worklogs. A branch with commits of yours
 // still unlogged, or with nothing to offer, is passed over without a popup.
 func offerPullRequests(ui *shell.UI, batches []backend.RewriteBatch) {
+	var plans []backend.PullRequestPlan
+	ui.Async(func() error {
+		plans = planPullRequests(ui, batches)
+		return nil
+	}, func() { offerPlans(ui, plans) })
+}
+
+// planPullRequests works out, off the UI thread, the pull request each
+// branch could have, once per branch. A branch with commits of yours still
+// unlogged, or that cannot be planned, has none.
+func planPullRequests(ui *shell.UI, batches []backend.RewriteBatch) []backend.PullRequestPlan {
 	seen := map[string]bool{}
-	var todo []backend.RewriteBatch
+	var plans []backend.PullRequestPlan
 	for _, b := range batches {
 		k := strings.ToLower(b.Repo + "\n" + b.Branch)
 		if b.Dir == "" || b.Branch == "" || seen[k] {
 			continue
 		}
 		seen[k] = true
-		todo = append(todo, b)
+		issue, err := batchIssue(ui, b)
+		if err != nil {
+			continue
+		}
+		logged, err := ui.Store.LoggedTest()
+		if err != nil {
+			continue
+		}
+		plan, err := backend.PlanPullRequest(b.Dir, b.Repo, b.Branch, issue, logged)
+		if err != nil || plan.Unlogged > 0 {
+			continue
+		}
+		plans = append(plans, plan)
 	}
-	offerNextPullRequest(ui, todo)
+	return plans
 }
 
-func offerNextPullRequest(ui *shell.UI, todo []backend.RewriteBatch) {
-	if len(todo) == 0 {
+// offerPlans asks about each planned pull request in turn.
+func offerPlans(ui *shell.UI, plans []backend.PullRequestPlan) {
+	if len(plans) == 0 {
 		return
 	}
-	b, rest := todo[0], todo[1:]
-	next := func() { offerNextPullRequest(ui, rest) }
-	var plan backend.PullRequestPlan
-	var err error
-	ui.Async(func() error {
-		issue, ierr := batchIssue(ui, b)
-		if ierr != nil {
-			err = ierr
-			return nil
+	showPullRequestOffer(ui, plans[0], func() { offerPlans(ui, plans[1:]) })
+}
+
+// newPullRequests are the plans with no pull request yet.
+func newPullRequests(plans []backend.PullRequestPlan) []backend.PullRequestPlan {
+	var out []backend.PullRequestPlan
+	for _, p := range plans {
+		if p.Existing == "" {
+			out = append(out, p)
 		}
-		logged, lerr := ui.Store.LoggedTest()
-		if lerr != nil {
-			err = lerr
-			return nil
-		}
-		plan, err = backend.PlanPullRequest(b.Dir, b.Repo, b.Branch, issue, logged)
-		return nil
-	}, func() {
-		if err != nil || plan.Unlogged > 0 {
-			next()
-			return
-		}
-		showPullRequestOffer(ui, plan, next)
-	})
+	}
+	return out
 }
 
 // batchIssue is the issue a batch's entries are filed under: the pull
